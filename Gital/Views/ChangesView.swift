@@ -80,12 +80,31 @@ struct ChangesView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
+            let selectedCount = model.selectedLineIDs(in: diff).count
+            if selectedCount > 0 {
+                HunkActionButton(title: lineActionTitle(diff, count: selectedCount)) {
+                    model.applySelectedLines(in: diff)
+                }
+                Button {
+                    model.clearLineSelection(in: diff)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear line selection")
+            }
             DiffStatsLabel(additions: diff.additions, deletions: diff.deletions)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
+    }
+
+    private func lineActionTitle(_ diff: FileDiff, count: Int) -> String {
+        let verb = diff.scope == .staged ? "Unstage" : "Stage"
+        return "\(verb) \(count) Line\(count == 1 ? "" : "s")"
     }
 
     @ViewBuilder
@@ -122,8 +141,10 @@ struct ChangesView: View {
         switch diff.scope {
         case .unstaged, .untracked:
             HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
+                .padding(.trailing, 8)
         case .staged:
             HunkActionButton(title: "Unstage") { model.unstageHunk(hunk, in: diff) }
+                .padding(.trailing, 8)
         case .snapshot:
             EmptyView()
         }
@@ -132,8 +153,15 @@ struct ChangesView: View {
     @ViewBuilder
     private func interactiveLine(_ line: DiffLine, in diff: FileDiff) -> some View {
         let lineNumber = line.newNumber ?? line.oldNumber ?? 0
+        let selectable = model.canSelectLines(in: diff) && line.kind != .context
 
-        InteractiveDiffLineView(line: line) {
+        InteractiveDiffLineView(
+            line: line,
+            isSelected: model.selectedDiffLineIDs.contains(line.id),
+            onSelect: selectable ? { extend in
+                model.toggleLineSelection(line, in: diff, extend: extend)
+            } : nil
+        ) {
             if NSEvent.modifierFlags.contains(.shift) {
                 model.extendComposer(file: diff.path, line: lineNumber, anchorID: line.id)
             } else {
@@ -172,8 +200,7 @@ struct HunkActionButton: View {
                 .overlay(Capsule().strokeBorder(.tint.opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .padding(.trailing, 8)
-        .help("\(title) this hunk")
+        .help(title)
     }
 }
 
@@ -181,6 +208,8 @@ struct HunkActionButton: View {
 
 struct InteractiveDiffLineView: View {
     let line: DiffLine
+    var isSelected = false
+    var onSelect: ((_ extend: Bool) -> Void)?
     let onAsk: () -> Void
 
     @State private var isHovering = false
@@ -188,6 +217,25 @@ struct InteractiveDiffLineView: View {
     var body: some View {
         UnifiedDiffLineView(line: line)
             .background(isHovering ? Color.primary.opacity(0.04) : .clear)
+            .overlay {
+                if isSelected {
+                    Rectangle()
+                        .fill(Color.accentColor.opacity(0.14))
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 2.5)
+                        .allowsHitTesting(false)
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                onSelect?(NSEvent.modifierFlags.contains(.shift))
+            }
             .overlay(alignment: .leading) {
                 if isHovering {
                     Button(action: onAsk) {

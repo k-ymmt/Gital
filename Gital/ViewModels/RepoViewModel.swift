@@ -106,6 +106,11 @@ final class RepoViewModel {
     var amend = false
     var isCommitting = false
 
+    /// Diff lines picked for line-level staging. IDs embed the file path, so
+    /// one set can span files; each file header offers its own action.
+    var selectedDiffLineIDs: Set<String> = []
+    @ObservationIgnored private var lineSelectionAnchor: (path: String, id: String)?
+
     // MARK: Stash selection
 
     var selectedStashRef: String? {
@@ -294,6 +299,10 @@ final class RepoViewModel {
                 }
                 workingDiffs = diffs
             }
+            // Positional line IDs stay stable while content does, so the
+            // selection survives spurious refreshes; drop IDs that vanished.
+            let validIDs = Set(workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map(\.id))
+            selectedDiffLineIDs.formIntersection(validIDs)
         } catch {
             report(error)
         }
@@ -414,6 +423,60 @@ final class RepoViewModel {
                 } else {
                     try await repository.stage([diff.path])
                 }
+                await refreshStatus()
+                await loadWorkingDiffs()
+            } catch { report(error) }
+        }
+    }
+
+    // MARK: - Line-level staging
+
+    /// Line selection only makes sense where a partial patch can be applied:
+    /// untracked files have no index entry yet and renames/binaries fall back
+    /// to whole-file staging.
+    func canSelectLines(in diff: FileDiff) -> Bool {
+        (diff.scope == .unstaged || diff.scope == .staged) && !diff.isBinary && diff.oldPath == nil
+    }
+
+    func toggleLineSelection(_ line: DiffLine, in diff: FileDiff, extend: Bool) {
+        guard canSelectLines(in: diff), line.kind != .context else { return }
+        let selectable = diff.hunks.flatMap(\.lines).filter { $0.kind != .context }
+        if extend, let anchor = lineSelectionAnchor, anchor.path == diff.path,
+           let from = selectable.firstIndex(where: { $0.id == anchor.id }),
+           let to = selectable.firstIndex(where: { $0.id == line.id }) {
+            for picked in selectable[min(from, to)...max(from, to)] {
+                selectedDiffLineIDs.insert(picked.id)
+            }
+        } else if selectedDiffLineIDs.contains(line.id) {
+            selectedDiffLineIDs.remove(line.id)
+        } else {
+            selectedDiffLineIDs.insert(line.id)
+        }
+        lineSelectionAnchor = (diff.path, line.id)
+    }
+
+    func selectedLineIDs(in diff: FileDiff) -> Set<String> {
+        let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
+        return selectedDiffLineIDs.intersection(changed)
+    }
+
+    func clearLineSelection(in diff: FileDiff) {
+        selectedDiffLineIDs.subtract(selectedLineIDs(in: diff))
+    }
+
+    func applySelectedLines(in diff: FileDiff) {
+        let ids = selectedLineIDs(in: diff)
+        let direction: PatchBuilder.Direction? = switch diff.scope {
+        case .unstaged: .stage
+        case .staged: .unstage
+        default: nil
+        }
+        guard let direction,
+              let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: direction) else { return }
+        Task {
+            do {
+                try await repository.applyToIndex(patch: patch, reverse: direction == .unstage)
+                selectedDiffLineIDs.subtract(ids)
                 await refreshStatus()
                 await loadWorkingDiffs()
             } catch { report(error) }

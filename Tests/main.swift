@@ -205,6 +205,61 @@ expect(PatchBuilder.hunkPatch(for: noNewline[0].hunks[0], in: trickyDiff)?.hasPr
 expect(DiffParser.parse(sampleDiff, scope: .unstaged)[0].scope == .unstaged, "parse tags scope")
 expect(diffs[0].scope == .snapshot, "scope defaults to snapshot")
 
+// MARK: - PatchBuilder line selection
+
+// Staging one addition: the other addition is omitted (not in the index yet)
+// and the unpicked deletion becomes context (still in the index).
+let guardLine = diffs[0].hunks[0].lines.first { $0.text.contains("guard") }!
+let stageOnePatch = PatchBuilder.linesPatch(for: diffs[0], selecting: [guardLine.id], direction: .stage)
+let expectedStageOne = """
+--- a/Sources/Login/LoginViewModel.swift
++++ b/Sources/Login/LoginViewModel.swift
+@@ -42,4 +42,5 @@
+     func validate(token: String) -> Bool {
+         return !token.isEmpty
++        guard !token.isEmpty else { return false }
+    \u{20}}
+\u{20}}
+
+"""
+expect(stageOnePatch == expectedStageOne, "linesPatch stages a single addition")
+
+// Unstaging one deletion: unpicked additions stay in the index as context.
+let deletionLine = diffs[0].hunks[0].lines.first { $0.kind == .deletion }!
+let unstageOnePatch = PatchBuilder.linesPatch(for: diffs[0], selecting: [deletionLine.id], direction: .unstage)
+expect(unstageOnePatch?.contains("@@ -42,6 +42,5 @@") == true, "linesPatch recounts for unstage")
+expect(unstageOnePatch?.contains("-        return !token.isEmpty") == true, "linesPatch keeps selected deletion")
+expect(unstageOnePatch?.contains("\n+        guard") == false
+    && unstageOnePatch?.contains("\n         guard !token.isEmpty else { return false }") == true,
+    "linesPatch neutralizes unpicked additions into context")
+
+// Hunks without any selected line are dropped from the patch.
+let twoHunkDiff = DiffParser.parse("""
+diff --git a/two.txt b/two.txt
+index 1111111..2222222 100644
+--- a/two.txt
++++ b/two.txt
+@@ -1,3 +1,3 @@
+ a
+-b
++B
+ c
+@@ -10,3 +10,3 @@
+ x
+-y
++Y
+ z
+""")[0]
+let yLine = twoHunkDiff.hunks[1].lines.first { $0.text == "Y" }!
+let secondHunkOnly = PatchBuilder.linesPatch(for: twoHunkDiff, selecting: [yLine.id], direction: .stage)
+expect(secondHunkOnly?.contains("@@ -10,3 +10,4 @@") == true, "linesPatch recounts the selected hunk")
+expect(secondHunkOnly?.contains("-b") == false && secondHunkOnly?.components(separatedBy: "@@ -").count == 2, "linesPatch drops unselected hunks")
+
+// Selecting nothing applicable yields no patch.
+let contextLine = diffs[0].hunks[0].lines.first { $0.kind == .context }!
+expect(PatchBuilder.linesPatch(for: diffs[0], selecting: [contextLine.id], direction: .stage) == nil, "linesPatch ignores context-only selection")
+expect(PatchBuilder.linesPatch(for: diffs[0], selecting: [], direction: .stage) == nil, "linesPatch rejects empty selection")
+
 // MARK: - Split rows
 
 let splitRows = SplitDiffRow.rows(for: diffs[0].hunks)
