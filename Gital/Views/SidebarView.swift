@@ -283,11 +283,14 @@ struct SidebarView: View {
                 .onTapGesture(count: 2) {
                     model.checkout(branch: branch)
                 }
+                .onTapGesture {
+                    model.selectBranch(branch)
+                }
                 .contextMenu {
                     Button("Checkout") { model.checkout(branch: branch) }
                         .disabled(branch.isCurrent)
                 }
-                .help(branch.isCurrent ? "Current branch" : "Double-click to checkout")
+                .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
             }
         }
 

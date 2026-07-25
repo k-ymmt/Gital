@@ -84,6 +84,7 @@ struct Branch: Hashable, Identifiable {
     let name: String
     let isCurrent: Bool
     let upstream: String?
+    let tipHash: String
 
     var id: String { name }
 }

@@ -266,15 +266,16 @@ final class GitRepository: @unchecked Sendable {
 
     func branches() async throws -> [Branch] {
         let output = try await executor.run([
-            "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)",
+            "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)\u{1f}%(objectname)",
         ])
         return output.split(separator: "\n").compactMap { line in
             let fields = line.components(separatedBy: "\u{1f}")
-            guard fields.count >= 3, !fields[0].isEmpty else { return nil }
+            guard fields.count >= 4, !fields[0].isEmpty else { return nil }
             return Branch(
                 name: fields[0],
                 isCurrent: fields[1] == "*",
-                upstream: fields[2].isEmpty ? nil : fields[2]
+                upstream: fields[2].isEmpty ? nil : fields[2],
+                tipHash: fields[3]
             )
         }
     }

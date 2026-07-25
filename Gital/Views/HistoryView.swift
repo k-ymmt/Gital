@@ -18,19 +18,28 @@ struct HistoryView: View {
         VStack(spacing: 0) {
             columnHeader
             Divider()
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(model.filteredCommits) { commit in
-                        CommitRowView(
-                            commit: commit,
-                            row: model.graph.rows[commit.hash],
-                            graphWidth: graphWidth,
-                            isSelected: model.selectedCommitHash == commit.hash
-                        )
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            model.selectedCommitHash = commit.hash
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(model.filteredCommits) { commit in
+                            CommitRowView(
+                                commit: commit,
+                                row: model.graph.rows[commit.hash],
+                                graphWidth: graphWidth,
+                                isSelected: model.selectedCommitHash == commit.hash
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                model.selectedCommitHash = commit.hash
+                            }
+                            .id(commit.hash)
                         }
+                    }
+                }
+                .onChange(of: model.selectedCommitHash) { _, hash in
+                    guard let hash else { return }
+                    withAnimation {
+                        proxy.scrollTo(hash)
                     }
                 }
             }

@@ -368,6 +368,10 @@ final class RepoViewModel {
 
     // MARK: - Branch / stash operations
 
+    func selectBranch(_ branch: Branch) {
+        selectedCommitHash = branch.tipHash
+    }
+
     func checkout(branch: Branch) {
         guard !branch.isCurrent else { return }
         Task {
