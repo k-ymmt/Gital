@@ -72,6 +72,12 @@ final class RepoViewModel {
         }
     }
     var selectedBranchName: String?
+
+    /// Branch row to highlight in the sidebar: the explicitly clicked branch,
+    /// falling back to the current branch when nothing is selected.
+    var highlightedBranchName: String? {
+        selectedBranchName ?? branches.first(where: \.isCurrent)?.name
+    }
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
     var selectedCommitFilePath: String?
