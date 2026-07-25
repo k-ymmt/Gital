@@ -98,6 +98,7 @@ struct RemoteInfo: Hashable, Identifiable {
 
 struct Tag: Hashable, Identifiable {
     let name: String
+    let tipHash: String
 
     var id: String { name }
 }

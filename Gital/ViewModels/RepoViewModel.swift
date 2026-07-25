@@ -67,16 +67,21 @@ final class RepoViewModel {
                    branches.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
                     selectedBranchName = nil
                 }
+                if let name = selectedTagName,
+                   tags.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
+                    selectedTagName = nil
+                }
                 Task { await loadCommitDetail() }
             }
         }
     }
     var selectedBranchName: String?
+    var selectedTagName: String?
 
     /// Branch row to highlight in the sidebar: the explicitly clicked branch,
-    /// falling back to the current branch when nothing is selected.
+    /// falling back to the current branch when nothing else is selected.
     var highlightedBranchName: String? {
-        selectedBranchName ?? branches.first(where: \.isCurrent)?.name
+        selectedBranchName ?? (selectedTagName == nil ? branches.first(where: \.isCurrent)?.name : nil)
     }
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
@@ -407,8 +412,15 @@ final class RepoViewModel {
     // MARK: - Branch / stash operations
 
     func selectBranch(_ branch: Branch) {
+        selectedTagName = nil
         selectedBranchName = branch.name
         selectedCommitHash = branch.tipHash
+    }
+
+    func selectTag(_ tag: Tag) {
+        selectedBranchName = nil
+        selectedTagName = tag.name
+        selectedCommitHash = tag.tipHash
     }
 
     func checkout(branch: Branch) {

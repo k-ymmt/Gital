@@ -301,8 +301,16 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func tags() async throws -> [Tag] {
-        let output = try await executor.run(["tag", "--sort=-creatordate"])
-        return output.split(separator: "\n").map { Tag(name: String($0)) }
+        let output = try await executor.run([
+            "tag", "--sort=-creatordate",
+            "--format=%(refname:short)\u{1f}%(objectname)\u{1f}%(*objectname)"
+        ])
+        return output.split(separator: "\n").compactMap { line in
+            let fields = line.components(separatedBy: "\u{1f}")
+            guard fields.count >= 3 else { return nil }
+            // %(*objectname) is the peeled commit of an annotated tag; empty for lightweight tags.
+            return Tag(name: fields[0], tipHash: fields[2].isEmpty ? fields[1] : fields[2])
+        }
     }
 
     func stashes() async throws -> [Stash] {

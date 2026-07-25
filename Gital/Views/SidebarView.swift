@@ -345,6 +345,12 @@ struct SidebarView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 5)
+                .contentShape(Rectangle())
+                .background(rowBackground(model.selectedTagName == tag.name))
+                .onTapGesture {
+                    model.selectTag(tag)
+                }
+                .help("Click to show tagged commit")
             }
         }
     }
