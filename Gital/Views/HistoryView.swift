@@ -1,7 +1,11 @@
+import AppKit
 import SwiftUI
 
 struct HistoryView: View {
     @Bindable var model: RepoViewModel
+
+    @State private var branchAnchor: Commit?
+    @State private var tagAnchor: Commit?
 
     var body: some View {
         VSplitView {
@@ -9,6 +13,24 @@ struct HistoryView: View {
                 .frame(minHeight: 220)
             CommitDetailView(model: model)
                 .frame(minHeight: 240, idealHeight: 360)
+        }
+        .sheet(item: $branchAnchor) { commit in
+            RefCreationSheet(
+                title: "New Branch at \(commit.shortHash)",
+                placeholder: "Branch name",
+                showCheckoutToggle: true
+            ) { name, checkout in
+                model.createBranch(name: name, at: commit, checkout: checkout)
+            }
+        }
+        .sheet(item: $tagAnchor) { commit in
+            RefCreationSheet(
+                title: "New Tag at \(commit.shortHash)",
+                placeholder: "Tag name",
+                showCheckoutToggle: false
+            ) { name, _ in
+                model.createTag(name: name, at: commit)
+            }
         }
     }
 
@@ -32,6 +54,7 @@ struct HistoryView: View {
                             .onTapGesture {
                                 model.selectedCommitHash = commit.hash
                             }
+                            .contextMenu { commitMenu(commit) }
                             .id(commit.hash)
                         }
                         if model.searchText.isEmpty, model.hasMoreCommits {
@@ -46,6 +69,25 @@ struct HistoryView: View {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func commitMenu(_ commit: Commit) -> some View {
+        Button("Copy SHA") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(commit.hash, forType: .string)
+        }
+        Divider()
+        Button("Create Branch Here…") { branchAnchor = commit }
+        Button("Create Tag Here…") { tagAnchor = commit }
+        Divider()
+        Button("Cherry-pick \(commit.shortHash)") { model.cherryPick(commit) }
+        Button("Revert \(commit.shortHash)") { model.revertCommit(commit) }
+        Menu("Reset “\(model.status.branch ?? "HEAD")” to Here") {
+            Button("Soft — keep changes staged") { model.requestReset(to: commit, mode: .soft) }
+            Button("Mixed — keep changes unstaged") { model.requestReset(to: commit, mode: .mixed) }
+            Button("Hard — discard all changes…", role: .destructive) { model.requestReset(to: commit, mode: .hard) }
         }
     }
 
@@ -86,6 +128,50 @@ struct HistoryView: View {
         .padding(.vertical, 7)
         .padding(.horizontal, 14)
         .background(.quaternary.opacity(0.4))
+    }
+}
+
+// MARK: - Branch / tag creation sheet
+
+struct RefCreationSheet: View {
+    let title: String
+    let placeholder: String
+    let showCheckoutToggle: Bool
+    let onCreate: (_ name: String, _ checkout: Bool) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var checkout = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(.headline)
+            TextField(placeholder, text: $name)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 260)
+                .onSubmit(create)
+            if showCheckoutToggle {
+                Toggle("Check out after creating", isOn: $checkout)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Create") { create() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(16)
+    }
+
+    private func create() {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        onCreate(trimmed, checkout)
+        dismiss()
     }
 }
 

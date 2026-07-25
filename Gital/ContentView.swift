@@ -89,6 +89,21 @@ struct ContentView: View {
         } message: { target in
             Text(target.confirmationMessage)
         }
+        .alert(
+            "Hard Reset?",
+            isPresented: Binding(
+                get: { model.pendingReset != nil },
+                set: { if !$0 { model.pendingReset = nil } }
+            ),
+            presenting: model.pendingReset
+        ) { pending in
+            Button("Reset", role: .destructive) {
+                model.performReset(to: pending.commit, mode: pending.mode)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { pending in
+            Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.commit.shortHash) and all working copy changes will be discarded. This cannot be undone.")
+        }
         .alert("Git Error", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }

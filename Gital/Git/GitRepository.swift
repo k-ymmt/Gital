@@ -356,12 +356,35 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["checkout", "-b", branch, "--track", "\(remote)/\(branch)"])
     }
 
-    func createBranch(name: String, checkout: Bool) async throws {
+    func createBranch(name: String, at startPoint: String? = nil, checkout: Bool) async throws {
+        let start = startPoint.map { [$0] } ?? []
         if checkout {
-            try await executor.run(["checkout", "-b", name])
+            try await executor.run(["checkout", "-b", name] + start)
         } else {
-            try await executor.run(["branch", name])
+            try await executor.run(["branch", name] + start)
         }
+    }
+
+    func createTag(name: String, at hash: String) async throws {
+        try await executor.run(["tag", name, hash])
+    }
+
+    // MARK: - History operations
+
+    func cherryPick(_ hash: String) async throws {
+        try await executor.run(["cherry-pick", hash])
+    }
+
+    func revert(_ hash: String) async throws {
+        try await executor.run(["revert", "--no-edit", hash])
+    }
+
+    enum ResetMode: String, CaseIterable {
+        case soft, mixed, hard
+    }
+
+    func reset(to hash: String, mode: ResetMode) async throws {
+        try await executor.run(["reset", "--\(mode.rawValue)", hash])
     }
 
     func stashPush(message: String?) async throws {

@@ -589,6 +589,57 @@ final class RepoViewModel {
         }
     }
 
+    // MARK: - Commit operations
+
+    struct PendingReset {
+        let commit: Commit
+        let mode: GitRepository.ResetMode
+    }
+
+    var pendingReset: PendingReset?
+
+    func cherryPick(_ commit: Commit) {
+        runSync("Cherry-picking…") { try await $0.repository.cherryPick(commit.hash) }
+    }
+
+    func revertCommit(_ commit: Commit) {
+        runSync("Reverting…") { try await $0.repository.revert(commit.hash) }
+    }
+
+    func requestReset(to commit: Commit, mode: GitRepository.ResetMode) {
+        if mode == .hard {
+            pendingReset = PendingReset(commit: commit, mode: mode)
+        } else {
+            performReset(to: commit, mode: mode)
+        }
+    }
+
+    func performReset(to commit: Commit, mode: GitRepository.ResetMode) {
+        runSync("Resetting…") { try await $0.repository.reset(to: commit.hash, mode: mode) }
+    }
+
+    func createBranch(name: String, at commit: Commit, checkout: Bool) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            do {
+                try await repository.createBranch(name: trimmed, at: commit.hash, checkout: checkout)
+                await refreshAll()
+            } catch { report(error) }
+        }
+    }
+
+    func createTag(name: String, at commit: Commit) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        Task {
+            do {
+                try await repository.createTag(name: trimmed, at: commit.hash)
+                await refreshRefs()
+            } catch { report(error) }
+        }
+    }
+
     // MARK: - Branch / stash operations
 
     func selectBranch(_ branch: Branch) {
