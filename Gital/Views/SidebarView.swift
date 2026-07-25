@@ -244,13 +244,9 @@ struct SidebarView: View {
             model.navTab = .changes
         }
         .contextMenu {
-            if !staged, change.status != .untracked {
-                Button("Discard Changes", role: .destructive) {
-                    Task {
-                        try? await model.repository.discardChanges([change.path])
-                        await model.refreshStatus()
-                        await model.loadWorkingDiffs()
-                    }
+            if !staged {
+                Button(change.status == .untracked ? "Delete File…" : "Discard Changes…", role: .destructive) {
+                    model.requestDiscard(.file(change))
                 }
             }
         }

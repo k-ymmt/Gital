@@ -233,6 +233,24 @@ expect(unstageOnePatch?.contains("\n+        guard") == false
     && unstageOnePatch?.contains("\n         guard !token.isEmpty else { return false }") == true,
     "linesPatch neutralizes unpicked additions into context")
 
+// Discarding reuses the unstage shape (reverse-applied to the worktree instead
+// of the index): selecting one addition keeps the other addition as context and
+// omits the unpicked deletion, so only the picked line is reverted.
+let countLine = diffs[0].hunks[0].lines.first { $0.text.contains("minTokenLength") }!
+let discardOnePatch = PatchBuilder.linesPatch(for: diffs[0], selecting: [countLine.id], direction: .unstage)
+let expectedDiscardOne = """
+--- a/Sources/Login/LoginViewModel.swift
++++ b/Sources/Login/LoginViewModel.swift
+@@ -42,4 +42,5 @@
+     func validate(token: String) -> Bool {
+         guard !token.isEmpty else { return false }
++        return token.count >= minTokenLength
+    \u{20}}
+\u{20}}
+
+"""
+expect(discardOnePatch == expectedDiscardOne, "linesPatch builds a single-addition discard patch")
+
 // Hunks without any selected line are dropped from the patch.
 let twoHunkDiff = DiffParser.parse("""
 diff --git a/two.txt b/two.txt

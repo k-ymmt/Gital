@@ -76,6 +76,19 @@ struct ContentView: View {
                 }
             }
         }
+        .alert(
+            model.pendingDiscard?.confirmationTitle ?? "",
+            isPresented: Binding(
+                get: { model.pendingDiscard != nil },
+                set: { if !$0 { model.pendingDiscard = nil } }
+            ),
+            presenting: model.pendingDiscard
+        ) { target in
+            Button("Discard", role: .destructive) { model.performDiscard(target) }
+            Button("Cancel", role: .cancel) {}
+        } message: { target in
+            Text(target.confirmationMessage)
+        }
         .alert("Git Error", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }

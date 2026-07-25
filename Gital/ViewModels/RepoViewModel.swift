@@ -483,6 +483,71 @@ final class RepoViewModel {
         }
     }
 
+    // MARK: - Discarding
+
+    enum DiscardTarget {
+        case file(FileChange)
+        case hunk(DiffHunk, FileDiff)
+        case lines(FileDiff, count: Int)
+
+        var confirmationTitle: String {
+            switch self {
+            case .file(let change) where change.status == .untracked: "Delete Untracked File?"
+            case .file: "Discard Changes?"
+            case .hunk: "Discard Hunk?"
+            case .lines: "Discard Lines?"
+            }
+        }
+
+        var confirmationMessage: String {
+            switch self {
+            case .file(let change) where change.status == .untracked:
+                "“\(change.path)” will be permanently deleted. This cannot be undone."
+            case .file(let change):
+                "All unstaged changes in “\(change.path)” will be lost. This cannot be undone."
+            case .hunk(_, let diff):
+                "This hunk in “\(diff.fileName)” will be reverted. This cannot be undone."
+            case .lines(let diff, let count):
+                "\(count) selected line\(count == 1 ? "" : "s") in “\(diff.fileName)” will be reverted. This cannot be undone."
+            }
+        }
+    }
+
+    var pendingDiscard: DiscardTarget?
+
+    func requestDiscard(_ target: DiscardTarget) {
+        pendingDiscard = target
+    }
+
+    func performDiscard(_ target: DiscardTarget) {
+        Task {
+            do {
+                switch target {
+                case .file(let change) where change.status == .untracked:
+                    try await repository.removeUntracked([change.path])
+                case .file(let change):
+                    try await repository.discardChanges([change.path])
+                case .hunk(let hunk, let diff):
+                    if let patch = PatchBuilder.hunkPatch(for: hunk, in: diff) {
+                        try await repository.applyToWorktree(patch: patch, reverse: true)
+                    } else {
+                        try await repository.discardChanges([diff.path])
+                    }
+                case .lines(let diff, _):
+                    // The worktree holds unselected additions and lacks unselected
+                    // deletions — the same shape as the index in the unstage case,
+                    // so `.unstage` builds the right reverse-apply patch here too.
+                    let ids = selectedLineIDs(in: diff)
+                    guard let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: .unstage) else { return }
+                    try await repository.applyToWorktree(patch: patch, reverse: true)
+                    selectedDiffLineIDs.subtract(ids)
+                }
+                await refreshStatus()
+                await loadWorkingDiffs()
+            } catch { report(error) }
+        }
+    }
+
     func commit() {
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty || amend else { return }

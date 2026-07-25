@@ -82,6 +82,11 @@ struct ChangesView: View {
             Spacer()
             let selectedCount = model.selectedLineIDs(in: diff).count
             if selectedCount > 0 {
+                if diff.scope == .unstaged {
+                    HunkActionButton(title: "Discard \(selectedCount) Line\(selectedCount == 1 ? "" : "s")", tint: DesignStyle.deletion) {
+                        model.requestDiscard(.lines(diff, count: selectedCount))
+                    }
+                }
                 HunkActionButton(title: lineActionTitle(diff, count: selectedCount)) {
                     model.applySelectedLines(in: diff)
                 }
@@ -139,7 +144,15 @@ struct ChangesView: View {
     @ViewBuilder
     private func hunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
         switch diff.scope {
-        case .unstaged, .untracked:
+        case .unstaged:
+            HStack(spacing: 6) {
+                HunkActionButton(title: "Discard", tint: DesignStyle.deletion) {
+                    model.requestDiscard(.hunk(hunk, diff))
+                }
+                HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
+            }
+            .padding(.trailing, 8)
+        case .untracked:
             HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
                 .padding(.trailing, 8)
         case .staged:
@@ -187,17 +200,18 @@ struct ChangesView: View {
 
 struct HunkActionButton: View {
     let title: String
+    var tint: Color?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.tint)
+                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.tint))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 1.5)
                 .background(.background.opacity(0.7), in: Capsule())
-                .overlay(Capsule().strokeBorder(.tint.opacity(0.4), lineWidth: 1))
+                .overlay(Capsule().strokeBorder((tint ?? .accentColor).opacity(0.4), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .help(title)

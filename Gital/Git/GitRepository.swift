@@ -249,6 +249,19 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["checkout", "--"] + paths)
     }
 
+    func removeUntracked(_ paths: [String]) async throws {
+        guard !paths.isEmpty else { return }
+        try await executor.run(["clean", "-f", "-d", "--"] + paths)
+    }
+
+    /// Applies a patch to the worktree only — hunk/line-level discard uses
+    /// `reverse: true` with a worktree-vs-index patch, leaving the index as is.
+    func applyToWorktree(patch: String, reverse: Bool) async throws {
+        var args = ["apply", "--whitespace=nowarn"]
+        if reverse { args.append("--reverse") }
+        try await executor.run(args, stdin: Data(patch.utf8))
+    }
+
     func commit(message: String, amend: Bool) async throws {
         var args = ["commit", "-m", message]
         if amend { args.append("--amend") }
