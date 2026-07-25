@@ -20,18 +20,20 @@ actor GitExecutor {
     }
 
     @discardableResult
-    func run(_ arguments: [String]) async throws -> String {
-        let data = try await runData(arguments)
+    func run(_ arguments: [String], successCodes: Set<Int32> = [0]) async throws -> String {
+        let data = try await runData(arguments, successCodes: successCodes)
         return String(decoding: data, as: UTF8.self)
     }
 
-    func runData(_ arguments: [String]) async throws -> Data {
+    func runData(_ arguments: [String], successCodes: Set<Int32> = [0]) async throws -> Data {
         let workingDirectory = self.workingDirectory
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                process.arguments = ["git", "--no-optional-locks", "-c", "color.ui=false"] + arguments
+                // quotepath=false keeps non-ASCII paths raw in diff/log output
+                // instead of C-quoted octal escapes.
+                process.arguments = ["git", "--no-optional-locks", "-c", "color.ui=false", "-c", "core.quotepath=false"] + arguments
                 process.currentDirectoryURL = workingDirectory
 
                 var environment = ProcessInfo.processInfo.environment
@@ -55,7 +57,7 @@ actor GitExecutor {
                 let stderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
 
-                if process.terminationStatus == 0 {
+                if successCodes.contains(process.terminationStatus) {
                     continuation.resume(returning: stdout)
                 } else {
                     continuation.resume(throwing: GitError(

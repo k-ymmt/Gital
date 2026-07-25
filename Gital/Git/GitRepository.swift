@@ -169,8 +169,12 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func diffUntracked(path: String) async throws -> [FileDiff] {
-        // Show new-file contents for untracked files.
-        let output = try await executor.run(["diff", "--no-index", "--", "/dev/null", path])
+        // Show new-file contents for untracked files. `--no-index` exits 1
+        // when the files differ (which is the expected case here).
+        let output = try await executor.run(
+            ["diff", "--no-index", "--", "/dev/null", path],
+            successCodes: [0, 1]
+        )
         return DiffParser.parse(output)
     }
 

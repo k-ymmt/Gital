@@ -5,6 +5,7 @@ enum DiffParser {
     static func parse(_ output: String) -> [FileDiff] {
         var files: [FileDiff] = []
 
+        var inFile = false
         var currentPath: String?
         var currentOldPath: String?
         var currentIsBinary = false
@@ -45,52 +46,60 @@ enum DiffParser {
 
         func flushFile() {
             flushHunk()
-            guard let path = currentPath else { return }
+            defer {
+                inFile = false
+                currentPath = nil
+                currentOldPath = nil
+                currentIsBinary = false
+                currentHunks = []
+            }
+            guard let path = currentPath ?? currentOldPath else { return }
             files.append(FileDiff(
                 path: path,
-                oldPath: currentOldPath == currentPath ? nil : currentOldPath,
+                oldPath: currentOldPath == path ? nil : currentOldPath,
                 isBinary: currentIsBinary,
                 hunks: currentHunks
             ))
-            currentPath = nil
-            currentOldPath = nil
-            currentIsBinary = false
-            currentHunks = []
         }
 
         for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.hasPrefix("diff --git ") {
                 flushFile()
+                inFile = true
                 // Paths are re-read from ---/+++ lines; keep a fallback from the header.
                 let remainder = line.dropFirst("diff --git ".count)
-                if let bPath = parseHeaderPaths(String(remainder)) {
-                    currentPath = bPath.new
-                    currentOldPath = bPath.old
+                if let paths = parseHeaderPaths(String(remainder)) {
+                    currentPath = paths.new
+                    currentOldPath = paths.old
                 }
                 continue
             }
 
-            if currentPath == nil && !line.hasPrefix("@@") { continue }
+            if !inFile && !line.hasPrefix("@@") { continue }
 
-            if line.hasPrefix("Binary files ") || line.hasPrefix("GIT binary patch") {
-                currentIsBinary = true
-                continue
-            }
-            if line.hasPrefix("--- ") {
-                let path = String(line.dropFirst(4))
-                if path != "/dev/null" {
-                    currentOldPath = stripPathPrefix(path)
+            // File header lines only appear before the first hunk; inside a hunk
+            // "--- "/"+++ " are ordinary deletion/addition content ("-- x" / "++ x").
+            if hunkHeader == nil {
+                if line.hasPrefix("Binary files ") || line.hasPrefix("GIT binary patch") {
+                    currentIsBinary = true
+                    continue
                 }
-                continue
-            }
-            if line.hasPrefix("+++ ") {
-                let path = String(line.dropFirst(4))
-                if path != "/dev/null" {
-                    currentPath = stripPathPrefix(path)
-                } else if let old = currentOldPath {
-                    currentPath = old
+                if line.hasPrefix("--- ") {
+                    let path = unquotePath(String(line.dropFirst(4)))
+                    if path != "/dev/null" {
+                        currentOldPath = stripPathPrefix(path)
+                    }
+                    continue
                 }
-                continue
+                if line.hasPrefix("+++ ") {
+                    let path = unquotePath(String(line.dropFirst(4)))
+                    if path != "/dev/null" {
+                        currentPath = stripPathPrefix(path)
+                    } else if let old = currentOldPath {
+                        currentPath = old
+                    }
+                    continue
+                }
             }
             if line.hasPrefix("@@") {
                 flushHunk()
@@ -135,8 +144,27 @@ enum DiffParser {
     }
 
     private static func parseHeaderPaths(_ remainder: String) -> (old: String, new: String)? {
-        // Common case: "a/path b/path" without quoting. Quoted/space paths are
-        // recovered from the ---/+++ lines instead.
+        // Quoted paths ("a/\346..." with C escapes) appear when core.quotepath
+        // applies or the name contains quotes/control characters.
+        if remainder.hasPrefix("\"") {
+            var rest = Substring(remainder)
+            guard let old = scanQuoted(&rest) else { return nil }
+            let newPart = rest.drop(while: { $0 == " " })
+            let new = newPart.hasPrefix("\"")
+                ? { var r = newPart; return scanQuoted(&r) }()
+                : (newPart.isEmpty ? nil : String(newPart))
+            guard let new else { return nil }
+            return (stripPathPrefix(old), stripPathPrefix(new))
+        }
+        if let quoteRange = remainder.range(of: " \"") {
+            // Unquoted old path, quoted new path.
+            let old = String(remainder[..<quoteRange.lowerBound])
+            var rest = remainder[quoteRange.lowerBound...].drop(while: { $0 == " " })
+            guard let new = scanQuoted(&rest) else { return nil }
+            return (stripPathPrefix(old), stripPathPrefix(new))
+        }
+        // Common case: "a/path b/path" without quoting. Paths with spaces are
+        // ambiguous here and get corrected from the ---/+++ lines.
         let parts = remainder.split(separator: " ")
         guard parts.count >= 2,
               let aPart = parts.first(where: { $0.hasPrefix("a/") }),
@@ -144,14 +172,66 @@ enum DiffParser {
         return (String(aPart.dropFirst(2)), String(bPart.dropFirst(2)))
     }
 
+    /// Unquotes a git C-style quoted path (`"\346\227\245..."`); returns other
+    /// strings unchanged.
+    private static func unquotePath(_ path: String) -> String {
+        guard path.hasPrefix("\"") else { return path }
+        var rest = Substring(path)
+        return scanQuoted(&rest) ?? path
+    }
+
+    /// Scans a leading C-quoted string, consuming it from `rest`.
+    private static func scanQuoted(_ rest: inout Substring) -> String? {
+        guard rest.first == "\"" else { return nil }
+        var bytes: [UInt8] = []
+        var index = rest.index(after: rest.startIndex)
+        while index < rest.endIndex {
+            let char = rest[index]
+            if char == "\"" {
+                rest = rest[rest.index(after: index)...]
+                return String(decoding: bytes, as: UTF8.self)
+            }
+            if char == "\\" {
+                index = rest.index(after: index)
+                guard index < rest.endIndex else { return nil }
+                let escaped = rest[index]
+                switch escaped {
+                case "n": bytes.append(0x0A)
+                case "t": bytes.append(0x09)
+                case "r": bytes.append(0x0D)
+                case "\\", "\"": bytes.append(escaped.asciiValue!)
+                case "0"..."7":
+                    var value = 0
+                    var digits = 0
+                    var digitIndex = index
+                    while digitIndex < rest.endIndex, digits < 3,
+                          let ascii = rest[digitIndex].asciiValue, (0x30...0x37).contains(ascii) {
+                        value = value * 8 + Int(ascii - 0x30)
+                        digits += 1
+                        digitIndex = rest.index(after: digitIndex)
+                    }
+                    bytes.append(UInt8(truncatingIfNeeded: value))
+                    index = rest.index(digitIndex, offsetBy: -1)
+                default:
+                    bytes.append(contentsOf: Array(String(escaped).utf8))
+                }
+            } else {
+                bytes.append(contentsOf: Array(String(char).utf8))
+            }
+            index = rest.index(after: index)
+        }
+        return nil
+    }
+
     private static func parseHunkHeader(_ line: String) -> (oldStart: Int, newStart: Int)? {
-        // @@ -12,7 +12,9 @@ optional context
+        // @@ -12,7 +12,9 @@ optional context — counts are omitted when 1 (@@ -1 +1 @@).
         let scanner = Scanner(string: line)
         guard scanner.scanString("@@") != nil,
               scanner.scanString("-") != nil,
               let oldStart = scanner.scanInt() else { return nil }
-        _ = scanner.scanString(",")
-        _ = scanner.scanInt()
+        if scanner.scanString(",") != nil {
+            _ = scanner.scanInt()
+        }
         guard scanner.scanString("+") != nil,
               let newStart = scanner.scanInt() else { return nil }
         return (oldStart, newStart)

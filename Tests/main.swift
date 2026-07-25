@@ -50,6 +50,85 @@ expect(deletion.oldNumber == 43 && deletion.newNumber == nil, "deletion line num
 let addition = hunk.lines.first { $0.kind == .addition }!
 expect(addition.oldNumber == nil && addition.newNumber == 43, "addition line numbering")
 
+// MARK: - DiffParser edge cases
+
+// Hunk headers omit the count when a side is exactly one line (@@ -1 +1 @@).
+let singleLineDiff = """
+diff --git a/single.txt b/single.txt
+index 1111111..2222222 100644
+--- a/single.txt
++++ b/single.txt
+@@ -1 +1 @@
+-CLAUDE.md
+\\ No newline at end of file
++CLAUDE.mds
+\\ No newline at end of file
+"""
+let singleLine = DiffParser.parse(singleLineDiff)
+expect(singleLine.count == 1 && singleLine[0].hunks.count == 1, "countless hunk header parses")
+expect(singleLine[0].deletions == 1 && singleLine[0].additions == 1, "countless hunk keeps deletion and addition")
+expect(singleLine[0].hunks[0].lines[0].kind == .deletion && singleLine[0].hunks[0].lines[0].oldNumber == 1, "countless hunk numbering")
+
+// Inside a hunk, "--- "/"+++ " are content (deleted "-- x" / added "++ x"),
+// not file headers.
+let dashContentDiff = """
+diff --git a/tricky.txt b/tricky.txt
+index 1111111..2222222 100644
+--- a/tricky.txt
++++ b/tricky.txt
+@@ -1,4 +1,4 @@
+--- CLAUDE.md comment
++-- CLAUDE.mds comment
+ keep
+-++ old thing
++++ new thing
+ keep2
+"""
+let dashContent = DiffParser.parse(dashContentDiff)
+expect(dashContent.count == 1 && dashContent[0].path == "tricky.txt", "dash-prefixed content keeps file path")
+expect(dashContent[0].deletions == 2 && dashContent[0].additions == 2, "dash-prefixed content lines survive")
+expect(dashContent[0].hunks[0].lines[0].kind == .deletion && dashContent[0].hunks[0].lines[0].text == "-- CLAUDE.md comment", "leading --- line parsed as deletion")
+expect(dashContent[0].hunks[0].lines[4].kind == .addition && dashContent[0].hunks[0].lines[4].text == "++ new thing", "leading +++ line parsed as addition")
+
+// core.quotepath-style octal-escaped paths.
+let quotedPathDiff = """
+diff --git "a/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt" "b/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"
+index 1111111..2222222 100644
+--- "a/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"
++++ "b/\\346\\227\\245\\346\\234\\254\\350\\252\\236.txt"
+@@ -1 +1 @@
+-hello
++hello world
+"""
+let quotedPath = DiffParser.parse(quotedPathDiff)
+expect(quotedPath.count == 1, "quoted path file is not dropped")
+expect(quotedPath.first?.path == "日本語.txt", "quoted path is unescaped")
+expect(quotedPath.first?.additions == 1 && quotedPath.first?.deletions == 1, "quoted path hunk parsed")
+
+// Renames: pure rename has no hunks; edited rename reads paths from ---/+++.
+let renameDiff = """
+diff --git a/Old.swift b/New.swift
+similarity index 100%
+rename from Old.swift
+rename to New.swift
+"""
+let renamed = DiffParser.parse(renameDiff)
+expect(renamed.count == 1 && renamed[0].path == "New.swift" && renamed[0].oldPath == "Old.swift", "pure rename keeps both paths")
+
+// New file via diff --no-index (untracked preview).
+let untrackedDiff = """
+diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..ebb3a2b
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,2 @@
++CLAUDE.md
++line2
+"""
+let untracked = DiffParser.parse(untrackedDiff)
+expect(untracked.count == 1 && untracked[0].path == "new.txt" && untracked[0].additions == 2, "untracked new-file diff parses")
+
 // MARK: - Split rows
 
 let splitRows = SplitDiffRow.rows(for: diffs[0].hunks)

@@ -285,6 +285,13 @@ final class RepoViewModel {
                 for diff in stagedDiffs where !diffs.contains(where: { $0.path == diff.path }) {
                     diffs.append(diff)
                 }
+                // Untracked files never appear in `git diff`; show them as
+                // all-additions like Fork does.
+                for change in status.unstaged where change.status == .untracked {
+                    guard !diffs.contains(where: { $0.path == change.path }),
+                          let untracked = try? await repository.diffUntracked(path: change.path) else { continue }
+                    diffs.append(contentsOf: untracked)
+                }
                 workingDiffs = diffs
             }
         } catch {
