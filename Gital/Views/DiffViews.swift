@@ -178,3 +178,35 @@ struct DiffStatsLabel: View {
         .font(.system(size: 11))
     }
 }
+
+/// Pinned section header for one file in a diff list: name, directory, and
+/// stats, with optional actions between them.
+struct FileSectionHeader<Trailing: View>: View {
+    let diff: FileDiff
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(diff.fileName)
+                .font(.system(size: 12, design: .monospaced))
+            Text(diff.directory)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            trailing
+            DiffStatsLabel(additions: diff.additions, deletions: diff.deletions)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
+extension FileSectionHeader where Trailing == EmptyView {
+    init(diff: FileDiff) {
+        self.init(diff: diff) { EmptyView() }
+    }
+}

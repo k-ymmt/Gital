@@ -1,0 +1,55 @@
+import SwiftUI
+
+struct StashDetailView: View {
+    @Bindable var model: RepoViewModel
+
+    var body: some View {
+        if let ref = model.selectedStashRef,
+           let stash = model.stashes.first(where: { $0.reference == ref }) {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "archivebox")
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(stash.message)
+                            .font(.system(size: 13, weight: .semibold))
+                            .lineLimit(1)
+                        Text(stash.reference)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Apply") { model.stashApply(stash, pop: false) }
+                    Button("Pop") { model.stashApply(stash, pop: true) }
+                    Button("Drop", role: .destructive) { model.stashDrop(stash) }
+                    DiffModePicker(mode: $model.diffMode)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.quaternary.opacity(0.25))
+                Divider()
+
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                        ForEach(model.stashDiffs) { diff in
+                            Section {
+                                FileDiffContentView(diff: diff, mode: model.diffMode)
+                            } header: {
+                                FileSectionHeader(diff: diff)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            VStack(spacing: 10) {
+                Image(systemName: "archivebox")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.secondary)
+                Text("Select a stash to see its contents")
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
