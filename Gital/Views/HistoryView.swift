@@ -34,6 +34,9 @@ struct HistoryView: View {
                             }
                             .id(commit.hash)
                         }
+                        if model.searchText.isEmpty, model.hasMoreCommits {
+                            loadMoreRow
+                        }
                     }
                 }
                 .onChange(of: model.selectedCommitHash) { _, hash in
@@ -43,6 +46,21 @@ struct HistoryView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var loadMoreRow: some View {
+        HStack {
+            Spacer()
+            ProgressView()
+                .controlSize(.small)
+            Spacer()
+        }
+        .frame(height: 32)
+        // Keyed on the commit count so the trigger re-fires after each page
+        // lands while the row is still on screen (e.g. a page of duplicates).
+        .task(id: model.commits.count) {
+            await model.loadMoreCommits()
         }
     }
 

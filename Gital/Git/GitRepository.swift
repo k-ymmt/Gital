@@ -102,14 +102,18 @@ final class GitRepository: @unchecked Sendable {
 
     // MARK: - Log
 
-    func log(limit: Int = 400) async throws -> [Commit] {
+    func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
         let format = "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%D%x1e"
-        let output = try await executor.run([
+        var args = [
             "log", "--branches", "--remotes", "--tags", "HEAD",
             "--topo-order", "--date=relative",
             "-n", String(limit),
-            "--pretty=format:\(format)",
-        ])
+        ]
+        if skip > 0 {
+            args.append("--skip=\(skip)")
+        }
+        args.append("--pretty=format:\(format)")
+        let output = try await executor.run(args)
         return Self.parseLog(output)
     }
 

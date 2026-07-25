@@ -50,6 +50,9 @@ final class RepoViewModel {
     var status: WorkingStatus = .empty
     var commits: [Commit] = []
     var graph = CommitGraph(commits: [])
+    var hasMoreCommits = true
+    var isLoadingMoreCommits = false
+    private static let logPageSize = 400
     var branches: [Branch] = []
     var remotes: [RemoteInfo] = []
     var tags: [Tag] = []
@@ -157,7 +160,27 @@ final class RepoViewModel {
 
     func refreshLog() async {
         do {
-            commits = try await repository.log()
+            // Re-fetch at least as many commits as are already loaded so a
+            // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
+            let limit = max(Self.logPageSize, commits.count)
+            let loaded = try await repository.log(limit: limit)
+            commits = loaded
+            hasMoreCommits = loaded.count >= limit
+            graph = CommitGraph(commits: commits)
+        } catch {
+            report(error)
+        }
+    }
+
+    func loadMoreCommits() async {
+        guard hasMoreCommits, !isLoadingMoreCommits, !commits.isEmpty else { return }
+        isLoadingMoreCommits = true
+        defer { isLoadingMoreCommits = false }
+        do {
+            let page = try await repository.log(limit: Self.logPageSize, skip: commits.count)
+            hasMoreCommits = page.count >= Self.logPageSize
+            let known = Set(commits.map(\.hash))
+            commits.append(contentsOf: page.filter { !known.contains($0.hash) })
             graph = CommitGraph(commits: commits)
         } catch {
             report(error)
