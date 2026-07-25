@@ -138,10 +138,25 @@ final class RepoViewModel {
     var syncActivity: String?
     var errorMessage: String?
 
+    @ObservationIgnored private var watcher: RepoWatcher?
+
     init(repository: GitRepository) {
         self.repository = repository
         self.github = GitHubService(repoRoot: repository.root)
         self.codex = CodexAppServer()
+        startWatching()
+    }
+
+    /// Refreshes the working copy whenever files change on disk (editors,
+    /// terminals, agents). FSEvents coalesces bursts via its latency window.
+    private func startWatching() {
+        watcher = RepoWatcher(root: repository.root) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                await self.refreshStatus()
+                await self.loadWorkingDiffs()
+            }
+        }
     }
 
     // MARK: - Filtering
