@@ -280,6 +280,7 @@ struct SidebarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 5)
                 .contentShape(Rectangle())
+                .background(rowBackground(model.selectedBranchName == branch.name))
                 .onTapGesture(count: 2) {
                     model.checkout(branch: branch)
                 }

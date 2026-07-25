@@ -61,8 +61,17 @@ final class RepoViewModel {
     // MARK: History selection
 
     var selectedCommitHash: String? {
-        didSet { if oldValue != selectedCommitHash { Task { await loadCommitDetail() } } }
+        didSet {
+            if oldValue != selectedCommitHash {
+                if let name = selectedBranchName,
+                   branches.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
+                    selectedBranchName = nil
+                }
+                Task { await loadCommitDetail() }
+            }
+        }
     }
+    var selectedBranchName: String?
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
     var selectedCommitFilePath: String?
@@ -392,6 +401,7 @@ final class RepoViewModel {
     // MARK: - Branch / stash operations
 
     func selectBranch(_ branch: Branch) {
+        selectedBranchName = branch.name
         selectedCommitHash = branch.tipHash
     }
 
