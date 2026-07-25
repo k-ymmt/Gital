@@ -390,6 +390,36 @@ final class RepoViewModel {
         }
     }
 
+    func stageHunk(_ hunk: DiffHunk, in diff: FileDiff) {
+        applyHunk(hunk, in: diff, reverse: false)
+    }
+
+    func unstageHunk(_ hunk: DiffHunk, in diff: FileDiff) {
+        applyHunk(hunk, in: diff, reverse: true)
+    }
+
+    private func applyHunk(_ hunk: DiffHunk, in diff: FileDiff, reverse: Bool) {
+        let changes = reverse ? status.staged : status.unstaged
+        let fileStatus = changes.first { $0.path == diff.path }?.status
+        // Untracked/added/deleted files are one hunk anyway and renames can't
+        // round-trip through a plain patch header — stage those whole so git
+        // records the right index entry (deletion, intent-to-add, rename).
+        let canPatch = fileStatus == .modified || fileStatus == nil
+        Task {
+            do {
+                if canPatch, let patch = PatchBuilder.hunkPatch(for: hunk, in: diff) {
+                    try await repository.applyToIndex(patch: patch, reverse: reverse)
+                } else if reverse {
+                    try await repository.unstage([diff.path])
+                } else {
+                    try await repository.stage([diff.path])
+                }
+                await refreshStatus()
+                await loadWorkingDiffs()
+            } catch { report(error) }
+        }
+    }
+
     func commit() {
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty || amend else { return }

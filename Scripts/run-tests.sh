@@ -10,6 +10,7 @@ swiftc \
   Gital/Git/GitModels.swift \
   Gital/Git/GitExecutor.swift \
   Gital/Git/DiffParser.swift \
+  Gital/Git/PatchBuilder.swift \
   Gital/Git/GitRepository.swift \
   Gital/Git/CommitGraph.swift \
   Tests/main.swift \

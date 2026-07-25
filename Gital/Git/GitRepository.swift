@@ -165,7 +165,7 @@ final class GitRepository: @unchecked Sendable {
             args.append(path)
         }
         let output = try await executor.run(args)
-        return DiffParser.parse(output)
+        return DiffParser.parse(output, scope: staged ? .staged : .unstaged)
     }
 
     func diffUntracked(path: String) async throws -> [FileDiff] {
@@ -175,7 +175,7 @@ final class GitRepository: @unchecked Sendable {
             ["diff", "--no-index", "--", "/dev/null", path],
             successCodes: [0, 1]
         )
-        return DiffParser.parse(output)
+        return DiffParser.parse(output, scope: .untracked)
     }
 
     func diffCommit(_ hash: String, path: String? = nil) async throws -> [FileDiff] {
@@ -234,6 +234,14 @@ final class GitRepository: @unchecked Sendable {
 
     func unstageAll() async throws {
         try await executor.run(["reset", "HEAD", "--", "."])
+    }
+
+    /// Applies a patch to the index only — hunk-level stage (or unstage with
+    /// `reverse`) without touching the worktree.
+    func applyToIndex(patch: String, reverse: Bool) async throws {
+        var args = ["apply", "--cached", "--whitespace=nowarn"]
+        if reverse { args.append("--reverse") }
+        try await executor.run(args, stdin: Data(patch.utf8))
     }
 
     func discardChanges(_ paths: [String]) async throws {

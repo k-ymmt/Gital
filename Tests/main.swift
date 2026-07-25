@@ -154,6 +154,57 @@ expect(combinedLines[0].kind == .context && combinedLines[0].oldNumber == 1 && c
 expect(combinedLines[1].kind == .addition && combinedLines[1].text == "<<<<<<< HEAD" && combinedLines[1].newNumber == 2, "combined conflict marker is addition")
 expect(combinedLines[6].kind == .context && combinedLines[6].oldNumber == 3 && combinedLines[6].newNumber == 7, "combined first-parent old numbering")
 
+// MARK: - PatchBuilder
+
+let rebuiltPatch = PatchBuilder.hunkPatch(for: diffs[0].hunks[0], in: diffs[0])
+let expectedPatch = """
+--- a/Sources/Login/LoginViewModel.swift
++++ b/Sources/Login/LoginViewModel.swift
+@@ -42,5 +42,6 @@ final class LoginViewModel {
+     func validate(token: String) -> Bool {
+-        return !token.isEmpty
++        guard !token.isEmpty else { return false }
++        return token.count >= minTokenLength
+    \u{20}}
+\u{20}}
+
+"""
+expect(rebuiltPatch == expectedPatch, "PatchBuilder round-trips a hunk")
+
+// A file without a trailing newline must keep the "\ No newline" marker,
+// otherwise git apply rejects the rebuilt patch.
+let noNewlineDiff = """
+diff --git a/end.txt b/end.txt
+index 1111111..2222222 100644
+--- a/end.txt
++++ b/end.txt
+@@ -1,2 +1,2 @@
+ first
+-old last
+\\ No newline at end of file
++new last
+\\ No newline at end of file
+"""
+let noNewline = DiffParser.parse(noNewlineDiff)
+expect(noNewline[0].hunks[0].lines[1].noNewline && noNewline[0].hunks[0].lines[2].noNewline, "parser keeps no-newline markers")
+let noNewlinePatch = PatchBuilder.hunkPatch(for: noNewline[0].hunks[0], in: noNewline[0])
+expect(noNewlinePatch == noNewlineDiff.split(separator: "\n").dropFirst(2).joined(separator: "\n") + "\n", "PatchBuilder re-emits no-newline markers")
+
+// Partial patches can't express renames or combined conflict hunks.
+expect(PatchBuilder.hunkPatch(for: combined[0].hunks[0], in: combined[0]) == nil, "PatchBuilder refuses combined hunks")
+let renameWithHunk = FileDiff(path: "New.swift", oldPath: "Old.swift", isBinary: false, hunks: diffs[0].hunks)
+expect(PatchBuilder.hunkPatch(for: diffs[0].hunks[0], in: renameWithHunk) == nil, "PatchBuilder refuses renames")
+let binaryWithHunk = FileDiff(path: "logo.png", oldPath: nil, isBinary: true, hunks: diffs[0].hunks)
+expect(PatchBuilder.hunkPatch(for: diffs[0].hunks[0], in: binaryWithHunk) == nil, "PatchBuilder refuses binary files")
+
+// Paths with characters that break the patch format get C-quoted like git does.
+let trickyDiff = FileDiff(path: "we\"ird.txt", oldPath: nil, isBinary: false, hunks: noNewline[0].hunks)
+expect(PatchBuilder.hunkPatch(for: noNewline[0].hunks[0], in: trickyDiff)?.hasPrefix("--- \"a/we\\\"ird.txt\"\n") == true, "PatchBuilder quotes tricky paths")
+
+// Scope flows from the diff source into the parsed files.
+expect(DiffParser.parse(sampleDiff, scope: .unstaged)[0].scope == .unstaged, "parse tags scope")
+expect(diffs[0].scope == .snapshot, "scope defaults to snapshot")
+
 // MARK: - Split rows
 
 let splitRows = SplitDiffRow.rows(for: diffs[0].hunks)

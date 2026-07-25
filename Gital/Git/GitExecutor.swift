@@ -20,12 +20,12 @@ actor GitExecutor {
     }
 
     @discardableResult
-    func run(_ arguments: [String], successCodes: Set<Int32> = [0]) async throws -> String {
-        let data = try await runData(arguments, successCodes: successCodes)
+    func run(_ arguments: [String], successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> String {
+        let data = try await runData(arguments, successCodes: successCodes, stdin: stdin)
         return String(decoding: data, as: UTF8.self)
     }
 
-    func runData(_ arguments: [String], successCodes: Set<Int32> = [0]) async throws -> Data {
+    func runData(_ arguments: [String], successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> Data {
         let workingDirectory = self.workingDirectory
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -46,11 +46,26 @@ actor GitExecutor {
                 process.standardOutput = stdoutPipe
                 process.standardError = stderrPipe
 
+                let stdinPipe: Pipe?
+                if stdin != nil {
+                    stdinPipe = Pipe()
+                    process.standardInput = stdinPipe
+                } else {
+                    stdinPipe = nil
+                }
+
                 do {
                     try process.run()
                 } catch {
                     continuation.resume(throwing: error)
                     return
+                }
+
+                if let stdin, let stdinPipe {
+                    // Safe to write fully before reading: the commands we feed
+                    // (git apply) consume all input before producing output.
+                    stdinPipe.fileHandleForWriting.write(stdin)
+                    stdinPipe.fileHandleForWriting.closeFile()
                 }
 
                 let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()

@@ -123,6 +123,9 @@ struct DiffLine: Hashable, Identifiable {
     let text: String
     let oldNumber: Int?
     let newNumber: Int?
+    /// True when git emitted "\ No newline at end of file" after this line —
+    /// needed to rebuild an applyable patch for hunk staging.
+    var noNewline: Bool = false
 
     var sign: String {
         switch kind {
@@ -141,11 +144,21 @@ struct DiffHunk: Hashable, Identifiable {
     let lines: [DiffLine]
 }
 
+/// Which comparison a `FileDiff` came from — decides whether hunks can be
+/// staged, unstaged, or are read-only.
+enum DiffScope: Hashable {
+    case unstaged   // worktree vs index (`git diff`)
+    case staged     // index vs HEAD (`git diff --cached`)
+    case untracked  // synthetic all-additions diff for an untracked file
+    case snapshot   // commit / stash / any read-only diff
+}
+
 struct FileDiff: Hashable, Identifiable {
     let path: String
     let oldPath: String?
     let isBinary: Bool
     let hunks: [DiffHunk]
+    var scope: DiffScope = .snapshot
 
     var id: String { path }
     var fileName: String { (path as NSString).lastPathComponent }

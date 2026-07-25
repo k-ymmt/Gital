@@ -2,7 +2,7 @@ import Foundation
 
 enum DiffParser {
     /// Parses `git diff` / `git show --patch` unified output into per-file diffs.
-    static func parse(_ output: String) -> [FileDiff] {
+    static func parse(_ output: String, scope: DiffScope = .snapshot) -> [FileDiff] {
         var files: [FileDiff] = []
 
         var inFile = false
@@ -36,7 +36,8 @@ enum DiffParser {
                         kind: $0.kind,
                         text: $0.text,
                         oldNumber: $0.oldNumber,
-                        newNumber: $0.newNumber
+                        newNumber: $0.newNumber,
+                        noNewline: $0.noNewline
                     )
                 }
             ))
@@ -59,7 +60,8 @@ enum DiffParser {
                 path: path,
                 oldPath: currentOldPath == path ? nil : currentOldPath,
                 isBinary: currentIsBinary,
-                hunks: currentHunks
+                hunks: currentHunks,
+                scope: scope
             ))
         }
 
@@ -126,7 +128,12 @@ enum DiffParser {
             }
 
             guard hunkHeader != nil, let first = line.first else { continue }
-            if first == "\\" { continue }  // "\ No newline at end of file"
+            if first == "\\" {  // "\ No newline at end of file"
+                if !hunkLines.isEmpty {
+                    hunkLines[hunkLines.count - 1].noNewline = true
+                }
+                continue
+            }
 
             if hunkParents > 1 {
                 // Combined hunk: one prefix column per parent. Old numbers

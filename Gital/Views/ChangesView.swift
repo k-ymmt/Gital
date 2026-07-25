@@ -98,15 +98,34 @@ struct ChangesView: View {
                 .padding(30)
         } else if model.diffMode == .split {
             ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
-                SplitDiffRowView(row: row)
+                if row.isHunkHeader,
+                   let hunk = diff.hunks.first(where: { row.id.hasPrefix("\($0.id)#") }) {
+                    SplitDiffRowView(row: row)
+                        .overlay(alignment: .trailing) { hunkStageButton(hunk, in: diff) }
+                } else {
+                    SplitDiffRowView(row: row)
+                }
             }
         } else {
             ForEach(diff.hunks) { hunk in
                 HunkHeaderView(text: hunk.header)
+                    .overlay(alignment: .trailing) { hunkStageButton(hunk, in: diff) }
                 ForEach(hunk.lines) { line in
                     interactiveLine(line, in: diff)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func hunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
+        switch diff.scope {
+        case .unstaged, .untracked:
+            HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
+        case .staged:
+            HunkActionButton(title: "Unstage") { model.unstageHunk(hunk, in: diff) }
+        case .snapshot:
+            EmptyView()
         }
     }
 
@@ -133,6 +152,28 @@ struct ChangesView: View {
 
     private func threadsAnchored(at lineID: String) -> [AgentThread] {
         model.agentThreads.filter { $0.anchorLineID == lineID }
+    }
+}
+
+// MARK: - Hunk stage/unstage button
+
+struct HunkActionButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(.tint)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 1.5)
+                .background(.background.opacity(0.7), in: Capsule())
+                .overlay(Capsule().strokeBorder(.tint.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .padding(.trailing, 8)
+        .help("\(title) this hunk")
     }
 }
 
