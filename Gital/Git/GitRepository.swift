@@ -179,7 +179,8 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func diffCommit(_ hash: String, path: String? = nil) async throws -> [FileDiff] {
-        var args = ["show", "--patch", "--format=", "--no-color", hash]
+        // Merge commits show nothing by default; diff against the first parent.
+        var args = ["show", "--patch", "--format=", "--no-color", "--diff-merges=first-parent", hash]
         if let path {
             args.append("--")
             args.append(path)
@@ -189,8 +190,8 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func commitFileStats(_ hash: String) async throws -> [CommitFileStat] {
-        async let numstatOutput = executor.run(["show", "--numstat", "--format=", hash])
-        async let nameStatusOutput = executor.run(["show", "--name-status", "--format=", hash])
+        async let numstatOutput = executor.run(["show", "--numstat", "--format=", "--diff-merges=first-parent", hash])
+        async let nameStatusOutput = executor.run(["show", "--name-status", "--format=", "--diff-merges=first-parent", hash])
 
         var statuses: [String: FileChange.Status] = [:]
         for line in try await nameStatusOutput.split(separator: "\n") {

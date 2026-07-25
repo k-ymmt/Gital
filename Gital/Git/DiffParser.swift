@@ -12,6 +12,7 @@ enum DiffParser {
         var currentHunks: [DiffHunk] = []
 
         var hunkHeader: String?
+        var hunkParents = 1  // >1 inside a combined (@@@) hunk
         var hunkOldStart = 0
         var hunkNewStart = 0
         var hunkLines: [DiffLine] = []
@@ -75,6 +76,17 @@ enum DiffParser {
                 continue
             }
 
+            // Combined diffs for conflicted paths ("git diff" during a merge).
+            if line.hasPrefix("diff --cc ") || line.hasPrefix("diff --combined ") {
+                flushFile()
+                inFile = true
+                let prefix = line.hasPrefix("diff --cc ") ? "diff --cc " : "diff --combined "
+                let path = unquotePath(String(line.dropFirst(prefix.count)))
+                currentPath = path
+                currentOldPath = path
+                continue
+            }
+
             if !inFile && !line.hasPrefix("@@") { continue }
 
             // File header lines only appear before the first hunk; inside a hunk
@@ -105,6 +117,7 @@ enum DiffParser {
                 flushHunk()
                 guard let ranges = parseHunkHeader(String(line)) else { continue }
                 hunkHeader = String(line)
+                hunkParents = ranges.parents
                 hunkOldStart = ranges.oldStart
                 hunkNewStart = ranges.newStart
                 oldNumber = ranges.oldStart
@@ -113,6 +126,31 @@ enum DiffParser {
             }
 
             guard hunkHeader != nil, let first = line.first else { continue }
+            if first == "\\" { continue }  // "\ No newline at end of file"
+
+            if hunkParents > 1 {
+                // Combined hunk: one prefix column per parent. Old numbers
+                // track the first parent; a line is in the result unless some
+                // column removes it.
+                guard line.count >= hunkParents else { continue }
+                let prefix = line.prefix(hunkParents)
+                guard prefix.allSatisfy({ $0 == " " || $0 == "+" || $0 == "-" }) else { continue }
+                let text = String(line.dropFirst(hunkParents))
+                let inFirstParent = prefix.first != "+"
+                if prefix.contains("-") {
+                    hunkLines.append(DiffLine(id: String(nextLineID), kind: .deletion, text: text, oldNumber: inFirstParent ? oldNumber : nil, newNumber: nil))
+                } else if prefix.contains("+") {
+                    hunkLines.append(DiffLine(id: String(nextLineID), kind: .addition, text: text, oldNumber: nil, newNumber: newNumber))
+                    newNumber += 1
+                } else {
+                    hunkLines.append(DiffLine(id: String(nextLineID), kind: .context, text: text, oldNumber: oldNumber, newNumber: newNumber))
+                    newNumber += 1
+                }
+                if inFirstParent { oldNumber += 1 }
+                nextLineID += 1
+                continue
+            }
+
             let text = String(line.dropFirst())
             switch first {
             case "+":
@@ -125,8 +163,6 @@ enum DiffParser {
                 hunkLines.append(DiffLine(id: String(nextLineID), kind: .context, text: text, oldNumber: oldNumber, newNumber: newNumber))
                 oldNumber += 1
                 newNumber += 1
-            case "\\":
-                continue  // "\ No newline at end of file"
             default:
                 continue
             }
@@ -223,17 +259,27 @@ enum DiffParser {
         return nil
     }
 
-    private static func parseHunkHeader(_ line: String) -> (oldStart: Int, newStart: Int)? {
+    private static func parseHunkHeader(_ line: String) -> (oldStart: Int, newStart: Int, parents: Int)? {
         // @@ -12,7 +12,9 @@ optional context — counts are omitted when 1 (@@ -1 +1 @@).
+        // Combined hunks have one extra @ and one extra old range per parent
+        // (@@@ -1,3 -1,4 +1,8 @@@).
+        let atCount = line.prefix(while: { $0 == "@" }).count
+        guard atCount >= 2 else { return nil }
+        let parents = atCount - 1
         let scanner = Scanner(string: line)
-        guard scanner.scanString("@@") != nil,
-              scanner.scanString("-") != nil,
-              let oldStart = scanner.scanInt() else { return nil }
-        if scanner.scanString(",") != nil {
-            _ = scanner.scanInt()
+        _ = scanner.scanString(String(repeating: "@", count: atCount))
+        var oldStart: Int?
+        for _ in 0..<parents {
+            guard scanner.scanString("-") != nil,
+                  let start = scanner.scanInt() else { return nil }
+            if oldStart == nil { oldStart = start }
+            if scanner.scanString(",") != nil {
+                _ = scanner.scanInt()
+            }
         }
-        guard scanner.scanString("+") != nil,
+        guard let oldStart,
+              scanner.scanString("+") != nil,
               let newStart = scanner.scanInt() else { return nil }
-        return (oldStart, newStart)
+        return (oldStart, newStart, parents)
     }
 }

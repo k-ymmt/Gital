@@ -129,6 +129,31 @@ index 0000000..ebb3a2b
 let untracked = DiffParser.parse(untrackedDiff)
 expect(untracked.count == 1 && untracked[0].path == "new.txt" && untracked[0].additions == 2, "untracked new-file diff parses")
 
+// Combined diff for a conflicted path ("git diff" during a merge).
+let combinedDiff = """
+diff --cc file.txt
+index 1e427e4,c08134a..0000000
+--- a/file.txt
++++ b/file.txt
+@@@ -1,3 -1,4 +1,8 @@@
+  line1
+++<<<<<<< HEAD
+ +main change
+++=======
++ feature change
+++>>>>>>> feature
+  line3
++ feature tail
+"""
+let combined = DiffParser.parse(combinedDiff)
+expect(combined.count == 1 && combined[0].path == "file.txt", "combined diff reads path")
+expect(combined[0].hunks.count == 1, "combined hunk header parses")
+expect(combined[0].additions == 6 && combined[0].deletions == 0, "combined lines classified")
+let combinedLines = combined[0].hunks[0].lines
+expect(combinedLines[0].kind == .context && combinedLines[0].oldNumber == 1 && combinedLines[0].newNumber == 1, "combined context numbering")
+expect(combinedLines[1].kind == .addition && combinedLines[1].text == "<<<<<<< HEAD" && combinedLines[1].newNumber == 2, "combined conflict marker is addition")
+expect(combinedLines[6].kind == .context && combinedLines[6].oldNumber == 3 && combinedLines[6].newNumber == 7, "combined first-parent old numbering")
+
 // MARK: - Split rows
 
 let splitRows = SplitDiffRow.rows(for: diffs[0].hunks)
