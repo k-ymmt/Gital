@@ -358,13 +358,6 @@ struct CommitDetailView: View {
         if let detail = model.commitDetail, detail.hash == commit.hash {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(detail.message.isEmpty ? commit.subject : detail.message)
-                        .font(.system(size: 12.5))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Divider()
-
                     Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 8) {
                         infoRow("SHA") {
                             Text(detail.hash)
@@ -418,6 +411,13 @@ struct CommitDetailView: View {
                             }
                         }
                     }
+
+                    Divider()
+
+                    Text(detail.message.isEmpty ? commit.subject : detail.message)
+                        .font(.system(size: 12.5))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
