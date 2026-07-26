@@ -517,6 +517,82 @@ expect(pEdges.contains { $0.shape == .mergeIn(fromLane: 1) }, "duplicate lane me
 let windowedGraph = CommitGraph(commits: [makeCommit("A", ["MISSING"]), makeCommit("B", ["MISSING"])])
 expect(windowedGraph.rows.count == 2, "graph handles parents outside the loaded window")
 
+// MARK: - GitExecutor (regression: process waiting must never wedge the chain)
+
+// The app ignores SIGPIPE (GitalApp.init); the unconsumed-stdin test below
+// writes into a closed pipe and needs the same protection here.
+signal(SIGPIPE, SIG_IGN)
+
+let executorTestsDone = DispatchSemaphore(value: 0)
+Task {
+    let tempRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gital-executor-tests-\(getpid())")
+    try? FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+    let executor = GitExecutor(workingDirectory: tempRoot)
+    _ = try? await executor.run(["init"])
+
+    // Launch failure (nonexistent cwd) must throw promptly, leave the
+    // DispatchGroup balanced (unbalanced enters crash on dealloc), and not hang.
+    let broken = GitExecutor(workingDirectory: URL(fileURLWithPath: "/nonexistent-gital-test-dir"))
+    let launchFailed = (try? await broken.run(["version"])) == nil
+    expect(launchFailed, "executor: launch failure throws instead of hanging")
+
+    // A failing command (non-zero exit) must not stall the serialized chain.
+    _ = try? await executor.run(["rev-parse", "no-such-ref"])
+    let toplevel = (try? await executor.run(["rev-parse", "--show-toplevel"])) ?? ""
+    expect(!toplevel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           "executor: chain survives a failing command")
+
+    // stdin round-trip, and stdin that git exits without consuming.
+    let hash = (try? await executor.run(["hash-object", "--stdin"], stdin: Data("hello\n".utf8))) ?? ""
+    expect(hash.trimmingCharacters(in: .whitespacesAndNewlines).count == 40,
+           "executor: stdin is delivered to git")
+    let badSubcommand = (try? await executor.run(
+        ["not-a-real-subcommand"], stdin: Data(repeating: 65, count: 1 << 20)
+    )) == nil
+    expect(badSubcommand, "executor: unconsumed stdin surfaces the error, no hang")
+
+    // A background child inheriting the pipes (fsmonitor-daemon style) holds
+    // EOF back after git exits; the drain grace cutoff must finish the
+    // command with the output produced before exit instead of wedging.
+    let leakStart = Date()
+    let leaked = (try? await executor.run(
+        ["-c", "alias.leak=!echo started; sleep 10 >/dev/null &", "leak"]
+    )) ?? ""
+    let leakElapsed = Date().timeIntervalSince(leakStart)
+    expect(leaked.contains("started"), "executor: pre-exit output survives the drain cutoff")
+    expect(leakElapsed < GitExecutor.drainGracePeriod + 5,
+           "executor: orphaned pipe holder cannot wedge the chain (took \(String(format: "%.1f", leakElapsed))s)")
+    let afterLeak = (try? await executor.run(["rev-parse", "--show-toplevel"])) != nil
+    expect(afterLeak, "executor: chain keeps serving commands after the cutoff")
+
+    // Hammer the chain with concurrent mixed success/failure commands; every
+    // call must complete with the expected outcome.
+    let outcomes = await withTaskGroup(of: Bool.self) { group -> [Bool] in
+        for i in 0..<60 {
+            group.addTask {
+                if i % 5 == 0 {
+                    return (try? await executor.run(["rev-parse", "bad-ref-\(i)"])) == nil
+                }
+                return (try? await executor.run(["rev-parse", "--show-toplevel"])) != nil
+            }
+        }
+        var results: [Bool] = []
+        for await outcome in group { results.append(outcome) }
+        return results
+    }
+    expect(outcomes.count == 60 && outcomes.allSatisfy { $0 },
+           "executor: 60 concurrent commands all complete correctly")
+
+    executorTestsDone.signal()
+}
+if executorTestsDone.wait(timeout: .now() + 60) == .timedOut {
+    failures += 1
+    print("✗ executor tests timed out — process waiting hangs again")
+}
+
 // MARK: - Result
 
 print(failures == 0 ? "\nAll tests passed." : "\n\(failures) test(s) FAILED.")

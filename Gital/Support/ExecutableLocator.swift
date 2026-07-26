@@ -64,7 +64,10 @@ nonisolated final class ExecutableLocator: @unchecked Sendable {
         // on a GCD/concurrency worker thread, hanging after the shell exited.
         let exited = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in exited.signal() }
-        guard (try? process.run()) != nil else { return nil }
+        guard (try? process.run()) != nil else {
+            process.terminationHandler = nil
+            return nil
+        }
         let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
         exited.wait()
 

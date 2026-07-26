@@ -11,6 +11,23 @@ struct GitError: LocalizedError {
     }
 }
 
+/// One-shot latch deciding who finishes a pipe's drain: the EOF handler or
+/// the post-exit grace timer. Whichever calls `finish()` first wins; the
+/// loser must not touch the DispatchGroup again (a double leave would crash).
+nonisolated final class DrainGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var finished = false
+
+    /// Returns true exactly once, for the first caller.
+    func finish() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if finished { return false }
+        finished = true
+        return true
+    }
+}
+
 /// Thread-safe accumulation buffer for pipe readability handlers.
 private nonisolated final class OutputBuffer: @unchecked Sendable {
     private let lock = NSLock()
@@ -34,6 +51,14 @@ private nonisolated final class OutputBuffer: @unchecked Sendable {
 /// race on `.git/index.lock`, and out-of-order completion made "latest state"
 /// reads unreliable.
 actor GitExecutor {
+    /// How long after process exit to keep waiting for pipe EOF before
+    /// finishing with whatever output has been drained. A git child left
+    /// running in the background (fsmonitor daemon, credential helpers) can
+    /// inherit the pipe write ends and hold EOF back indefinitely — without
+    /// this cutoff one such command would wedge the serialized chain and
+    /// stop all loading for the repository.
+    static let drainGracePeriod: TimeInterval = 2.0
+
     let workingDirectory: URL
     private var tail: Task<Void, Never>?
 
@@ -116,27 +141,43 @@ actor GitExecutor {
         // forever after the process has already exited — which wedges the
         // serialized command chain and stops all loading for the repository.
         let done = DispatchGroup()
-        for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
+        let stdoutGate = DrainGate()
+        let stderrGate = DrainGate()
+        for (pipe, buffer, gate) in [(stdoutPipe, stdoutBuffer, stdoutGate), (stderrPipe, stderrBuffer, stderrGate)] {
             done.enter()
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
                     handle.readabilityHandler = nil
-                    done.leave()
+                    if gate.finish() { done.leave() }
                 } else {
                     buffer.append(chunk)
                 }
             }
         }
         done.enter()
-        process.terminationHandler = { _ in done.leave() }
+        process.terminationHandler = { _ in
+            done.leave()
+            // Grace cutoff: a background child of git can inherit the pipe
+            // write ends and withhold EOF forever after git itself exited.
+            // Finish with the output drained so far instead of wedging the
+            // serialized chain (see drainGracePeriod).
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + drainGracePeriod) {
+                for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
+                    if gate.finish() {
+                        pipe.fileHandleForReading.readabilityHandler = nil
+                        done.leave()
+                    }
+                }
+            }
+        }
 
         do {
             try process.run()
         } catch {
-            for pipe in [stdoutPipe, stderrPipe] {
+            for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
                 pipe.fileHandleForReading.readabilityHandler = nil
-                done.leave()
+                if gate.finish() { done.leave() }
             }
             process.terminationHandler = nil
             done.leave()

@@ -242,27 +242,42 @@ struct GitHubService {
                 // worker thread the termination notification can be missed,
                 // hanging forever after gh has already exited.
                 let done = DispatchGroup()
-                for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
+                let stdoutGate = DrainGate()
+                let stderrGate = DrainGate()
+                for (pipe, buffer, gate) in [(stdoutPipe, stdoutBuffer, stdoutGate), (stderrPipe, stderrBuffer, stderrGate)] {
                     done.enter()
                     pipe.fileHandleForReading.readabilityHandler = { handle in
                         let chunk = handle.availableData
                         if chunk.isEmpty {
                             handle.readabilityHandler = nil
-                            done.leave()
+                            if gate.finish() { done.leave() }
                         } else {
                             buffer.append(chunk)
                         }
                     }
                 }
                 done.enter()
-                process.terminationHandler = { _ in done.leave() }
+                process.terminationHandler = { _ in
+                    done.leave()
+                    // Grace cutoff mirroring GitExecutor: a background child
+                    // of gh holding the pipe write ends must not hang this
+                    // request forever after gh itself exited.
+                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + GitExecutor.drainGracePeriod) {
+                        for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
+                            if gate.finish() {
+                                pipe.fileHandleForReading.readabilityHandler = nil
+                                done.leave()
+                            }
+                        }
+                    }
+                }
 
                 do {
                     try process.run()
                 } catch {
-                    for pipe in [stdoutPipe, stderrPipe] {
+                    for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
                         pipe.fileHandleForReading.readabilityHandler = nil
-                        done.leave()
+                        if gate.finish() { done.leave() }
                     }
                     process.terminationHandler = nil
                     done.leave()
