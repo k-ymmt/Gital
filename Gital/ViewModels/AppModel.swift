@@ -10,6 +10,7 @@ final class AppModel {
     var repoViewModel: RepoViewModel?
     var recentRepositories: [URL] = []
     var openError: String?
+    var commandLineToolMessage: String?
 
     /// Bumped on every open/close; a slow `discover` from an earlier click
     /// must not replace the repository the user opened afterwards.
@@ -60,6 +61,20 @@ final class AppModel {
         openGeneration += 1
         repoViewModel?.close()
         repoViewModel = nil
+    }
+
+    func installCommandLineTool() {
+        Task {
+            do {
+                try await CommandLineToolInstaller.install()
+                commandLineToolMessage =
+                    "Installed to \(CommandLineToolInstaller.installPath). "
+                    + "Run “gital .” in Terminal to open the current directory."
+            } catch {
+                commandLineToolMessage =
+                    "Could not install the command-line tool: \(error.localizedDescription)"
+            }
+        }
     }
 
     private func rememberRecent(_ url: URL) {

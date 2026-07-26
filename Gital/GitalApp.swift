@@ -8,6 +8,7 @@ import SwiftUI
 @main
 struct GitalApp: App {
     @State private var appModel = AppModel()
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         // The app writes to pipes of spawned processes (git, gh, codex) that
@@ -20,6 +21,7 @@ struct GitalApp: App {
             RootView()
                 .environment(appModel)
                 .frame(minWidth: 1080, minHeight: 700)
+                .onAppear { appDelegate.appModel = appModel }
         }
         .defaultSize(width: 1280, height: 800)
         .commands {
@@ -28,6 +30,12 @@ struct GitalApp: App {
                     appModel.pickRepository()
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Divider()
+
+                Button("Install “gital” Command-Line Tool") {
+                    appModel.installCommandLineTool()
+                }
             }
         }
     }
@@ -56,6 +64,14 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(appModel.openError ?? "")
+        }
+        .alert("Command-Line Tool", isPresented: Binding(
+            get: { appModel.commandLineToolMessage != nil },
+            set: { if !$0 { appModel.commandLineToolMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(appModel.commandLineToolMessage ?? "")
         }
     }
 }
