@@ -315,17 +315,27 @@ expect(status.unstaged.contains { $0.path == "Resources/welcome_1.png" && $0.sta
 // MARK: - Log parsing
 
 let logOutput = [
-    ["aaa111", "bbb222", "Kenji Mori", "kenji@aurora.app", "2 hours ago", "Polish welcome carousel", "HEAD -> feature/onboarding, origin/feature/onboarding"].joined(separator: "\u{1f}"),
-    ["bbb222", "ccc333 ddd444", "Aiko Tanaka", "aiko@aurora.app", "Yesterday", "Merge branch 'main'", "tag: v1.2.0, main"].joined(separator: "\u{1f}"),
-].joined(separator: "\u{1e}")
+    ["aaa111", "bbb222", "Kenji Mori", "kenji@aurora.app", "2 hours ago", "Polish welcome carousel", "HEAD -> feature/onboarding, origin/feature/onboarding"].joined(separator: "\u{0}"),
+    ["bbb222", "ccc333 ddd444", "Aiko Tanaka", "aiko@aurora.app", "Yesterday", "Merge branch 'main'", "tag: v1.2.0, main"].joined(separator: "\u{0}"),
+].joined(separator: "\n")
 
-let commits = GitRepository.parseLog(logOutput)
+let commits = GitRepository.parseLog(logOutput, remotes: ["origin"])
 expect(commits.count == 2, "log parses two commits")
 expect(commits[0].refs.contains { $0.kind == .head && $0.name == "feature/onboarding" }, "log HEAD ref")
 expect(commits[0].refs.contains { $0.kind == .remoteBranch && $0.name == "origin/feature/onboarding" }, "log remote ref")
 expect(commits[1].parents == ["ccc333", "ddd444"], "log merge parents")
 expect(commits[1].refs.contains { $0.kind == .tag && $0.name == "v1.2.0" }, "log tag ref")
 expect(commits[1].refs.contains { $0.kind == .branch && $0.name == "main" }, "log branch ref")
+
+// Local branches containing "/" must not be mistaken for remote branches.
+expect(GitRepository.parseRefs("feature/login", remotes: ["origin"]).first?.kind == .branch, "slash-named local branch stays local")
+expect(GitRepository.parseRefs("origin/main", remotes: ["origin"]).first?.kind == .remoteBranch, "known remote prefix is remote")
+
+// A subject containing legacy 0x1E/0x1F separator bytes must not corrupt
+// record splitting (NUL separators make this impossible).
+let hostileLog = ["eee555", "", "Mallory", "m@x", "now", "subject with \u{1e} and \u{1f} bytes", ""].joined(separator: "\u{0}")
+let hostileCommits = GitRepository.parseLog(hostileLog)
+expect(hostileCommits.count == 1 && hostileCommits[0].subject == "subject with \u{1e} and \u{1f} bytes", "hostile subject bytes survive log parsing")
 
 // MARK: - Commit graph
 
@@ -350,6 +360,162 @@ expect(graph.rows["E"]!.dotLane == 1, "second parent occupies lane 1")
 expect(graph.maxLanes >= 2, "graph tracks max lanes")
 let mergeBack = graph.rows["F"]!.edges.contains { if case .mergeIn = $0.shape { return true }; return false }
 expect(mergeBack, "lanes merge back into common parent")
+
+// MARK: - Regression: /dev/null patch headers
+
+// Staging every deletion line of a deleted file must produce a deletion
+// (`+++ /dev/null`), not an empty file staged under `b/path`.
+let deletedFileDiff = DiffParser.parse("""
+diff --git a/del.txt b/del.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/del.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-one
+-two
+""", scope: .unstaged)[0]
+let allDeleteIDs = Set(deletedFileDiff.hunks[0].lines.map(\.id))
+let fullDeletePatch = PatchBuilder.linesPatch(for: deletedFileDiff, selecting: allDeleteIDs, direction: .stage)
+expect(fullDeletePatch?.contains("+++ /dev/null") == true, "full deletion patch targets /dev/null")
+expect(fullDeletePatch?.contains("--- a/del.txt") == true, "full deletion patch keeps the old path")
+
+let firstDeleteID = deletedFileDiff.hunks[0].lines[0].id
+let partialDeletePatch = PatchBuilder.linesPatch(for: deletedFileDiff, selecting: [firstDeleteID], direction: .stage)
+expect(partialDeletePatch?.contains("+++ b/del.txt") == true, "partial deletion patch stays a modification")
+
+let untrackedIDs = Set(untracked[0].hunks[0].lines.map(\.id))
+let createPatch = PatchBuilder.linesPatch(for: untracked[0], selecting: untrackedIDs, direction: .stage)
+expect(createPatch?.hasPrefix("--- /dev/null\n+++ b/new.txt\n") == true, "file creation patch sources /dev/null")
+expect(PatchBuilder.hunkPatch(for: untracked[0].hunks[0], in: untracked[0])?.hasPrefix("--- /dev/null\n") == true, "hunkPatch sources /dev/null for creations")
+
+// MARK: - Regression: no-newline-at-EOF line selections
+
+// Partial selections that would move a "\ No newline" marker off the final
+// line of its side cannot be expressed as a valid patch — git apply would
+// corrupt the target (concatenate lines) or reject the patch. They must be
+// refused instead of built wrong.
+let nnLines = noNewline[0].hunks[0].lines
+let nnDeletion = nnLines.first { $0.kind == .deletion }!
+let nnAddition = nnLines.first { $0.kind == .addition }!
+expect(PatchBuilder.linesPatch(for: noNewline[0], selecting: [nnAddition.id], direction: .stage) == nil,
+       "staging only the addition at a no-newline EOF is refused")
+expect(PatchBuilder.linesPatch(for: noNewline[0], selecting: [nnDeletion.id], direction: .unstage) == nil,
+       "discarding only the deletion at a no-newline EOF is refused")
+let nnDeleteOnly = PatchBuilder.linesPatch(for: noNewline[0], selecting: [nnDeletion.id], direction: .stage)
+expect(nnDeleteOnly?.contains("-old last\n\\ No newline at end of file\n") == true,
+       "staging only the deletion keeps a valid trailing marker")
+let nnBoth = PatchBuilder.linesPatch(for: noNewline[0], selecting: [nnDeletion.id, nnAddition.id], direction: .stage)
+expect(nnBoth?.hasSuffix("+new last\n\\ No newline at end of file\n") == true,
+       "full selection round-trips both markers")
+
+// MARK: - Regression: line IDs are per-file
+
+// A change in one file must never shift another file's line IDs, or a kept
+// selection silently points at different physical lines after a reload.
+let fileBDiff = """
+diff --git a/b.txt b/b.txt
+index 1111111..2222222 100644
+--- a/b.txt
++++ b/b.txt
+@@ -1,2 +1,2 @@
+ ctx
+-x
++y
+"""
+let fileADiff = """
+diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1,3 +1,4 @@
+ keep
++added
+ keep2
+ keep3
+"""
+let combinedAB = DiffParser.parse(fileADiff + "\n" + fileBDiff)
+let bAlone = DiffParser.parse(fileBDiff)
+expect(combinedAB.count == 2, "two-file diff parses both files")
+expect(combinedAB[1].hunks[0].lines.map(\.id) == bAlone[0].hunks[0].lines.map(\.id),
+       "a file's line IDs are independent of preceding files")
+
+// MARK: - Regression: status conflict/detached/spaces
+
+var statusData2 = Data()
+for token in [
+    "# branch.head (detached)",
+    "1 .M N... 100644 100644 100644 aaaa bbbb My File.txt",
+    "u UU N... 100644 100644 100644 100644 aaaa bbbb cccc Merge Conflict.swift",
+] {
+    statusData2.append(token.data(using: .utf8)!)
+    statusData2.append(0)
+}
+let status2 = GitRepository.parseStatus(statusData2)
+expect(status2.branch == nil, "detached HEAD parses as nil branch")
+expect(status2.unstaged.contains { $0.path == "My File.txt" && $0.status == .modified }, "path with spaces survives status parsing")
+expect(status2.unstaged.contains { $0.path == "Merge Conflict.swift" && $0.status == .conflicted }, "conflicted u entry parses")
+
+// MARK: - Regression: renames and binaries with spaces
+
+let spacedRename = DiffParser.parse("""
+diff --git a/old name.txt b/new name.txt
+similarity index 100%
+rename from old name.txt
+rename to new name.txt
+""")
+expect(spacedRename.count == 1 && spacedRename[0].path == "new name.txt" && spacedRename[0].oldPath == "old name.txt",
+       "pure rename with spaces reads paths from rename from/to lines")
+
+let spacedBinary = DiffParser.parse("""
+diff --git a/my file.png b/my file.png
+index 3333333..4444444 100644
+Binary files a/my file.png and b/my file.png differ
+""")
+expect(spacedBinary.count == 1 && spacedBinary[0].path == "my file.png" && spacedBinary[0].isBinary,
+       "binary file with spaces keeps its full name")
+
+// MARK: - Regression: commit stats parse renames via -z
+
+var numstatZ = Data()
+for token in ["5\t2\t", "old dir/old.txt", "new dir/new.txt", "1\t0\tplain.txt"] {
+    numstatZ.append(token.data(using: .utf8)!)
+    numstatZ.append(0)
+}
+var nameStatusZ = Data()
+for token in ["R100", "old dir/old.txt", "new dir/new.txt", "M", "plain.txt"] {
+    nameStatusZ.append(token.data(using: .utf8)!)
+    nameStatusZ.append(0)
+}
+let commitStats = GitRepository.parseCommitStats(numstat: numstatZ, nameStatus: nameStatusZ)
+expect(commitStats.contains { $0.path == "new dir/new.txt" && $0.oldPath == "old dir/old.txt" && $0.status == .renamed && $0.additions == 5 && $0.deletions == 2 },
+       "renamed file stat keeps both real paths")
+expect(commitStats.contains { $0.path == "plain.txt" && $0.status == .modified && $0.additions == 1 },
+       "plain file stat parses alongside a rename")
+
+// MARK: - Regression: graph continuity at branch points
+
+// Two commits sharing a first parent put the same hash in two lanes; each
+// lane must continue straight down instead of zigzagging into the other copy.
+let branchCommits = [
+    makeCommit("C1", ["P"]),
+    makeCommit("C2", ["P"]),
+    makeCommit("C3", ["Q"]),
+    makeCommit("P", ["Q"]),
+    makeCommit("Q", []),
+]
+let branchGraph = CommitGraph(commits: branchCommits)
+let c3Edges = branchGraph.rows["C3"]!.edges
+expect(c3Edges.contains { $0.shape == .passThrough(lane: 1) }, "duplicate parent lane passes straight through")
+expect(!c3Edges.contains { if case .laneShift = $0.shape { return true }; return false }, "no spurious lane shift at a branch point")
+let pEdges = branchGraph.rows["P"]!.edges
+expect(pEdges.contains { $0.shape == .passThrough(lane: 2) }, "unrelated lane passes through the branch parent row")
+expect(pEdges.contains { $0.shape == .mergeIn(fromLane: 1) }, "duplicate lane merges into the parent dot")
+
+// Parents outside the loaded window (log pagination cuts at the limit) must
+// not crash the layout.
+let windowedGraph = CommitGraph(commits: [makeCommit("A", ["MISSING"]), makeCommit("B", ["MISSING"])])
+expect(windowedGraph.rows.count == 2, "graph handles parents outside the loaded window")
 
 // MARK: - Result
 

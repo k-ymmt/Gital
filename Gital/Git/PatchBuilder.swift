@@ -7,8 +7,9 @@ enum PatchBuilder {
     /// cannot represent the change (binary file, rename, combined conflict
     /// hunk) and the caller should fall back to whole-file staging.
     static func hunkPatch(for hunk: DiffHunk, in diff: FileDiff) -> String? {
-        guard !diff.isBinary, diff.oldPath == nil, !hunk.header.hasPrefix("@@@") else { return nil }
-        var patch = "--- \(headerPath("a", diff.path))\n+++ \(headerPath("b", diff.path))\n"
+        guard !diff.isBinary, !diff.containsInvalidUTF8, diff.oldPath == nil,
+              !hunk.header.hasPrefix("@@@") else { return nil }
+        var patch = headerLines(for: diff, hunks: [hunk])
         patch += hunk.header + "\n"
         for line in hunk.lines {
             patch += line.sign + line.text + "\n"
@@ -30,11 +31,13 @@ enum PatchBuilder {
     /// index yet) and unpicked deletions become context (still in the index);
     /// when unstaging the roles flip, because the patch is applied in reverse
     /// against the index. Hunks without any selected line are dropped. Returns
-    /// nil when no applicable line is selected or the diff can't be partially
-    /// applied (binary, rename, combined conflict hunk).
+    /// nil when no applicable line is selected, the diff can't be partially
+    /// applied (binary, rename, combined conflict hunk), or the selection
+    /// would change newline-at-EOF semantics of an unselected line — such a
+    /// patch cannot be represented and git would silently corrupt the target.
     static func linesPatch(for diff: FileDiff, selecting selectedIDs: Set<String>, direction: Direction) -> String? {
-        guard !diff.isBinary, diff.oldPath == nil else { return nil }
-        var body = ""
+        guard !diff.isBinary, !diff.containsInvalidUTF8, diff.oldPath == nil else { return nil }
+        var keptHunks: [(hunk: DiffHunk, kept: [(sign: String, text: String, noNewline: Bool)])] = []
         for hunk in diff.hunks {
             guard !hunk.header.hasPrefix("@@@"),
                   hunk.lines.contains(where: { $0.kind != .context && selectedIDs.contains($0.id) })
@@ -58,7 +61,13 @@ enum PatchBuilder {
                     break  // neutralized by omission
                 }
             }
+            guard markersAreRepresentable(kept) else { return nil }
+            keptHunks.append((hunk, kept))
+        }
+        guard !keptHunks.isEmpty else { return nil }
 
+        var body = ""
+        for (hunk, kept) in keptHunks {
             // Starts can be reused: line inclusion changes only the counts. A
             // zero-count side keeps its original "line before" start because
             // context lines always survive; a side can only end up empty when
@@ -73,8 +82,51 @@ enum PatchBuilder {
                 }
             }
         }
-        guard !body.isEmpty else { return nil }
-        return "--- \(headerPath("a", diff.path))\n+++ \(headerPath("b", diff.path))\n" + body
+        let sides = patchSides(for: diff, hunks: keptHunks)
+        return "--- \(sides.old)\n+++ \(sides.new)\n" + body
+    }
+
+    /// A "\ No newline at end of file" marker is only valid on the final line
+    /// of the side(s) its carrier belongs to. Neutralizing lines can move a
+    /// marker onto a line that is no longer last on one of its sides (e.g. a
+    /// no-newline deletion turned into context followed by an addition) —
+    /// `git apply` accepts some of those patches and concatenates lines.
+    private static func markersAreRepresentable(_ kept: [(sign: String, text: String, noNewline: Bool)]) -> Bool {
+        for (index, line) in kept.enumerated() where line.noNewline {
+            let rest = kept[(index + 1)...]
+            switch line.sign {
+            case "-":
+                if rest.contains(where: { $0.sign != "+" }) { return false }
+            case "+":
+                if rest.contains(where: { $0.sign != "-" }) { return false }
+            default:  // context: carries the marker for both sides
+                if !rest.isEmpty { return false }
+            }
+        }
+        return true
+    }
+
+    /// File creations need `--- /dev/null` and full deletions `+++ /dev/null`;
+    /// emitting `a/path`/`b/path` instead makes `git apply --cached` stage an
+    /// empty file rather than a deletion.
+    private static func patchSides(
+        for diff: FileDiff,
+        hunks: [(hunk: DiffHunk, kept: [(sign: String, text: String, noNewline: Bool)])]
+    ) -> (old: String, new: String) {
+        let oldEmpty = hunks.allSatisfy { $0.hunk.oldStart == 0 && $0.kept.allSatisfy { $0.sign == "+" } }
+        let newEmpty = hunks.allSatisfy { $0.hunk.newStart == 0 && $0.kept.allSatisfy { $0.sign == "-" } }
+        return (
+            oldEmpty ? "/dev/null" : headerPath("a", diff.path),
+            newEmpty ? "/dev/null" : headerPath("b", diff.path)
+        )
+    }
+
+    private static func headerLines(for diff: FileDiff, hunks: [DiffHunk]) -> String {
+        let mapped = hunks.map { hunk in
+            (hunk: hunk, kept: hunk.lines.map { (sign: $0.sign, text: $0.text, noNewline: $0.noNewline) })
+        }
+        let sides = patchSides(for: diff, hunks: mapped)
+        return "--- \(sides.old)\n+++ \(sides.new)\n"
     }
 
     /// Quotes a header path the way git does when it contains characters that

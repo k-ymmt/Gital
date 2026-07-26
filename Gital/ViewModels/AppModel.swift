@@ -11,6 +11,10 @@ final class AppModel {
     var recentRepositories: [URL] = []
     var openError: String?
 
+    /// Bumped on every open/close; a slow `discover` from an earlier click
+    /// must not replace the repository the user opened afterwards.
+    @ObservationIgnored private var openGeneration = 0
+
     init() {
         recentRepositories = (UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -34,11 +38,17 @@ final class AppModel {
     }
 
     func openRepository(at url: URL) {
+        openGeneration += 1
+        let generation = openGeneration
         Task {
             guard let repository = await GitRepository.discover(at: url) else {
-                openError = "“\(url.lastPathComponent)” is not a Git repository."
+                if generation == openGeneration {
+                    openError = "“\(url.lastPathComponent)” is not a Git repository."
+                }
                 return
             }
+            guard generation == openGeneration else { return }
+            repoViewModel?.close()  // stop the old watcher and codex subprocess
             let viewModel = RepoViewModel(repository: repository)
             repoViewModel = viewModel
             rememberRecent(repository.root)
@@ -47,6 +57,8 @@ final class AppModel {
     }
 
     func closeRepository() {
+        openGeneration += 1
+        repoViewModel?.close()
         repoViewModel = nil
     }
 

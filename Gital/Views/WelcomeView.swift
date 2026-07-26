@@ -4,8 +4,6 @@ struct WelcomeView: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
-        @Bindable var appModel = appModel
-
         VStack(spacing: 28) {
             VStack(spacing: 10) {
                 Image(systemName: "arrow.triangle.branch")
@@ -66,13 +64,7 @@ struct WelcomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
-        .alert("Could Not Open Repository", isPresented: Binding(
-            get: { appModel.openError != nil },
-            set: { if !$0 { appModel.openError = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(appModel.openError ?? "")
-        }
+        // The open-error alert lives in RootView so it also appears when a
+        // repository is already open.
     }
 }

@@ -100,9 +100,19 @@ final class RepoViewModel {
 
     // MARK: Changes selection
 
-    var selectedChangePath: String? {
-        didSet { if oldValue != selectedChangePath { Task { await loadWorkingDiffs() } } }
+    /// A working-copy file selection. Carries whether the staged or unstaged
+    /// side was clicked: a partially staged file appears in both sidebar
+    /// sections, and a bare path can't distinguish them.
+    struct ChangeSelection: Equatable, Hashable {
+        let path: String
+        let staged: Bool
     }
+
+    var selectedChange: ChangeSelection? {
+        didSet { if oldValue != selectedChange { Task { await loadWorkingDiffs() } } }
+    }
+
+    var selectedChangePath: String? { selectedChange?.path }
     var workingDiffs: [FileDiff] = []
     var commitMessage = ""
     var amend = false
@@ -143,12 +153,26 @@ final class RepoViewModel {
 
     var pendingDiscard: DiscardTarget?
     var pendingReset: PendingReset?
+    var pendingStashDrop: Stash?
 
     // MARK: Busy / errors
 
     var isSyncing = false
     var syncActivity: String?
     var errorMessage: String?
+
+    // MARK: Load generations
+    //
+    // Every async load bumps its generation before awaiting and only assigns
+    // its result while still current — a slow stale load can never overwrite
+    // the state a newer one produced.
+
+    @ObservationIgnored var workingDiffsGeneration = 0
+    @ObservationIgnored var commitDetailGeneration = 0
+    @ObservationIgnored var logGeneration = 0
+    @ObservationIgnored var stashDiffGeneration = 0
+    @ObservationIgnored private var syncCount = 0
+    @ObservationIgnored var pendingDiscardSnapshot: [FileDiff]?
 
     @ObservationIgnored private var watcher: RepoWatcher?
 
@@ -159,15 +183,32 @@ final class RepoViewModel {
         startWatching()
     }
 
-    /// Refreshes the working copy whenever files change on disk (editors,
-    /// terminals, agents). FSEvents coalesces bursts via its latency window.
+    /// Releases resources owned by this view model. Must be called when the
+    /// repository is closed or switched — the codex app-server subprocess is
+    /// not tied to our lifetime and would linger as an orphan otherwise.
+    func close() {
+        watcher = nil
+        let codex = self.codex
+        Task.detached { await codex.shutdown() }
+    }
+
+    /// Refreshes state whenever files change on disk (editors, terminals,
+    /// agents). FSEvents coalesces bursts via its latency window. Refs, log,
+    /// and stashes refresh too: external commits, branches, and `git stash`
+    /// runs must be reflected, or positional references (stash@{N}) in the UI
+    /// go stale and target the wrong object.
     private func startWatching() {
         watcher = RepoWatcher(root: repository.root) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 await self.refreshStatus()
                 await self.loadWorkingDiffs()
+                await self.refreshLog()
+                await self.refreshRefs()
             }
+        }
+        if watcher?.isWatching != true {
+            errorMessage = "File watching could not be started — external changes will not refresh automatically."
         }
     }
 
@@ -212,15 +253,21 @@ final class RepoViewModel {
     }
 
     /// Like `perform`, but drives the toolbar busy indicator; used by the
-    /// long-running sync and history operations.
+    /// long-running sync and history operations. Operations queue up behind
+    /// the serialized git executor instead of being dropped: silently
+    /// discarding a user-confirmed reset/cherry-pick because a fetch was in
+    /// flight left the user believing it happened.
     func runSync(_ activity: String, _ operation: @escaping @MainActor () async throws -> Void) {
-        guard !isSyncing else { return }
+        syncCount += 1
         isSyncing = true
         syncActivity = activity
         Task {
             defer {
-                isSyncing = false
-                syncActivity = nil
+                syncCount -= 1
+                if syncCount == 0 {
+                    isSyncing = false
+                    syncActivity = nil
+                }
             }
             do {
                 try await operation()

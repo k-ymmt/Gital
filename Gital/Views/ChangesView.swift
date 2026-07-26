@@ -23,6 +23,18 @@ struct ChangesView: View {
                                 }
                             }
                         }
+                        // Threads whose anchor line no longer exists (the
+                        // agent's own edit re-shaped the diff) must stay
+                        // reachable — the answer would otherwise vanish.
+                        ForEach(orphanedThreads) { thread in
+                            AgentThreadView(model: model, thread: thread)
+                        }
+                        // Same for the composer: don't let a background diff
+                        // refresh silently swallow the box mid-typing.
+                        if let range = model.composerRange, let file = model.composerFile,
+                           let anchorID = model.composerAnchorID, !visibleLineIDs.contains(anchorID) {
+                            AgentComposerView(model: model, range: range, fileName: (file as NSString).lastPathComponent)
+                        }
                     }
                 }
             }
@@ -39,13 +51,13 @@ struct ChangesView: View {
 
     private var headerBar: some View {
         HStack(spacing: 10) {
-            Text(model.selectedChangePath ?? "All changes")
+            Text(headerTitle)
                 .font(.system(size: 12.5, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            if model.selectedChangePath != nil {
+            if model.selectedChange != nil {
                 Button {
-                    model.selectedChangePath = nil
+                    model.selectedChange = nil
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
@@ -59,6 +71,26 @@ struct ChangesView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.quaternary.opacity(0.25))
+    }
+
+    private var headerTitle: String {
+        guard let selection = model.selectedChange else { return "All changes" }
+        // A partially staged file exists on both sides; say which one is shown.
+        let inBoth = model.status.staged.contains { $0.path == selection.path }
+            && model.status.unstaged.contains { $0.path == selection.path }
+        guard inBoth else { return selection.path }
+        return selection.path + (selection.staged ? " — staged" : " — unstaged")
+    }
+
+    private var visibleLineIDs: Set<String> {
+        Set(model.workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map(\.id))
+    }
+
+    /// Agent threads whose anchor line ID is no longer present in the
+    /// displayed diffs; rendered at the end of the list so they stay visible.
+    private var orphanedThreads: [AgentThread] {
+        let visible = visibleLineIDs
+        return model.agentThreads.filter { !visible.contains($0.anchorLineID) }
     }
 
     private var emptyState: some View {
@@ -151,9 +183,25 @@ struct ChangesView: View {
         }
     }
 
+    /// New-file coordinate for a diff line. Deletions have no new number, so
+    /// they anchor to the new-file position they were removed at — mixing old
+    /// and new coordinates in one range produced prompts pointing at regions
+    /// the user never selected.
+    private func agentLineNumber(_ line: DiffLine, in diff: FileDiff) -> Int {
+        if let number = line.newNumber { return number }
+        for hunk in diff.hunks {
+            guard let index = hunk.lines.firstIndex(where: { $0.id == line.id }) else { continue }
+            for prior in hunk.lines[..<index].reversed() {
+                if let number = prior.newNumber { return number }
+            }
+            return hunk.newStart
+        }
+        return line.oldNumber ?? 0
+    }
+
     @ViewBuilder
     private func interactiveLine(_ line: DiffLine, in diff: FileDiff) -> some View {
-        let lineNumber = line.newNumber ?? line.oldNumber ?? 0
+        let lineNumber = agentLineNumber(line, in: diff)
         let selectable = model.canSelectLines(in: diff) && line.kind != .context
 
         InteractiveDiffLineView(
@@ -281,7 +329,9 @@ struct CommitComposerView: View {
                     }
                 }
                 .buttonStyle(.glassProminent)
-                .disabled(!model.canCommit && !model.amend)
+                // Amend keeps the button usable with an empty message, so an
+                // explicit isCommitting check must prevent double-committing.
+                .disabled((!model.canCommit && !model.amend) || model.isCommitting)
             }
         }
         .padding(.horizontal, 16)

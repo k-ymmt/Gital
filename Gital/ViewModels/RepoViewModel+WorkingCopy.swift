@@ -51,7 +51,8 @@ extension RepoViewModel {
     /// untracked files have no index entry yet and renames/binaries fall back
     /// to whole-file staging.
     func canSelectLines(in diff: FileDiff) -> Bool {
-        (diff.scope == .unstaged || diff.scope == .staged) && !diff.isBinary && diff.oldPath == nil
+        (diff.scope == .unstaged || diff.scope == .staged) && !diff.isBinary
+            && !diff.containsInvalidUTF8 && diff.oldPath == nil
     }
 
     func toggleLineSelection(_ line: DiffLine, in diff: FileDiff, extend: Bool) {
@@ -127,21 +128,47 @@ extension RepoViewModel {
 
     func requestDiscard(_ target: DiscardTarget) {
         pendingDiscard = target
+        pendingDiscardSnapshot = nil
+        if case .file(let change) = target, change.status != .untracked {
+            // Snapshot what the confirmation dialog is about. A whole-file
+            // discard wipes whatever the worktree holds at execution time —
+            // if the file gains changes while the alert sits open (an agent
+            // writing, an editor autosave), those must not be swept away.
+            Task {
+                pendingDiscardSnapshot = try? await repository.diffWorking(staged: false, path: change.path)
+            }
+        }
     }
 
     func performDiscard(_ target: DiscardTarget) {
+        let snapshot = pendingDiscardSnapshot
+        pendingDiscardSnapshot = nil
         perform(refresh: .workingCopy) {
             switch target {
             case .file(let change) where change.status == .untracked:
                 try await self.repository.removeUntracked([change.path])
             case .file(let change):
+                let current = try await self.repository.diffWorking(staged: false, path: change.path)
+                if let snapshot, current != snapshot {
+                    throw GitError(
+                        command: "discard",
+                        exitCode: 1,
+                        stderr: "“\(change.path)” changed while the confirmation was open. Review the new changes and try again."
+                    )
+                }
                 try await self.repository.discardChanges([change.path])
             case .hunk(let hunk, let diff):
-                if let patch = PatchBuilder.hunkPatch(for: hunk, in: diff) {
-                    try await self.repository.applyToWorktree(patch: patch, reverse: true)
-                } else {
-                    try await self.repository.discardChanges([diff.path])
+                // No whole-file fallback here: the user confirmed one hunk,
+                // and discarding the entire file instead would destroy more
+                // than they agreed to.
+                guard let patch = PatchBuilder.hunkPatch(for: hunk, in: diff) else {
+                    throw GitError(
+                        command: "discard",
+                        exitCode: 1,
+                        stderr: "This hunk cannot be discarded on its own. Discard the whole file instead if that is what you want."
+                    )
                 }
+                try await self.repository.applyToWorktree(patch: patch, reverse: true)
             case .lines(let diff, _):
                 // The worktree holds unselected additions and lacks unselected
                 // deletions — the same shape as the index in the unstage case,
@@ -157,6 +184,7 @@ extension RepoViewModel {
     // MARK: - Committing
 
     func commit() {
+        guard !isCommitting else { return }  // the button stays enabled for amend; don't double-commit
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty || amend else { return }
         isCommitting = true

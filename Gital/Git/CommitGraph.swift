@@ -78,7 +78,16 @@ struct CommitGraph {
                     edges.append(Edge(shape: .mergeIn(fromLane: i), colorIndex: i))
                     continue
                 }
-                var j = after.firstIndex(of: id) ?? i
+                // Prefer staying in the same lane: two commits sharing a first
+                // parent put the same hash in two lanes, and firstIndex would
+                // pull this lane's line into the other lane's copy, drawing a
+                // disconnected zigzag at every branch point.
+                var j: Int
+                if i < after.count, after[i] == id {
+                    j = i
+                } else {
+                    j = after.firstIndex(of: id) ?? i
+                }
                 if j == i {
                     edges.append(Edge(shape: .passThrough(lane: i), colorIndex: i))
                 } else {

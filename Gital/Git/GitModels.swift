@@ -105,10 +105,14 @@ struct Tag: Hashable, Identifiable {
 
 struct Stash: Hashable, Identifiable {
     let index: Int
-    let reference: String  // stash@{0}
+    let reference: String  // stash@{0} — positional, valid only for the list it came from
+    /// Commit hash of the stash — the stable identity used to re-resolve the
+    /// positional reference right before apply/pop/drop, so an outdated list
+    /// can never target the wrong stash.
+    let commitHash: String
     let message: String
 
-    var id: String { reference }
+    var id: String { commitHash }
 }
 
 // MARK: - Diff
@@ -157,6 +161,10 @@ struct FileDiff: Hashable, Identifiable {
     let path: String
     let oldPath: String?
     let isBinary: Bool
+    /// True when the raw diff bytes were not valid UTF-8 and line text holds
+    /// replacement characters — patches rebuilt from it would never apply, so
+    /// hunk/line staging is disabled for such files.
+    var containsInvalidUTF8: Bool = false
     let hunks: [DiffHunk]
     var scope: DiffScope = .snapshot
 
@@ -175,6 +183,9 @@ struct FileDiff: Hashable, Identifiable {
 
 struct CommitFileStat: Hashable, Identifiable {
     let path: String
+    /// Pre-rename path when status is `.renamed`; needed as a pathspec so the
+    /// commit diff for the file isn't empty.
+    var oldPath: String? = nil
     let status: FileChange.Status
     let additions: Int
     let deletions: Int

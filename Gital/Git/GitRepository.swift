@@ -103,7 +103,10 @@ final class GitRepository: @unchecked Sendable {
     // MARK: - Log
 
     func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
-        let format = "%H%x1f%P%x1f%an%x1f%ae%x1f%ad%x1f%s%x1f%D%x1e"
+        async let remoteOutput = executor.run(["remote"])
+        // NUL field separators: none of these fields can ever contain a NUL,
+        // unlike 0x1E/0x1F which a hostile subject could carry.
+        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%s%x00%D"
         var args = [
             "log", "--branches", "--remotes", "--tags", "HEAD",
             "--topo-order", "--date=relative",
@@ -113,15 +116,23 @@ final class GitRepository: @unchecked Sendable {
             args.append("--skip=\(skip)")
         }
         args.append("--pretty=format:\(format)")
-        let output = try await executor.run(args)
-        return Self.parseLog(output)
+        var output: String
+        do {
+            output = try await executor.run(args)
+        } catch let error as GitError where error.stderr.contains("ambiguous argument 'HEAD'") {
+            // Unborn HEAD (fresh repo / orphan branch): the positional HEAD
+            // doesn't resolve; list reachable refs only, which may be empty.
+            var retryArgs = args
+            retryArgs.removeAll { $0 == "HEAD" }
+            output = try await executor.run(retryArgs)
+        }
+        let remotes = Set(((try? await remoteOutput) ?? "").split(separator: "\n").map(String.init))
+        return Self.parseLog(output, remotes: remotes)
     }
 
-    static func parseLog(_ output: String) -> [Commit] {
-        output.split(separator: "\u{1e}", omittingEmptySubsequences: true).compactMap { record in
-            let fields = record
-                .trimmingCharacters(in: .newlines)
-                .components(separatedBy: "\u{1f}")
+    static func parseLog(_ output: String, remotes: Set<String> = []) -> [Commit] {
+        output.split(separator: "\n", omittingEmptySubsequences: true).compactMap { record in
+            let fields = record.components(separatedBy: "\u{0}")
             guard fields.count >= 7, !fields[0].isEmpty else { return nil }
             return Commit(
                 hash: fields[0],
@@ -131,12 +142,12 @@ final class GitRepository: @unchecked Sendable {
                 relativeDate: fields[4],
                 subject: fields[5],
                 body: "",
-                refs: parseRefs(fields[6])
+                refs: parseRefs(fields[6], remotes: remotes)
             )
         }
     }
 
-    static func parseRefs(_ decoration: String) -> [GitRef] {
+    static func parseRefs(_ decoration: String, remotes: Set<String> = []) -> [GitRef] {
         guard !decoration.isEmpty else { return [] }
         var refs: [GitRef] = []
         for part in decoration.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
@@ -146,7 +157,9 @@ final class GitRepository: @unchecked Sendable {
                 continue
             } else if part.hasPrefix("tag: ") {
                 refs.append(GitRef(kind: .tag, name: String(part.dropFirst("tag: ".count))))
-            } else if part.contains("/") {
+            } else if let slash = part.firstIndex(of: "/"), remotes.contains(String(part[..<slash])) {
+                // Only a known remote name before the slash makes it a remote
+                // branch — local branches like "feature/login" also contain "/".
                 refs.append(GitRef(kind: .remoteBranch, name: part))
             } else {
                 refs.append(GitRef(kind: .branch, name: part))
@@ -164,51 +177,88 @@ final class GitRepository: @unchecked Sendable {
             args.append("--")
             args.append(path)
         }
-        let output = try await executor.run(args)
-        return DiffParser.parse(output, scope: staged ? .staged : .unstaged)
+        let (output, valid) = try await executor.runChecked(args)
+        return DiffParser.parse(output, scope: staged ? .staged : .unstaged, strictUTF8: valid)
     }
 
     func diffUntracked(path: String) async throws -> [FileDiff] {
         // Show new-file contents for untracked files. `--no-index` exits 1
         // when the files differ (which is the expected case here).
-        let output = try await executor.run(
+        let (output, valid) = try await executor.runChecked(
             ["diff", "--no-index", "--", "/dev/null", path],
             successCodes: [0, 1]
         )
-        return DiffParser.parse(output, scope: .untracked)
+        return DiffParser.parse(output, scope: .untracked, strictUTF8: valid)
     }
 
-    func diffCommit(_ hash: String, path: String? = nil) async throws -> [FileDiff] {
+    func diffCommit(_ hash: String, path: String? = nil, renamedFrom: String? = nil) async throws -> [FileDiff] {
         // Merge commits show nothing by default; diff against the first parent.
         var args = ["show", "--patch", "--format=", "--no-color", "--diff-merges=first-parent", hash]
         if let path {
             args.append("--")
             args.append(path)
+            // A rename needs both sides in the pathspec, or the pair breaks
+            // and the file shows as a bare addition (or nothing at all).
+            if let renamedFrom { args.append(renamedFrom) }
         }
-        let output = try await executor.run(args)
-        return DiffParser.parse(output)
+        let (output, valid) = try await executor.runChecked(args)
+        return DiffParser.parse(output, strictUTF8: valid)
     }
 
     func commitFileStats(_ hash: String) async throws -> [CommitFileStat] {
-        async let numstatOutput = executor.run(["show", "--numstat", "--format=", "--diff-merges=first-parent", hash])
-        async let nameStatusOutput = executor.run(["show", "--name-status", "--format=", "--diff-merges=first-parent", hash])
+        // -z output: rename entries carry two NUL-separated paths, which the
+        // line-based form mangles into "old => new" pseudo-paths.
+        async let numstatOutput = executor.runData(["show", "--numstat", "-z", "--format=", "--diff-merges=first-parent", hash])
+        async let nameStatusOutput = executor.runData(["show", "--name-status", "-z", "--format=", "--diff-merges=first-parent", hash])
+        return try await Self.parseCommitStats(numstat: numstatOutput, nameStatus: nameStatusOutput)
+    }
 
-        var statuses: [String: FileChange.Status] = [:]
-        for line in try await nameStatusOutput.split(separator: "\n") {
-            let parts = line.split(separator: "\t")
-            guard parts.count >= 2, let statusChar = parts[0].first else { continue }
-            let path = String(parts.last ?? "")
-            statuses[path] = Self.changeStatus(statusChar)
+    static func parseCommitStats(numstat: Data, nameStatus: Data) -> [CommitFileStat] {
+        let statusTokens = nameStatus.split(separator: 0, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
+        // name-status -z: STATUS NUL path NUL — renames/copies: R<score> NUL old NUL new NUL
+        var statuses: [String: (status: FileChange.Status, oldPath: String?)] = [:]
+        var index = 0
+        while index < statusTokens.count {
+            let token = statusTokens[index]
+            index += 1
+            guard let statusChar = token.first, !token.isEmpty else { continue }
+            let status = changeStatus(statusChar)
+            if statusChar == "R" || statusChar == "C" {
+                guard index + 1 < statusTokens.count else { break }
+                let oldPath = statusTokens[index]
+                let newPath = statusTokens[index + 1]
+                index += 2
+                statuses[newPath] = (status, oldPath)
+            } else {
+                guard index < statusTokens.count else { break }
+                statuses[statusTokens[index]] = (status, nil)
+                index += 1
+            }
         }
 
+        // numstat -z: "add\tdel\tpath" NUL — renames: "add\tdel\t" NUL old NUL new NUL
+        let numTokens = numstat.split(separator: 0, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
         var stats: [CommitFileStat] = []
-        for line in try await numstatOutput.split(separator: "\n") {
-            let parts = line.split(separator: "\t")
+        index = 0
+        while index < numTokens.count {
+            let token = numTokens[index]
+            index += 1
+            let parts = token.split(separator: "\t", omittingEmptySubsequences: false)
             guard parts.count >= 3 else { continue }
-            let path = String(parts[2])
+            var path = String(parts[2])
+            if path.isEmpty {
+                // Rename: the two real paths follow as separate tokens.
+                guard index + 1 < numTokens.count else { break }
+                path = numTokens[index + 1]
+                index += 2
+            }
+            let entry = statuses[path]
             stats.append(CommitFileStat(
                 path: path,
-                status: statuses[path] ?? .modified,
+                oldPath: entry?.oldPath,
+                status: entry?.status ?? .modified,
                 additions: Int(parts[0]) ?? 0,
                 deletions: Int(parts[1]) ?? 0
             ))
@@ -229,7 +279,10 @@ final class GitRepository: @unchecked Sendable {
 
     func unstage(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try await executor.run(["restore", "--staged", "--"] + paths)
+        // `reset -- <paths>` instead of `restore --staged`: identical for a
+        // normal HEAD, but also works on an unborn branch (fresh repo), where
+        // restore fails with "could not resolve 'HEAD'".
+        try await executor.run(["reset", "-q", "--"] + paths)
     }
 
     func unstageAll() async throws {
@@ -263,8 +316,15 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func commit(message: String, amend: Bool) async throws {
-        var args = ["commit", "-m", message]
-        if amend { args.append("--amend") }
+        var args = ["commit"]
+        if amend, message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Empty message + amend means "keep the existing message";
+            // passing -m "" would abort the commit.
+            args += ["--amend", "--no-edit"]
+        } else {
+            args += ["-m", message]
+            if amend { args.append("--amend") }
+        }
         try await executor.run(args)
     }
 
@@ -340,11 +400,11 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func stashes() async throws -> [Stash] {
-        let output = try await executor.run(["stash", "list", "--format=%gd\u{1f}%gs"])
+        let output = try await executor.run(["stash", "list", "--format=%gd\u{1f}%H\u{1f}%gs"])
         return output.split(separator: "\n").enumerated().compactMap { index, line in
             let fields = line.components(separatedBy: "\u{1f}")
-            guard fields.count >= 2 else { return nil }
-            return Stash(index: index, reference: fields[0], message: fields[1])
+            guard fields.count >= 3 else { return nil }
+            return Stash(index: index, reference: fields[0], commitHash: fields[1], message: fields[2])
         }
     }
 
@@ -396,16 +456,41 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(args)
     }
 
+    /// Re-resolves a stash's positional `stash@{N}` reference by commit hash
+    /// right before use. The stored reference goes stale the moment the stash
+    /// list changes (another drop, a `git stash push` in a terminal), and a
+    /// positional drop against a stale list destroys the wrong stash.
+    private func resolveStashRef(_ stash: Stash) async throws -> String {
+        let output = try await executor.run(["stash", "list", "--format=%gd\u{1f}%H"])
+        for line in output.split(separator: "\n") {
+            let fields = line.components(separatedBy: "\u{1f}")
+            guard fields.count >= 2 else { continue }
+            if fields[1] == stash.commitHash { return fields[0] }
+        }
+        throw GitError(
+            command: "stash",
+            exitCode: 1,
+            stderr: "This stash no longer exists — the stash list changed."
+        )
+    }
+
     func stashApply(_ stash: Stash, pop: Bool) async throws {
-        try await executor.run(["stash", pop ? "pop" : "apply", stash.reference])
+        let reference = try await resolveStashRef(stash)
+        try await executor.run(["stash", pop ? "pop" : "apply", reference])
     }
 
     func stashDrop(_ stash: Stash) async throws {
-        try await executor.run(["stash", "drop", stash.reference])
+        let reference = try await resolveStashRef(stash)
+        try await executor.run(["stash", "drop", reference])
     }
 
     func stashDiff(_ stash: Stash) async throws -> [FileDiff] {
-        let output = try await executor.run(["stash", "show", "--patch", stash.reference])
-        return DiffParser.parse(output)
+        let reference = try await resolveStashRef(stash)
+        // --include-untracked: stashes are pushed with untracked files, so the
+        // detail view must show them too.
+        let (output, valid) = try await executor.runChecked(
+            ["stash", "show", "--patch", "--include-untracked", reference]
+        )
+        return DiffParser.parse(output, strictUTF8: valid)
     }
 }

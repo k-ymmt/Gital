@@ -311,9 +311,10 @@ struct PullRequestDetailView: View {
             defer { isMerging = false }
             do {
                 try await model.github.merge(number: detail.number)
+                // Reload the detail directly — flipping selectedPRNumber
+                // nil→back spawned two loads that both hit gh.
                 model.prDetailsCache[detail.number] = nil
-                model.selectedPRNumber = nil
-                model.selectedPRNumber = detail.number
+                await model.loadPRDetail()
                 await model.refreshPullRequests()
             } catch {
                 model.prLoadError = error.localizedDescription

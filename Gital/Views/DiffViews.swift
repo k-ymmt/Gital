@@ -21,13 +21,16 @@ struct UnifiedDiffLineView: View {
             Text(line.sign)
                 .frame(width: 14)
                 .foregroundStyle(signColor)
+            // Wrapped + selectable: truncating left long lines unreadable and
+            // nothing in a diff could be copied.
             Text(line.text.isEmpty ? " " : line.text)
-                .lineLimit(1)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.trailing, 16)
             Spacer(minLength: 0)
         }
         .font(diffFont)
-        .frame(height: 19)
+        .frame(minHeight: 19, alignment: .top)
         .background(background)
     }
 
@@ -58,6 +61,7 @@ struct HunkHeaderView: View {
                 .foregroundStyle(DesignStyle.hunkText)
                 .padding(.leading, 12)
                 .lineLimit(1)
+                .textSelection(.enabled)
             Spacer(minLength: 0)
         }
         .frame(height: 19)
@@ -79,22 +83,24 @@ struct SplitDiffRowView: View {
                 Divider()
                 sideView(row.right)
             }
-            .frame(height: 19)
+            .frame(minHeight: 19)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private func sideView(_ side: SplitDiffRow.Side) -> some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             Text(side.number.map(String.init) ?? "")
                 .frame(width: 40, alignment: .trailing)
                 .padding(.trailing, 9)
                 .foregroundStyle(lineNumberColor)
             Text(side.text ?? " ")
-                .lineLimit(1)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
         .font(diffFont)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(sideBackground(side))
     }
 

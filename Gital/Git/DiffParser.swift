@@ -2,7 +2,10 @@ import Foundation
 
 enum DiffParser {
     /// Parses `git diff` / `git show --patch` unified output into per-file diffs.
-    static func parse(_ output: String, scope: DiffScope = .snapshot) -> [FileDiff] {
+    /// Pass `strictUTF8: false` when the raw git output was not valid UTF-8 and
+    /// had to be decoded lossily — affected files are flagged so callers don't
+    /// rebuild patches from replacement characters (they would never apply).
+    static func parse(_ output: String, scope: DiffScope = .snapshot, strictUTF8: Bool = true) -> [FileDiff] {
         var files: [FileDiff] = []
 
         var inFile = false
@@ -54,12 +57,20 @@ enum DiffParser {
                 currentOldPath = nil
                 currentIsBinary = false
                 currentHunks = []
+                // IDs restart per file so a change in one file never shifts
+                // another file's line IDs across a reload.
+                nextHunkID = 0
+                nextLineID = 0
             }
             guard let path = currentPath ?? currentOldPath else { return }
+            let invalidUTF8 = !strictUTF8 && currentHunks.contains { hunk in
+                hunk.lines.contains { $0.text.unicodeScalars.contains("\u{FFFD}") }
+            }
             files.append(FileDiff(
                 path: path,
                 oldPath: currentOldPath == path ? nil : currentOldPath,
                 isBinary: currentIsBinary,
+                containsInvalidUTF8: invalidUTF8,
                 hunks: currentHunks,
                 scope: scope
             ))
@@ -94,8 +105,32 @@ enum DiffParser {
             // File header lines only appear before the first hunk; inside a hunk
             // "--- "/"+++ " are ordinary deletion/addition content ("-- x" / "++ x").
             if hunkHeader == nil {
-                if line.hasPrefix("Binary files ") || line.hasPrefix("GIT binary patch") {
+                if line.hasPrefix("Binary files ") {
                     currentIsBinary = true
+                    // "Binary files a/X and b/Y differ" is the only line
+                    // carrying the real paths for a changed binary (no ---/+++
+                    // lines exist), so the space-split header fallback would
+                    // truncate names containing spaces.
+                    if let paths = parseBinaryLine(String(line.dropFirst("Binary files ".count))) {
+                        if let old = paths.old { currentOldPath = old }
+                        if let new = paths.new { currentPath = new }
+                    }
+                    continue
+                }
+                if line.hasPrefix("GIT binary patch") {
+                    currentIsBinary = true
+                    continue
+                }
+                // Pure renames/copies have no ---/+++ lines; these lines are
+                // the authoritative source for both paths.
+                if line.hasPrefix("rename from ") || line.hasPrefix("copy from ") {
+                    let prefix = line.hasPrefix("rename from ") ? "rename from " : "copy from "
+                    currentOldPath = unquotePath(String(line.dropFirst(prefix.count)))
+                    continue
+                }
+                if line.hasPrefix("rename to ") || line.hasPrefix("copy to ") {
+                    let prefix = line.hasPrefix("rename to ") ? "rename to " : "copy to "
+                    currentPath = unquotePath(String(line.dropFirst(prefix.count)))
                     continue
                 }
                 if line.hasPrefix("--- ") {
@@ -206,13 +241,60 @@ enum DiffParser {
             guard let new = scanQuoted(&rest) else { return nil }
             return (stripPathPrefix(old), stripPathPrefix(new))
         }
-        // Common case: "a/path b/path" without quoting. Paths with spaces are
-        // ambiguous here and get corrected from the ---/+++ lines.
+        // Common case: "a/path b/path" without quoting. When both sides are
+        // the same path (everything but renames/copies), a name with spaces
+        // still has exactly one split where the two sides match.
+        if remainder.hasPrefix("a/") {
+            var matches: [(old: String, new: String)] = []
+            var searchRange = remainder.startIndex..<remainder.endIndex
+            while let range = remainder.range(of: " b/", range: searchRange) {
+                let old = String(remainder[..<range.lowerBound].dropFirst(2))
+                let new = String(remainder[range.upperBound...])
+                if old == new { matches.append((old, new)) }
+                searchRange = range.upperBound..<remainder.endIndex
+            }
+            if matches.count == 1 { return matches[0] }
+        }
+        // Ambiguous (rename with spaces): fall back to the first/last split;
+        // corrected later from ---/+++ or "rename from/to" lines.
         let parts = remainder.split(separator: " ")
         guard parts.count >= 2,
               let aPart = parts.first(where: { $0.hasPrefix("a/") }),
               let bPart = parts.last(where: { $0.hasPrefix("b/") }) else { return nil }
         return (String(aPart.dropFirst(2)), String(bPart.dropFirst(2)))
+    }
+
+    /// Parses the remainder of a "Binary files X and Y differ" line into the
+    /// two paths. Either side may be "/dev/null" (create/delete) or C-quoted.
+    /// Returns nil when names containing " and " make the split ambiguous.
+    private static func parseBinaryLine(_ remainder: String) -> (old: String?, new: String?)? {
+        guard remainder.hasSuffix(" differ") else { return nil }
+        let body = String(remainder.dropLast(" differ".count))
+
+        func side(_ raw: String, prefix: String) -> String?? {
+            // .some(nil) = /dev/null, .some(path) = valid, nil = invalid split
+            if raw == "/dev/null" { return .some(nil) }
+            if raw.hasPrefix("\"") {
+                var rest = Substring(raw)
+                guard let unquoted = scanQuoted(&rest), rest.isEmpty,
+                      unquoted.hasPrefix(prefix) else { return nil }
+                return .some(String(unquoted.dropFirst(2)))
+            }
+            guard raw.hasPrefix(prefix) else { return nil }
+            return .some(String(raw.dropFirst(2)))
+        }
+
+        var results: [(String?, String?)] = []
+        var searchRange = body.startIndex..<body.endIndex
+        while let range = body.range(of: " and ", range: searchRange) {
+            let left = String(body[..<range.lowerBound])
+            let right = String(body[range.upperBound...])
+            if let old = side(left, prefix: "a/"), let new = side(right, prefix: "b/") {
+                results.append((old, new))
+            }
+            searchRange = range.upperBound..<body.endIndex
+        }
+        return results.count == 1 ? results[0] : nil
     }
 
     /// Unquotes a git C-style quoted path (`"\346\227\245..."`); returns other

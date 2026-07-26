@@ -10,6 +10,9 @@ extension RepoViewModel {
         async let logTask: () = refreshLog()
         async let refsTask: () = refreshRefs()
         _ = await (statusTask, logTask, refsTask)
+        // The working diff is part of "all": after a checkout/pull/commit the
+        // previous branch's diff would otherwise linger until FSEvents fires.
+        await loadWorkingDiffs()
 
         if selectedCommitHash == nil {
             selectedCommitHash = commits.first?.hash
@@ -26,11 +29,14 @@ extension RepoViewModel {
     }
 
     func refreshLog() async {
+        logGeneration += 1
+        let generation = logGeneration
         do {
             // Re-fetch at least as many commits as are already loaded so a
             // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
             let limit = max(Self.logPageSize, commits.count)
             let loaded = try await repository.log(limit: limit)
+            guard generation == logGeneration else { return }
             commits = loaded
             hasMoreCommits = loaded.count >= limit
             graph = CommitGraph(commits: commits)
@@ -43,8 +49,13 @@ extension RepoViewModel {
         guard hasMoreCommits, !isLoadingMoreCommits, !commits.isEmpty else { return }
         isLoadingMoreCommits = true
         defer { isLoadingMoreCommits = false }
+        logGeneration += 1
+        let generation = logGeneration
         do {
             let page = try await repository.log(limit: Self.logPageSize, skip: commits.count)
+            // A refresh that started later has replaced `commits`; appending a
+            // page computed against the old offsets would rewind or duplicate.
+            guard generation == logGeneration else { return }
             hasMoreCommits = page.count >= Self.logPageSize
             let known = Set(commits.map(\.hash))
             commits.append(contentsOf: page.filter { !known.contains($0.hash) })
@@ -85,11 +96,18 @@ extension RepoViewModel {
             commitDiffs = []
             return
         }
+        commitDetailGeneration += 1
+        let generation = commitDetailGeneration
         do {
             async let filesTask = repository.commitFileStats(hash)
             async let diffsTask = repository.diffCommit(hash)
-            commitFiles = try await filesTask
-            commitDiffs = try await diffsTask
+            let files = try await filesTask
+            let diffs = try await diffsTask
+            // A newer selection's load may already have finished — never let
+            // this slower result overwrite it.
+            guard generation == commitDetailGeneration, selectedCommitHash == hash else { return }
+            commitFiles = files
+            commitDiffs = diffs
             if let selected = selectedCommitFilePath,
                commitFiles.contains(where: { $0.path == selected }) == false {
                 selectedCommitFilePath = commitFiles.first?.path
@@ -102,17 +120,22 @@ extension RepoViewModel {
     }
 
     func loadWorkingDiffs() async {
+        workingDiffsGeneration += 1
+        let generation = workingDiffsGeneration
+        let selection = selectedChange
         do {
-            if let path = selectedChangePath {
-                let isStaged = status.staged.contains { $0.path == path }
-                let change = (status.staged + status.unstaged).first { $0.path == path }
+            var diffs: [FileDiff]
+            if let selection {
+                let side = selection.staged ? status.staged : status.unstaged
+                let change = side.first { $0.path == selection.path }
+                    ?? (status.staged + status.unstaged).first { $0.path == selection.path }
                 if change?.status == .untracked {
-                    workingDiffs = (try? await repository.diffUntracked(path: path)) ?? []
+                    diffs = (try? await repository.diffUntracked(path: selection.path)) ?? []
                 } else {
-                    workingDiffs = try await repository.diffWorking(staged: isStaged, path: path)
+                    diffs = try await repository.diffWorking(staged: selection.staged, path: selection.path)
                 }
             } else {
-                var diffs = try await repository.diffWorking(staged: false)
+                diffs = try await repository.diffWorking(staged: false)
                 let stagedDiffs = try await repository.diffWorking(staged: true)
                 for diff in stagedDiffs where !diffs.contains(where: { $0.path == diff.path }) {
                     diffs.append(diff)
@@ -124,12 +147,27 @@ extension RepoViewModel {
                           let untracked = try? await repository.diffUntracked(path: change.path) else { continue }
                     diffs.append(contentsOf: untracked)
                 }
-                workingDiffs = diffs
             }
-            // Positional line IDs stay stable while content does, so the
-            // selection survives spurious refreshes; drop IDs that vanished.
-            let validIDs = Set(workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map(\.id))
-            selectedDiffLineIDs.formIntersection(validIDs)
+            guard generation == workingDiffsGeneration, selection == selectedChange else { return }
+
+            // Line IDs are positional: after a re-parse the same ID can denote
+            // a *different physical line* (an edit earlier in the file shifts
+            // everything below). Keep a selected ID only when the line it now
+            // denotes is exactly the line it denoted before — otherwise a
+            // later "Discard/Stage lines" would hit lines the user never chose.
+            let previousLines = Dictionary(
+                workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let currentLines = Dictionary(
+                diffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            workingDiffs = diffs
+            selectedDiffLineIDs = selectedDiffLineIDs.filter { id in
+                guard let current = currentLines[id] else { return false }
+                return previousLines[id] == current
+            }
         } catch {
             report(error)
         }
@@ -137,12 +175,16 @@ extension RepoViewModel {
 
     func loadStashDiff() async {
         guard let ref = selectedStashRef,
-              let stash = stashes.first(where: { $0.reference == ref }) else {
+              let stash = stashes.first(where: { $0.id == ref }) else {
             stashDiffs = []
             return
         }
+        stashDiffGeneration += 1
+        let generation = stashDiffGeneration
         do {
-            stashDiffs = try await repository.stashDiff(stash)
+            let diffs = try await repository.stashDiff(stash)
+            guard generation == stashDiffGeneration, selectedStashRef == ref else { return }
+            stashDiffs = diffs
         } catch {
             report(error)
         }

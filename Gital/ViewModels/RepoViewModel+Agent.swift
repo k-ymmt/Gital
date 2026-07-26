@@ -85,7 +85,7 @@ extension RepoViewModel {
         }
 
         do {
-            for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root) {
+            for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root, conversationID: thread.id) {
                 switch event {
                 case .status(let text):
                     thread.statusText = text

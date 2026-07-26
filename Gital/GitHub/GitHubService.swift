@@ -207,34 +207,67 @@ struct GitHubService {
 
     private func runGH(_ arguments: [String]) async throws -> Data {
         let repoRoot = self.repoRoot
+        // gh runs directly (no `zsh -lc`): a login profile that prints to
+        // stdout would prepend garbage to gh's JSON and break every decode,
+        // and the shell indirection also made the "gh not installed" branch
+        // unreachable (zsh itself always launches).
+        guard let ghURL = ExecutableLocator.shared.find("gh") else {
+            throw GitHubError.unavailable("gh CLI not found. Install it with `brew install gh`.")
+        }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-                let quoted = arguments.map { "'\($0.replacingOccurrences(of: "'", with: "'\\''"))'" }
-                process.arguments = ["-lc", "exec gh " + quoted.joined(separator: " ")]
+                process.executableURL = ghURL
+                process.arguments = arguments
                 process.currentDirectoryURL = repoRoot
+                process.standardInput = FileHandle.nullDevice
 
                 let stdoutPipe = Pipe()
                 let stderrPipe = Pipe()
                 process.standardOutput = stdoutPipe
                 process.standardError = stderrPipe
 
+                // Drain both pipes concurrently; sequential reads deadlock
+                // when gh fills the stderr pipe buffer while stdout is open.
+                final class Buffer: @unchecked Sendable {
+                    private let lock = NSLock()
+                    private var data = Data()
+                    func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
+                    var value: Data { lock.lock(); defer { lock.unlock() }; return data }
+                }
+                let stdoutBuffer = Buffer()
+                let stderrBuffer = Buffer()
+                let drained = DispatchGroup()
+                for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
+                    drained.enter()
+                    pipe.fileHandleForReading.readabilityHandler = { handle in
+                        let chunk = handle.availableData
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                            drained.leave()
+                        } else {
+                            buffer.append(chunk)
+                        }
+                    }
+                }
+
                 do {
                     try process.run()
                 } catch {
-                    continuation.resume(throwing: GitHubError.unavailable("gh CLI not found. Install it with `brew install gh`."))
+                    for pipe in [stdoutPipe, stderrPipe] {
+                        pipe.fileHandleForReading.readabilityHandler = nil
+                    }
+                    continuation.resume(throwing: GitHubError.unavailable("Failed to launch gh: \(error.localizedDescription)"))
                     return
                 }
 
-                let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderr = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
+                drained.wait()
 
                 if process.terminationStatus == 0 {
-                    continuation.resume(returning: stdout)
+                    continuation.resume(returning: stdoutBuffer.value)
                 } else {
-                    let message = String(decoding: stderr, as: UTF8.self)
+                    let message = String(decoding: stderrBuffer.value, as: UTF8.self)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     continuation.resume(throwing: GitHubError.unavailable(
                         message.isEmpty ? "gh exited with status \(process.terminationStatus)" : message

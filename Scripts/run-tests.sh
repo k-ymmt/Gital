@@ -13,6 +13,7 @@ swiftc \
   Gital/Git/PatchBuilder.swift \
   Gital/Git/GitRepository.swift \
   Gital/Git/CommitGraph.swift \
+  Gital/Git/RepoWatcher.swift \
   Tests/main.swift \
   -o "$BUILD_DIR/gital-tests"
 

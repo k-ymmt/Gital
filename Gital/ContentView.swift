@@ -31,6 +31,7 @@ struct ContentView: View {
                     Label("Fetch", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .help("Fetch from all remotes")
+                .disabled(model.isSyncing)
 
                 Button {
                     model.pull()
@@ -39,6 +40,7 @@ struct ContentView: View {
                 }
                 .badge(model.status.behind)
                 .help("Pull (behind \(model.status.behind))")
+                .disabled(model.isSyncing)
 
                 Button {
                     model.push()
@@ -47,6 +49,7 @@ struct ContentView: View {
                 }
                 .badge(model.status.ahead)
                 .help("Push (ahead \(model.status.ahead))")
+                .disabled(model.isSyncing)
             }
 
             ToolbarItemGroup {
@@ -103,6 +106,19 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) {}
         } message: { pending in
             Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.commit.shortHash) and all working copy changes will be discarded. This cannot be undone.")
+        }
+        .alert(
+            "Drop Stash?",
+            isPresented: Binding(
+                get: { model.pendingStashDrop != nil },
+                set: { if !$0 { model.pendingStashDrop = nil } }
+            ),
+            presenting: model.pendingStashDrop
+        ) { stash in
+            Button("Drop", role: .destructive) { model.stashDrop(stash) }
+            Button("Cancel", role: .cancel) {}
+        } message: { stash in
+            Text("“\(stash.message)” will be permanently deleted. This cannot be undone.")
         }
         .alert("Git Error", isPresented: Binding(
             get: { model.errorMessage != nil },

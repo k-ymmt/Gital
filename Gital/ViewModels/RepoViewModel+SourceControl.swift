@@ -84,7 +84,7 @@ extension RepoViewModel {
     func stashApply(_ stash: Stash, pop: Bool) {
         perform(refresh: .all) {
             try await self.repository.stashApply(stash, pop: pop)
-            if pop, self.selectedStashRef == stash.reference {
+            if pop, self.selectedStashRef == stash.id {
                 self.selectedStashRef = nil
             }
         }
@@ -93,7 +93,7 @@ extension RepoViewModel {
     func stashDrop(_ stash: Stash) {
         perform(refresh: .all) {
             try await self.repository.stashDrop(stash)
-            if self.selectedStashRef == stash.reference {
+            if self.selectedStashRef == stash.id {
                 self.selectedStashRef = nil
             }
         }

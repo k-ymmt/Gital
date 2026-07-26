@@ -238,9 +238,9 @@ struct SidebarView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
-        .background(rowBackground(model.selectedChangePath == change.path))
+        .background(rowBackground(model.selectedChange == RepoViewModel.ChangeSelection(path: change.path, staged: staged)))
         .onTapGesture {
-            model.selectedChangePath = change.path
+            model.selectedChange = RepoViewModel.ChangeSelection(path: change.path, staged: staged)
             model.navTab = .changes
         }
         .contextMenu {
@@ -493,15 +493,17 @@ struct SidebarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 5)
                 .contentShape(Rectangle())
-                .background(rowBackground(model.selectedStashRef == stash.reference))
+                .background(rowBackground(model.selectedStashRef == stash.id))
                 .onTapGesture {
-                    model.selectedStashRef = stash.reference
+                    model.selectedStashRef = stash.id
                 }
                 .contextMenu {
                     Button("Apply") { model.stashApply(stash, pop: false) }
                     Button("Pop") { model.stashApply(stash, pop: true) }
                     Divider()
-                    Button("Drop", role: .destructive) { model.stashDrop(stash) }
+                    // Dropping destroys the stash permanently — confirm like
+                    // every other destructive action.
+                    Button("Drop…", role: .destructive) { model.pendingStashDrop = stash }
                 }
             }
         }

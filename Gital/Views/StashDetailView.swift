@@ -5,7 +5,7 @@ struct StashDetailView: View {
 
     var body: some View {
         if let ref = model.selectedStashRef,
-           let stash = model.stashes.first(where: { $0.reference == ref }) {
+           let stash = model.stashes.first(where: { $0.id == ref }) {
             VStack(spacing: 0) {
                 HStack(spacing: 10) {
                     Image(systemName: "archivebox")
@@ -21,7 +21,7 @@ struct StashDetailView: View {
                     Spacer()
                     Button("Apply") { model.stashApply(stash, pop: false) }
                     Button("Pop") { model.stashApply(stash, pop: true) }
-                    Button("Drop", role: .destructive) { model.stashDrop(stash) }
+                    Button("Drop…", role: .destructive) { model.pendingStashDrop = stash }
                     DiffModePicker(mode: $model.diffMode)
                 }
                 .padding(.horizontal, 14)
