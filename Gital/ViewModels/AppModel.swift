@@ -16,6 +16,10 @@ final class AppModel {
     /// must not replace the repository the user opened afterwards.
     @ObservationIgnored private var openGeneration = 0
 
+    /// Selecting the install menu item twice must not stack two
+    /// administrator-password prompts.
+    @ObservationIgnored private var isInstallingCommandLineTool = false
+
     init() {
         recentRepositories = (UserDefaults.standard.stringArray(forKey: Self.recentsKey) ?? [])
             .map { URL(fileURLWithPath: $0) }
@@ -64,7 +68,10 @@ final class AppModel {
     }
 
     func installCommandLineTool() {
+        guard !isInstallingCommandLineTool else { return }
+        isInstallingCommandLineTool = true
         Task {
+            defer { isInstallingCommandLineTool = false }
             do {
                 try await CommandLineToolInstaller.install()
                 commandLineToolMessage =

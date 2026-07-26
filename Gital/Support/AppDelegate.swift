@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURL: URL?
 
     func application(_ application: NSApplication, open urls: [URL]) {
+        // Single-repository app: with several folders selected at once, each
+        // open would immediately replace the previous, so keep only the last.
         pendingURL = urls.last
         openPendingURL()
     }
