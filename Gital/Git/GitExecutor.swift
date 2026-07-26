@@ -109,27 +109,37 @@ actor GitExecutor {
         // pipe buffer while stdout is still open.
         let stdoutBuffer = OutputBuffer()
         let stderrBuffer = OutputBuffer()
-        let drained = DispatchGroup()
+        // One group tracks stdout EOF, stderr EOF, and process exit. Exit is
+        // observed via `terminationHandler`, never `waitUntilExit`: the latter
+        // polls the current thread's run loop, and on a GCD/concurrency worker
+        // thread the termination notification can be missed entirely, hanging
+        // forever after the process has already exited — which wedges the
+        // serialized command chain and stops all loading for the repository.
+        let done = DispatchGroup()
         for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
-            drained.enter()
+            done.enter()
             pipe.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 if chunk.isEmpty {
                     handle.readabilityHandler = nil
-                    drained.leave()
+                    done.leave()
                 } else {
                     buffer.append(chunk)
                 }
             }
         }
+        done.enter()
+        process.terminationHandler = { _ in done.leave() }
 
         do {
             try process.run()
         } catch {
             for pipe in [stdoutPipe, stderrPipe] {
                 pipe.fileHandleForReading.readabilityHandler = nil
-                drained.leave()
+                done.leave()
             }
+            process.terminationHandler = nil
+            done.leave()
             throw error
         }
 
@@ -145,9 +155,7 @@ actor GitExecutor {
         }
 
         return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                process.waitUntilExit()
-                drained.wait()
+            done.notify(queue: .global(qos: .userInitiated)) {
                 if successCodes.contains(process.terminationStatus) {
                     continuation.resume(returning: stdoutBuffer.value)
                 } else {

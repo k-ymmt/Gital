@@ -59,9 +59,14 @@ nonisolated final class ExecutableLocator: @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        // `terminationHandler` instead of `waitUntilExit`: the latter polls the
+        // current thread's run loop and can miss the termination notification
+        // on a GCD/concurrency worker thread, hanging after the shell exited.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         guard (try? process.run()) != nil else { return nil }
         let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        exited.wait()
 
         let fileManager = FileManager.default
         for line in String(decoding: data, as: UTF8.self).split(separator: "\n").reversed() {

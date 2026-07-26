@@ -237,41 +237,49 @@ struct GitHubService {
                 }
                 let stdoutBuffer = Buffer()
                 let stderrBuffer = Buffer()
-                let drained = DispatchGroup()
+                // Exit is observed via `terminationHandler`, not `waitUntilExit`:
+                // the latter polls the current thread's run loop, and on a GCD
+                // worker thread the termination notification can be missed,
+                // hanging forever after gh has already exited.
+                let done = DispatchGroup()
                 for (pipe, buffer) in [(stdoutPipe, stdoutBuffer), (stderrPipe, stderrBuffer)] {
-                    drained.enter()
+                    done.enter()
                     pipe.fileHandleForReading.readabilityHandler = { handle in
                         let chunk = handle.availableData
                         if chunk.isEmpty {
                             handle.readabilityHandler = nil
-                            drained.leave()
+                            done.leave()
                         } else {
                             buffer.append(chunk)
                         }
                     }
                 }
+                done.enter()
+                process.terminationHandler = { _ in done.leave() }
 
                 do {
                     try process.run()
                 } catch {
                     for pipe in [stdoutPipe, stderrPipe] {
                         pipe.fileHandleForReading.readabilityHandler = nil
+                        done.leave()
                     }
+                    process.terminationHandler = nil
+                    done.leave()
                     continuation.resume(throwing: GitHubError.unavailable("Failed to launch gh: \(error.localizedDescription)"))
                     return
                 }
 
-                process.waitUntilExit()
-                drained.wait()
-
-                if process.terminationStatus == 0 {
-                    continuation.resume(returning: stdoutBuffer.value)
-                } else {
-                    let message = String(decoding: stderrBuffer.value, as: UTF8.self)
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
-                    continuation.resume(throwing: GitHubError.unavailable(
-                        message.isEmpty ? "gh exited with status \(process.terminationStatus)" : message
-                    ))
+                done.notify(queue: .global(qos: .userInitiated)) {
+                    if process.terminationStatus == 0 {
+                        continuation.resume(returning: stdoutBuffer.value)
+                    } else {
+                        let message = String(decoding: stderrBuffer.value, as: UTF8.self)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        continuation.resume(throwing: GitHubError.unavailable(
+                            message.isEmpty ? "gh exited with status \(process.terminationStatus)" : message
+                        ))
+                    }
                 }
             }
         }
