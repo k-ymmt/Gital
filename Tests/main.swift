@@ -337,6 +337,33 @@ let hostileLog = ["eee555", "", "Mallory", "m@x", "now", "subject with \u{1e} an
 let hostileCommits = GitRepository.parseLog(hostileLog)
 expect(hostileCommits.count == 1 && hostileCommits[0].subject == "subject with \u{1e} and \u{1f} bytes", "hostile subject bytes survive log parsing")
 
+// MARK: - Commit detail parsing
+
+let detailOutput = [
+    "aaa111bbb222ccc333ddd444eee555fff666aaa1",
+    "p1p1p1 p2p2p2",
+    "Kenji Mori", "kenji@aurora.app", "2026-07-25 10:30:00",
+    "GitHub", "noreply@github.com", "2026-07-25 11:00:00",
+    "HEAD -> main, tag: v2.0.0",
+    "Polish welcome carousel\n\nMulti-line body with details.\nSecond body line.\n",
+].joined(separator: "\u{0}")
+
+let detail = GitRepository.parseCommitDetail(detailOutput, remotes: ["origin"])
+expect(detail != nil, "commit detail parses")
+expect(detail?.hash == "aaa111bbb222ccc333ddd444eee555fff666aaa1", "detail full hash")
+expect(detail?.parents == ["p1p1p1", "p2p2p2"], "detail parents")
+expect(detail?.author == "Kenji Mori" && detail?.authorDate == "2026-07-25 10:30:00", "detail author fields")
+expect(detail?.hasDistinctCommitter == true, "detail distinct committer detected")
+expect(detail?.message == "Polish welcome carousel\n\nMulti-line body with details.\nSecond body line.", "detail multi-line message survives NUL splitting")
+expect(detail?.refs.contains { $0.kind == .head && $0.name == "main" } == true, "detail HEAD ref")
+expect(detail?.refs.contains { $0.kind == .tag && $0.name == "v2.0.0" } == true, "detail tag ref")
+
+let sameCommitterDetail = GitRepository.parseCommitDetail([
+    "abc", "", "A", "a@a", "2026-01-01 00:00:00", "A", "a@a", "2026-01-01 00:00:00", "", "msg",
+].joined(separator: "\u{0}"))
+expect(sameCommitterDetail?.hasDistinctCommitter == false, "detail same committer not flagged")
+expect(GitRepository.parseCommitDetail("") == nil, "empty detail output yields nil")
+
 // MARK: - Commit graph
 
 func makeCommit(_ hash: String, _ parents: [String]) -> Commit {

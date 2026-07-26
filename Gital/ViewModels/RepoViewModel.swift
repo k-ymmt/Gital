@@ -25,6 +25,14 @@ enum NavTab: String, CaseIterable, Identifiable {
     }
 }
 
+/// Tabs in the history detail pane: full commit metadata vs. changed files.
+enum CommitDetailTab: String, CaseIterable, Identifiable {
+    case commit = "Commit"
+    case files = "Files"
+
+    var id: String { rawValue }
+}
+
 enum DiffMode: String, CaseIterable, Identifiable {
     case unified = "Unified"
     case split = "Split"
@@ -85,6 +93,8 @@ final class RepoViewModel {
     var highlightedBranchName: String? {
         selectedBranchName ?? (selectedTagName == nil ? branches.first(where: \.isCurrent)?.name : nil)
     }
+    var commitDetailTab: CommitDetailTab = .commit
+    var commitDetail: CommitDetail?
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
     var selectedCommitFilePath: String?

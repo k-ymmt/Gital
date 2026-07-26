@@ -92,6 +92,7 @@ extension RepoViewModel {
 
     func loadCommitDetail() async {
         guard let hash = selectedCommitHash else {
+            commitDetail = nil
             commitFiles = []
             commitDiffs = []
             return
@@ -99,13 +100,16 @@ extension RepoViewModel {
         commitDetailGeneration += 1
         let generation = commitDetailGeneration
         do {
+            async let detailTask = repository.commitDetail(hash)
             async let filesTask = repository.commitFileStats(hash)
             async let diffsTask = repository.diffCommit(hash)
+            let detail = try await detailTask
             let files = try await filesTask
             let diffs = try await diffsTask
             // A newer selection's load may already have finished — never let
             // this slower result overwrite it.
             guard generation == commitDetailGeneration, selectedCommitHash == hash else { return }
+            commitDetail = detail
             commitFiles = files
             commitDiffs = diffs
             if let selected = selectedCommitFilePath,

@@ -299,11 +299,16 @@ struct CommitDetailView: View {
             if let commit = model.selectedCommit {
                 detailHeader(commit)
                 Divider()
-                HSplitView {
-                    filesList
-                        .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
-                    diffPane
-                        .frame(minWidth: 320, maxWidth: .infinity)
+                switch model.commitDetailTab {
+                case .commit:
+                    commitInfoPane(commit)
+                case .files:
+                    HSplitView {
+                        filesList
+                            .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+                        diffPane
+                            .frame(minWidth: 320, maxWidth: .infinity)
+                    }
                 }
             } else {
                 Text("Select a commit")
@@ -325,6 +330,15 @@ struct CommitDetailView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            Picker("Detail Tab", selection: $model.commitDetailTab) {
+                ForEach(CommitDetailTab.allCases) { tab in
+                    Text(tab.rawValue).tag(tab)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(width: 130)
             Text(commit.shortHash)
                 .font(.system(size: 11.5, design: .monospaced))
                 .padding(.horizontal, 8)
@@ -335,6 +349,94 @@ struct CommitDetailView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(.quaternary.opacity(0.25))
+    }
+
+    // MARK: Commit info tab
+
+    @ViewBuilder
+    private func commitInfoPane(_ commit: Commit) -> some View {
+        if let detail = model.commitDetail, detail.hash == commit.hash {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(detail.message.isEmpty ? commit.subject : detail.message)
+                        .font(.system(size: 12.5))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Divider()
+
+                    Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 8) {
+                        infoRow("SHA") {
+                            Text(detail.hash)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .textSelection(.enabled)
+                        }
+                        if !detail.parents.isEmpty {
+                            infoRow(detail.parents.count == 1 ? "Parent" : "Parents") {
+                                HStack(spacing: 8) {
+                                    ForEach(detail.parents, id: \.self) { parent in
+                                        Button(String(parent.prefix(7))) {
+                                            model.selectedCommitHash = parent
+                                        }
+                                        .buttonStyle(.plain)
+                                        .font(.system(size: 11.5, design: .monospaced))
+                                        .foregroundStyle(Color.accentColor)
+                                        .help(parent)
+                                    }
+                                }
+                            }
+                        }
+                        infoRow("Author") {
+                            Text("\(detail.author) <\(detail.authorEmail)> · \(detail.authorDate)")
+                                .font(.system(size: 12))
+                                .textSelection(.enabled)
+                        }
+                        if detail.hasDistinctCommitter {
+                            infoRow("Committer") {
+                                Text("\(detail.committer) <\(detail.committerEmail)> · \(detail.committerDate)")
+                                    .font(.system(size: 12))
+                                    .textSelection(.enabled)
+                            }
+                        }
+                        if !detail.refs.isEmpty {
+                            infoRow("Refs") {
+                                HStack(spacing: 6) {
+                                    ForEach(detail.refs) { gitRef in
+                                        RefBadge(gitRef: gitRef)
+                                    }
+                                }
+                            }
+                        }
+                        infoRow("Changes") {
+                            HStack(spacing: 8) {
+                                Text("\(model.commitFiles.count) files")
+                                    .font(.system(size: 12))
+                                DiffStatsLabel(
+                                    additions: model.commitFiles.reduce(0) { $0 + $1.additions },
+                                    deletions: model.commitFiles.reduce(0) { $0 + $1.deletions }
+                                )
+                            }
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        } else {
+            ProgressView()
+                .controlSize(.small)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func infoRow(_ label: String, @ViewBuilder content: () -> some View) -> some View {
+        GridRow {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .gridColumnAlignment(.trailing)
+            content()
+        }
     }
 
     private var filesList: some View {

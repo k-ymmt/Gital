@@ -38,6 +38,27 @@ struct Commit: Hashable, Identifiable {
     }
 }
 
+/// Full metadata for one commit, loaded on selection: absolute dates, the
+/// committer, and the whole message — none of which the log list carries.
+struct CommitDetail: Hashable {
+    let hash: String
+    let parents: [String]
+    let author: String
+    let authorEmail: String
+    let authorDate: String
+    let committer: String
+    let committerEmail: String
+    let committerDate: String
+    let refs: [GitRef]
+    let message: String
+
+    var shortHash: String { String(hash.prefix(7)) }
+
+    var hasDistinctCommitter: Bool {
+        committer != author || committerEmail != authorEmail || committerDate != authorDate
+    }
+}
+
 // MARK: - Working copy status
 
 struct FileChange: Hashable, Identifiable {

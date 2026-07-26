@@ -168,6 +168,37 @@ final class GitRepository: @unchecked Sendable {
         return refs
     }
 
+    func commitDetail(_ hash: String) async throws -> CommitDetail? {
+        async let remoteOutput = executor.run(["remote"])
+        // NUL separators as in `log`; %B goes last so the multi-line message
+        // can't split the record even though it contains newlines.
+        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%D%x00%B"
+        let output = try await executor.run([
+            "show", "-s", "--no-color",
+            "--date=format-local:%Y-%m-%d %H:%M:%S",
+            "--pretty=format:\(format)", hash,
+        ])
+        let remotes = Set(((try? await remoteOutput) ?? "").split(separator: "\n").map(String.init))
+        return Self.parseCommitDetail(output, remotes: remotes)
+    }
+
+    static func parseCommitDetail(_ output: String, remotes: Set<String> = []) -> CommitDetail? {
+        let fields = output.components(separatedBy: "\u{0}")
+        guard fields.count >= 10, !fields[0].isEmpty else { return nil }
+        return CommitDetail(
+            hash: fields[0],
+            parents: fields[1].split(separator: " ").map(String.init),
+            author: fields[2],
+            authorEmail: fields[3],
+            authorDate: fields[4],
+            committer: fields[5],
+            committerEmail: fields[6],
+            committerDate: fields[7],
+            refs: parseRefs(fields[8], remotes: remotes),
+            message: fields[9].trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
     // MARK: - Diffs
 
     func diffWorking(staged: Bool, path: String? = nil) async throws -> [FileDiff] {
