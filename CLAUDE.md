@@ -21,7 +21,7 @@ There is no XCTest target. Tests live in `Tests/main.swift` as plain assertions 
 - `Gital/Agent/` — `CodexAppServer` is a JSON-RPC client for `codex app-server` (newline-delimited JSON over stdio). Flow: `initialize` → `thread/start {cwd}` → `turn/start {threadId, input}`, streaming `item/agentMessage/delta` until `turn/completed`. `turn/start`'s `input` must be an **array** of `{type: "text", text}` items, not an object. `AgentThread` models an "Ask AI Agent" conversation anchored to diff lines.
 - `Gital/GitHub/` — `GitHubService` wraps the `gh` CLI for pull request list/detail/merge.
 - `Gital/ViewModels/` — `AppModel` (repo selection, recents), `RepoViewModel` (all screen state + actions for the open repo; views own no git state of their own).
-- `Gital/Views/` — SwiftUI views. Sidebar (Changes/Source/PRs/Stashes tabs), History (commit graph + detail + diff), Changes (interactive diff with per-line AI agent composer + commit composer), Pull Request detail, Stash detail.
+- `Gital/Views/` — SwiftUI views. Sidebar (Changes/Branches/PRs/Stashes tabs), History (commit graph + detail + diff), Changes (interactive diff with per-line AI agent composer + commit composer), Pull Request detail, Stash detail.
 
 ## Conventions
 

@@ -18,8 +18,8 @@ struct SidebarView: View {
                     switch model.navTab {
                     case .changes:
                         workingCopyContent
-                    case .source:
-                        sourceContent
+                    case .branches:
+                        branchesContent
                     case .pullRequests:
                         pullRequestContent
                     case .stashes:
@@ -252,10 +252,10 @@ struct SidebarView: View {
         }
     }
 
-    // MARK: - Source
+    // MARK: - Branches
 
     @ViewBuilder
-    private var sourceContent: some View {
+    private var branchesContent: some View {
         collapsibleHeader("Branches", key: "branches")
         if expandedSections.contains("branches") {
             ForEach(model.branches) { branch in

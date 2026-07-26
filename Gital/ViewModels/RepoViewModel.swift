@@ -2,14 +2,14 @@ import Foundation
 import Observation
 
 enum NavTab: String, CaseIterable, Identifiable {
-    case changes, source, pullRequests, stashes
+    case changes, branches, pullRequests, stashes
 
     var id: String { rawValue }
 
     var symbol: String {
         switch self {
         case .changes: "doc.text"
-        case .source: "arrow.triangle.branch"
+        case .branches: "arrow.triangle.branch"
         case .pullRequests: "arrow.triangle.pull"
         case .stashes: "archivebox"
         }
@@ -18,7 +18,7 @@ enum NavTab: String, CaseIterable, Identifiable {
     var help: String {
         switch self {
         case .changes: "Working Copy"
-        case .source: "Source"
+        case .branches: "Branches"
         case .pullRequests: "Pull Requests"
         case .stashes: "Stashes"
         }
@@ -44,7 +44,7 @@ final class RepoViewModel {
 
     // MARK: Navigation
 
-    var navTab: NavTab = .source
+    var navTab: NavTab = .branches
     var diffMode: DiffMode = .unified
     var searchText = ""
 

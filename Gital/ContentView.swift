@@ -194,7 +194,7 @@ struct MainView: View {
         switch model.navTab {
         case .changes:
             ChangesView(model: model)
-        case .source:
+        case .branches:
             HistoryView(model: model)
         case .pullRequests:
             PullRequestView(model: model)
