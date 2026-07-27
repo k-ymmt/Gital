@@ -193,6 +193,13 @@ struct GitHubService {
         )
     }
 
+    /// Unified diff of the whole pull request, straight from GitHub — works
+    /// even when the PR branch has not been fetched locally.
+    func pullRequestDiff(number: Int) async throws -> String {
+        let data = try await runGH(["pr", "diff", String(number)])
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func merge(number: Int) async throws {
         _ = try await runGH(["pr", "merge", String(number), "--merge"])
     }

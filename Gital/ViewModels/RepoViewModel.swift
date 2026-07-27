@@ -142,14 +142,40 @@ final class RepoViewModel {
 
     // MARK: Pull requests
 
+    /// A selected row inside a PR's sidebar expansion: one of its commits or
+    /// one of its changed files.
+    enum PRItemSelection: Equatable, Hashable {
+        case commit(hash: String)
+        case file(path: String)
+    }
+
     var pullRequests: [PullRequestSummary] = []
     var prLoadError: String?
     var selectedPRNumber: Int? {
-        didSet { if oldValue != selectedPRNumber { Task { await loadPRDetail() } } }
+        didSet {
+            if oldValue != selectedPRNumber {
+                selectedPRItem = nil
+                Task { await loadPRDetail() }
+            }
+        }
     }
     var prDetail: PullRequestDetail?
     var prDetailsCache: [Int: PullRequestDetail] = [:]
     var expandedPRs: Set<Int> = []
+    var selectedPRItem: PRItemSelection? {
+        didSet { if oldValue != selectedPRItem { Task { await loadPRItemDiffs() } } }
+    }
+    var prItemDiffs: [FileDiff] = []
+    var prItemLoadError: String?
+    /// Parsed `gh pr diff` output per PR, so switching between files of the
+    /// same PR doesn't re-run gh each time.
+    var prDiffsCache: [Int: [FileDiff]] = [:]
+
+    /// Selects a commit/file row of a PR, switching the shown PR if needed.
+    func selectPRItem(_ item: PRItemSelection, in number: Int) {
+        selectedPRNumber = number
+        selectedPRItem = item
+    }
 
     // MARK: Agent
 
@@ -181,6 +207,7 @@ final class RepoViewModel {
     @ObservationIgnored var commitDetailGeneration = 0
     @ObservationIgnored var logGeneration = 0
     @ObservationIgnored var stashDiffGeneration = 0
+    @ObservationIgnored var prItemGeneration = 0
     @ObservationIgnored private var syncCount = 0
     @ObservationIgnored var pendingDiscardSnapshot: [FileDiff]?
 

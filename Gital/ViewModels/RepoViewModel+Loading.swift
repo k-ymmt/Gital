@@ -215,6 +215,52 @@ extension RepoViewModel {
         }
     }
 
+    func loadPRItemDiffs() async {
+        prItemGeneration += 1
+        let generation = prItemGeneration
+        guard let item = selectedPRItem, let number = selectedPRNumber else {
+            prItemDiffs = []
+            prItemLoadError = nil
+            return
+        }
+        prItemDiffs = []
+        prItemLoadError = nil
+        do {
+            let diffs: [FileDiff]
+            switch item {
+            case .commit(let hash):
+                // PR commits live in the local object store once the remote
+                // branch has been fetched; the error path below covers the
+                // not-yet-fetched case.
+                diffs = try await repository.diffCommit(hash)
+            case .file(let path):
+                let all: [FileDiff]
+                if let cached = prDiffsCache[number] {
+                    all = cached
+                } else {
+                    let raw = try await github.pullRequestDiff(number: number)
+                    all = DiffParser.parse(raw, scope: .snapshot)
+                    guard generation == prItemGeneration else { return }
+                    prDiffsCache[number] = all
+                }
+                diffs = all.filter { $0.path == path }
+            }
+            guard generation == prItemGeneration, selectedPRItem == item else { return }
+            prItemDiffs = diffs
+            if diffs.isEmpty {
+                prItemLoadError = "No changes found for this item."
+            }
+        } catch {
+            guard generation == prItemGeneration, selectedPRItem == item else { return }
+            switch item {
+            case .commit:
+                prItemLoadError = "Could not load this commit locally — try Fetch first.\n\(error.localizedDescription)"
+            case .file:
+                prItemLoadError = error.localizedDescription
+            }
+        }
+    }
+
     func expandPR(_ number: Int) async {
         if expandedPRs.contains(number) {
             expandedPRs.remove(number)

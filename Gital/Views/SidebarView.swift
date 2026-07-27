@@ -478,9 +478,10 @@ struct SidebarView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
-            .background(rowBackground(model.selectedPRNumber == pr.number))
+            .background(rowBackground(model.selectedPRNumber == pr.number && model.selectedPRItem == nil))
             .onTapGesture {
                 model.selectedPRNumber = pr.number
+                model.selectedPRItem = nil
             }
 
             if model.expandedPRs.contains(pr.number), let detail = model.prDetailsCache[pr.number] {
@@ -510,6 +511,11 @@ struct SidebarView: View {
                 .padding(.leading, 34)
                 .padding(.trailing, 16)
                 .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .background(rowBackground(isPRItemSelected(.commit(hash: commit.hash), in: detail.number)))
+                .onTapGesture {
+                    model.selectPRItem(.commit(hash: commit.hash), in: detail.number)
+                }
             }
         }
 
@@ -527,8 +533,17 @@ struct SidebarView: View {
                 .padding(.leading, 34)
                 .padding(.trailing, 16)
                 .padding(.vertical, 3)
+                .contentShape(Rectangle())
+                .background(rowBackground(isPRItemSelected(.file(path: file.path), in: detail.number)))
+                .onTapGesture {
+                    model.selectPRItem(.file(path: file.path), in: detail.number)
+                }
             }
         }
+    }
+
+    private func isPRItemSelected(_ item: RepoViewModel.PRItemSelection, in number: Int) -> Bool {
+        model.selectedPRNumber == number && model.selectedPRItem == item
     }
 
     private func prSectionHeader(_ title: String, key: String, topPadding: CGFloat) -> some View {

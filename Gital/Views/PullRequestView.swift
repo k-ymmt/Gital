@@ -4,7 +4,9 @@ struct PullRequestView: View {
     @Bindable var model: RepoViewModel
 
     var body: some View {
-        if let detail = model.prDetail {
+        if let item = model.selectedPRItem {
+            PullRequestItemDiffView(model: model, item: item)
+        } else if let detail = model.prDetail {
             PullRequestDetailView(model: model, detail: detail)
         } else if model.selectedPRNumber != nil {
             ProgressView("Loading pull request…")
@@ -21,6 +23,96 @@ struct PullRequestView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+}
+
+/// Diff pane for a commit or changed file selected in a PR's sidebar rows.
+struct PullRequestItemDiffView: View {
+    @Bindable var model: RepoViewModel
+    let item: RepoViewModel.PRItemSelection
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    model.selectedPRItem = nil
+                } label: {
+                    Label("Overview", systemImage: "chevron.left")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Back to pull request overview")
+
+                Divider().frame(height: 16)
+
+                itemTitle
+                Spacer()
+                DiffModePicker(mode: $model.diffMode)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.quaternary.opacity(0.25))
+            Divider()
+
+            if let error = model.prItemLoadError {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.system(size: 30))
+                        .foregroundStyle(.secondary)
+                    Text(error)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 460)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.prItemDiffs.isEmpty {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                        ForEach(model.prItemDiffs) { diff in
+                            Section {
+                                FileDiffContentView(diff: diff, mode: model.diffMode)
+                            } header: {
+                                FileSectionHeader(diff: diff)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var itemTitle: some View {
+        switch item {
+        case .commit(let hash):
+            Image(systemName: "circle")
+                .font(.system(size: 8))
+                .foregroundStyle(.secondary)
+            Text(commitMessage(for: hash) ?? "Commit")
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(1)
+            Text(hash)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.secondary)
+        case .file(let path):
+            Image(systemName: "doc.text")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+            Text(path)
+                .font(.system(size: 12.5, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private func commitMessage(for hash: String) -> String? {
+        guard let number = model.selectedPRNumber else { return nil }
+        return model.prDetailsCache[number]?.commits.first { $0.hash == hash }?.message
     }
 }
 
@@ -239,6 +331,11 @@ struct PullRequestDetailView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.selectPRItem(.commit(hash: commit.hash), in: detail.number)
+                }
+                .help("Click to show this commit's diff")
                 if commit.id != detail.commits.last?.id {
                     Divider()
                 }
@@ -314,6 +411,7 @@ struct PullRequestDetailView: View {
                 // Reload the detail directly — flipping selectedPRNumber
                 // nil→back spawned two loads that both hit gh.
                 model.prDetailsCache[detail.number] = nil
+                model.prDiffsCache[detail.number] = nil
                 await model.loadPRDetail()
                 await model.refreshPullRequests()
             } catch {
