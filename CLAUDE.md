@@ -17,12 +17,7 @@ There is no XCTest target. Tests live in `Tests/main.swift` as plain assertions 
 
 ## Release (Homebrew cask)
 
-Distributed via the `k-ymmt/homebrew-tap` tap (`brew install --cask k-ymmt/tap/gital`). The `/release` skill (`.claude/skills/release/SKILL.md`) automates the whole flow:
-
-1. Bump `MARKETING_VERSION` in the project if needed.
-2. `Scripts/release.sh` — archives, signs with Developer ID (team `8HUWJ2ZRK2`, Hardened Runtime on), notarizes via the `gital-notary` notarytool keychain profile, staples, zips, and prints the sha256. `SKIP_NOTARIZE=1` skips notarization for local testing.
-3. `gh release create v<version> build/release/Gital-<version>.zip` on the `k-ymmt/Gital` repo.
-4. Update `version`/`sha256` in `Casks/gital.rb` in the tap repo and push.
+Distributed via the `k-ymmt/homebrew-tap` tap (`brew install --cask k-ymmt/tap/gital`). The `/release` skill automates the whole flow (bump → build/notarize via `Scripts/release.sh` → GitHub release on `k-ymmt/Gital` → cask update in the tap). Signing uses team `8HUWJ2ZRK2` and the `gital-notary` notarytool keychain profile; `SKIP_NOTARIZE=1 Scripts/release.sh` builds without notarizing for local testing.
 
 ## Architecture
 
