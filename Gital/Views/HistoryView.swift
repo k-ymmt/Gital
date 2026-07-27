@@ -116,7 +116,7 @@ struct HistoryView: View {
     // width and silently clip them, so extreme histories get denser, not cut.
     private var laneSpacing: CGFloat {
         let lanes = CGFloat(max(model.graph.maxLanes, 1))
-        let available = Self.maxGraphWidth - 23
+        let available = Self.maxGraphWidth - 24
         return min(Self.naturalLaneSpacing, available / lanes)
     }
 
