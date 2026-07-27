@@ -438,8 +438,7 @@ struct SidebarView: View {
     @ViewBuilder
     private var pullRequestContent: some View {
         let filtered = model.filteredPullRequests
-        let isFiltering = model.prStateFilter != .all
-            || !model.prSearchText.trimmingCharacters(in: .whitespaces).isEmpty
+        let isFiltering = model.isPRFilterActive
 
         sectionHeader(isFiltering
             ? "Pull Requests \(filtered.count)/\(model.pullRequests.count)"
@@ -480,9 +479,9 @@ struct SidebarView: View {
                 .padding(.vertical, 4)
         }
 
-        if filtered.isEmpty, !model.pullRequests.isEmpty {
-            Text("No matching pull requests")
-                .font(.system(size: 11))
+        if filtered.isEmpty, model.prLoadError == nil {
+            Text(isFiltering ? "No matching pull requests" : "No pull requests")
+                .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 4)

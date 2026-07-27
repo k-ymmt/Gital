@@ -180,17 +180,22 @@ final class RepoViewModel {
     var prSearchText = ""
     var prStateFilter: PRStateFilter = .all
 
+    var isPRFilterActive: Bool {
+        prStateFilter != .all || !prSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var filteredPullRequests: [PullRequestSummary] {
-        let query = prSearchText.trimmingCharacters(in: .whitespaces)
+        let query = prSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Fold full-width digits (Japanese IME) so "１２３" parses as a number.
+        let folded = query.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? query
+        let numberQuery = Int(folded.hasPrefix("#") ? String(folded.dropFirst()) : folded)
         return pullRequests.filter { pr in
             guard prStateFilter.matches(pr) else { return false }
             guard !query.isEmpty else { return true }
-            if let number = Int(query.hasPrefix("#") ? String(query.dropFirst()) : query) {
-                return pr.number == number
-            }
-            return pr.title.localizedCaseInsensitiveContains(query)
-                || pr.author.localizedCaseInsensitiveContains(query)
-                || pr.headRefName.localizedCaseInsensitiveContains(query)
+            if let numberQuery, pr.number == numberQuery { return true }
+            return pr.title.localizedStandardContains(query)
+                || pr.author.localizedStandardContains(query)
+                || pr.headRefName.localizedStandardContains(query)
         }
     }
     var selectedPRNumber: Int? {
