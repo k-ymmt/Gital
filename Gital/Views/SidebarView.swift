@@ -277,28 +277,45 @@ struct SidebarView: View {
         collapsibleHeader("Remotes", key: "remotes")
         if expandedSections.contains("remotes") {
             ForEach(model.remotes) { remote in
-                HStack(spacing: 9) {
-                    Image(systemName: "globe")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text(remote.name)
-                        .font(.system(size: 12.5))
-                    Spacer()
+                let remoteKey = "remote:\(remote.name)"
+                Button {
+                    if collapsedBranchFolders.contains(remoteKey) {
+                        collapsedBranchFolders.remove(remoteKey)
+                    } else {
+                        collapsedBranchFolders.insert(remoteKey)
+                    }
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .bold))
+                            .rotationEffect(.degrees(collapsedBranchFolders.contains(remoteKey) ? 0 : 90))
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "globe")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text(remote.name)
+                            .font(.system(size: 12.5))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 5)
+                .buttonStyle(.plain)
 
-                let rows = BranchTree.rows(
-                    remote.branches.map { ($0, $0) },
-                    keyPrefix: "remote:\(remote.name)",
-                    collapsed: collapsedBranchFolders
-                )
-                ForEach(rows) { row in
-                    switch row {
-                    case .folder(let path, let name, let depth):
-                        branchFolderRow(path: path, name: name, depth: depth, baseIndent: 37)
-                    case .leaf(let branch, let name, _, let depth):
-                        remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
+                if !collapsedBranchFolders.contains(remoteKey) {
+                    let rows = BranchTree.rows(
+                        remote.branches.map { ($0, $0) },
+                        keyPrefix: remoteKey,
+                        collapsed: collapsedBranchFolders
+                    )
+                    ForEach(rows) { row in
+                        switch row {
+                        case .folder(let path, let name, let depth):
+                            branchFolderRow(path: path, name: name, depth: depth, baseIndent: 37)
+                        case .leaf(let branch, let name, _, let depth):
+                            remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
+                        }
                     }
                 }
             }
