@@ -48,6 +48,7 @@ struct HistoryView: View {
                                 commit: commit,
                                 row: model.graph.rows[commit.hash],
                                 graphWidth: graphWidth,
+                                laneSpacing: laneSpacing,
                                 isSelected: model.selectedCommitHash == commit.hash
                             )
                             .contentShape(Rectangle())
@@ -106,8 +107,21 @@ struct HistoryView: View {
         }
     }
 
+    // The graph column must stay bounded: its width feeds the header's
+    // leading padding, which is incompressible and would otherwise push the
+    // whole split view wider than the window on lane-heavy histories.
+    private static let maxGraphWidth: CGFloat = 240
+    private static let naturalLaneSpacing: CGFloat = 15
+    private static let minLaneSpacing: CGFloat = 4
+
+    private var laneSpacing: CGFloat {
+        let lanes = CGFloat(max(model.graph.maxLanes, 1))
+        let available = Self.maxGraphWidth - 23
+        return max(Self.minLaneSpacing, min(Self.naturalLaneSpacing, available / lanes))
+    }
+
     private var graphWidth: CGFloat {
-        15 + CGFloat(model.graph.maxLanes) * 15 + 8
+        min(Self.maxGraphWidth, 23 + laneSpacing * CGFloat(model.graph.maxLanes))
     }
 
     private var columnHeader: some View {
@@ -180,11 +194,12 @@ struct CommitRowView: View {
     let commit: Commit
     let row: CommitGraph.Row?
     let graphWidth: CGFloat
+    let laneSpacing: CGFloat
     let isSelected: Bool
 
     var body: some View {
         HStack(spacing: 0) {
-            GraphRowCanvas(row: row)
+            GraphRowCanvas(row: row, laneSpacing: laneSpacing)
                 .frame(width: graphWidth, height: 32)
 
             HStack(spacing: 6) {
@@ -221,19 +236,22 @@ struct CommitRowView: View {
 /// Draws one row of the commit graph: lanes, curves, and the commit dot.
 struct GraphRowCanvas: View {
     let row: CommitGraph.Row?
+    var laneSpacing: CGFloat = 15
 
     var body: some View {
         Canvas { context, size in
             guard let row else { return }
-            let laneX: (Int) -> CGFloat = { 10 + CGFloat($0) * 15 }
+            let laneX: (Int) -> CGFloat = { 10 + CGFloat($0) * laneSpacing }
             let height = size.height
             let centerY = height / 2
+            let lineWidth = min(1.8, laneSpacing * 0.3)
+            let dotRadius = min(4.5, laneSpacing * 0.45)
 
             func stroke(_ path: Path, _ colorIndex: Int) {
                 context.stroke(
                     path,
                     with: .color(DesignStyle.laneColor(colorIndex)),
-                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+                    style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                 )
             }
 
@@ -275,7 +293,10 @@ struct GraphRowCanvas: View {
                 }
             }
 
-            let dotRect = CGRect(x: dotX - 4.5, y: centerY - 4.5, width: 9, height: 9)
+            let dotRect = CGRect(
+                x: dotX - dotRadius, y: centerY - dotRadius,
+                width: dotRadius * 2, height: dotRadius * 2
+            )
             context.fill(Path(ellipseIn: dotRect), with: .color(DesignStyle.laneColor(row.dotColorIndex)))
             context.stroke(
                 Path(ellipseIn: dotRect),
