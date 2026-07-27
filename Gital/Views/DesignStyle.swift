@@ -107,6 +107,21 @@ struct RefBadge: View {
     }
 }
 
+/// "+N" badge shown when a commit row has more refs than it displays.
+struct RefOverflowBadge: View {
+    let count: Int
+
+    var body: some View {
+        Text("+\(count)")
+            .font(.system(size: 11, weight: .semibold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 1.5)
+            .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
 struct AvatarView: View {
     let name: String
     var size: CGFloat = 30

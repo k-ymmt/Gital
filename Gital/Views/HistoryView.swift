@@ -112,12 +112,13 @@ struct HistoryView: View {
     // whole split view wider than the window on lane-heavy histories.
     private static let maxGraphWidth: CGFloat = 240
     private static let naturalLaneSpacing: CGFloat = 15
-    private static let minLaneSpacing: CGFloat = 4
 
+    // No lower bound on the spacing: a floor would push lanes past the capped
+    // width and silently clip them, so extreme histories get denser, not cut.
     private var laneSpacing: CGFloat {
         let lanes = CGFloat(max(model.graph.maxLanes, 1))
         let available = Self.maxGraphWidth - 23
-        return max(Self.minLaneSpacing, min(Self.naturalLaneSpacing, available / lanes))
+        return min(Self.naturalLaneSpacing, available / lanes)
     }
 
     private var graphWidth: CGFloat {
@@ -197,14 +198,23 @@ struct CommitRowView: View {
     let laneSpacing: CGFloat
     let isSelected: Bool
 
+    private static let maxVisibleRefs = 3
+
     var body: some View {
         HStack(spacing: 0) {
             GraphRowCanvas(row: row, laneSpacing: laneSpacing)
                 .frame(width: graphWidth, height: 32)
 
             HStack(spacing: 6) {
-                ForEach(commit.refs) { gitRef in
+                // Badge padding is incompressible, so an unbounded run of refs
+                // (e.g. dozens of tags on HEAD) would force the row — and the
+                // whole split view — wider than the window. Cap and summarize.
+                ForEach(commit.refs.prefix(Self.maxVisibleRefs)) { gitRef in
                     RefBadge(gitRef: gitRef)
+                }
+                if commit.refs.count > Self.maxVisibleRefs {
+                    RefOverflowBadge(count: commit.refs.count - Self.maxVisibleRefs)
+                        .help(commit.refs.dropFirst(Self.maxVisibleRefs).map(\.name).joined(separator: ", "))
                 }
                 Text(commit.subject)
                     .font(.system(size: 12.5))
@@ -246,6 +256,7 @@ struct GraphRowCanvas: View {
             let centerY = height / 2
             let lineWidth = min(1.8, laneSpacing * 0.3)
             let dotRadius = min(4.5, laneSpacing * 0.45)
+            let dotOutlineWidth = min(1.5, laneSpacing * 0.25)
 
             func stroke(_ path: Path, _ colorIndex: Int) {
                 context.stroke(
@@ -301,7 +312,7 @@ struct GraphRowCanvas: View {
             context.stroke(
                 Path(ellipseIn: dotRect),
                 with: .color(Color(nsColor: .windowBackgroundColor)),
-                lineWidth: 1.5
+                lineWidth: dotOutlineWidth
             )
         }
         .clipped()
@@ -413,9 +424,12 @@ struct CommitDetailView: View {
                         }
                         if !detail.refs.isEmpty {
                             infoRow("Refs") {
-                                HStack(spacing: 6) {
-                                    ForEach(detail.refs) { gitRef in
-                                        RefBadge(gitRef: gitRef)
+                                // Scrolls so a large ref pileup can't widen the pane.
+                                ScrollView(.horizontal, showsIndicators: false) {
+                                    HStack(spacing: 6) {
+                                        ForEach(detail.refs) { gitRef in
+                                            RefBadge(gitRef: gitRef)
+                                        }
                                     }
                                 }
                             }
