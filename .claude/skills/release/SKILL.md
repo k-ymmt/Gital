@@ -14,7 +14,7 @@ allowed-tools: |
   Bash(gh release create *)
   Bash(gh repo clone *)
   Bash(brew fetch *)
-  Bash(security find-generic-password *)
+  Bash(xcrun notarytool history *)
 ---
 
 # Gital release
@@ -26,7 +26,7 @@ The new version is `$version` (e.g. `/release 1.1`). If it is empty, ask the use
 ## Preconditions (verify before starting)
 
 - Working tree is clean (`git status`). If not, stop and ask.
-- notarytool keychain profile `gital-notary` exists. Quick check: `security find-generic-password -s "com.apple.gke.notary.tool"` succeeds. If missing, ask the user to run: `! xcrun notarytool store-credentials gital-notary --apple-id <apple-id> --team-id 8HUWJ2ZRK2`
+- notarytool keychain profile `gital-notary` exists. Check with `xcrun notarytool history --keychain-profile gital-notary` (succeeds if the profile works). Do NOT use `security find-generic-password` — on this machine the credentials live in a keychain that command cannot see, so it false-negatives. If the notarytool check fails, ask the user to run: `! xcrun notarytool store-credentials gital-notary --apple-id <apple-id> --team-id 8HUWJ2ZRK2`
 
 ## Steps
 
