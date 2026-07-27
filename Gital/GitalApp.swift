@@ -24,6 +24,10 @@ struct GitalApp: App {
                 .onAppear { appDelegate.appModel = appModel }
         }
         .defaultSize(width: 1280, height: 800)
+        // Open-document events are handled by AppDelegate against the shared
+        // AppModel; without this, WindowGroup would also spawn a new window
+        // for the same event, duplicating the repository window.
+        .handlesExternalEvents(matching: [])
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Open Repository…") {
