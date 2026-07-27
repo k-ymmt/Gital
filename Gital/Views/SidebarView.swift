@@ -437,7 +437,40 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var pullRequestContent: some View {
-        sectionHeader("Pull Requests \(model.pullRequests.count)")
+        let filtered = model.filteredPullRequests
+        let isFiltering = model.prStateFilter != .all
+            || !model.prSearchText.trimmingCharacters(in: .whitespaces).isEmpty
+
+        sectionHeader(isFiltering
+            ? "Pull Requests \(filtered.count)/\(model.pullRequests.count)"
+            : "Pull Requests \(model.pullRequests.count)"
+        ) {
+            AnyView(
+                Menu {
+                    Picker("State", selection: $model.prStateFilter) {
+                        ForEach(RepoViewModel.PRStateFilter.allCases) { filter in
+                            Text(filter.label).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "line.3.horizontal.decrease.circle")
+                            .font(.system(size: 11))
+                        Text(model.prStateFilter.label)
+                            .font(.system(size: 10.5))
+                    }
+                    .foregroundStyle(model.prStateFilter == .all ? Color.secondary : Color.accentColor)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Filter by state")
+            )
+        }
+
+        prSearchField
 
         if let error = model.prLoadError, model.pullRequests.isEmpty {
             Text(error)
@@ -447,7 +480,15 @@ struct SidebarView: View {
                 .padding(.vertical, 4)
         }
 
-        ForEach(model.pullRequests) { pr in
+        if filtered.isEmpty, !model.pullRequests.isEmpty {
+            Text("No matching pull requests")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 4)
+        }
+
+        ForEach(filtered) { pr in
             HStack(alignment: .top, spacing: 7) {
                 Button {
                     Task { await model.expandPR(pr.number) }
@@ -488,6 +529,33 @@ struct SidebarView: View {
                 prExpansion(detail)
             }
         }
+    }
+
+    private var prSearchField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            TextField("Filter pull requests", text: $model.prSearchText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+            if !model.prSearchText.isEmpty {
+                Button {
+                    model.prSearchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear filter")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
     }
 
     @ViewBuilder

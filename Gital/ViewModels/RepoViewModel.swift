@@ -149,8 +149,50 @@ final class RepoViewModel {
         case file(path: String)
     }
 
+    enum PRStateFilter: String, CaseIterable, Identifiable {
+        case all, open, draft, merged, closed
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .all: "All"
+            case .open: "Open"
+            case .draft: "Draft"
+            case .merged: "Merged"
+            case .closed: "Closed"
+            }
+        }
+
+        func matches(_ pr: PullRequestSummary) -> Bool {
+            switch self {
+            case .all: true
+            case .open: pr.state == "OPEN" && !pr.isDraft
+            case .draft: pr.state == "OPEN" && pr.isDraft
+            case .merged: pr.state == "MERGED"
+            case .closed: pr.state == "CLOSED"
+            }
+        }
+    }
+
     var pullRequests: [PullRequestSummary] = []
     var prLoadError: String?
+    var prSearchText = ""
+    var prStateFilter: PRStateFilter = .all
+
+    var filteredPullRequests: [PullRequestSummary] {
+        let query = prSearchText.trimmingCharacters(in: .whitespaces)
+        return pullRequests.filter { pr in
+            guard prStateFilter.matches(pr) else { return false }
+            guard !query.isEmpty else { return true }
+            if let number = Int(query.hasPrefix("#") ? String(query.dropFirst()) : query) {
+                return pr.number == number
+            }
+            return pr.title.localizedCaseInsensitiveContains(query)
+                || pr.author.localizedCaseInsensitiveContains(query)
+                || pr.headRefName.localizedCaseInsensitiveContains(query)
+        }
+    }
     var selectedPRNumber: Int? {
         didSet {
             if oldValue != selectedPRNumber {
