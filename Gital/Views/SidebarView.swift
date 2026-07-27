@@ -6,6 +6,7 @@ struct SidebarView: View {
 
     @State private var expandedSections: Set<String> = ["branches", "remotes", "tags", "stashes"]
     @State private var collapsedBranchFolders: Set<String> = []
+    @State private var collapsedPRSections: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -490,54 +491,73 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func prExpansion(_ detail: PullRequestDetail) -> some View {
-        Text("Commits \(detail.commits.count)")
-            .font(.system(size: 10, weight: .bold))
-            .kerning(0.5)
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 34)
-            .padding(.top, 6)
-            .padding(.bottom, 3)
+        let commitsKey = "pr:\(detail.number):commits"
+        prSectionHeader("Commits \(detail.commits.count)", key: commitsKey, topPadding: 6)
+        if !collapsedPRSections.contains(commitsKey) {
+            ForEach(detail.commits) { commit in
+                HStack(spacing: 7) {
+                    Image(systemName: "circle")
+                        .font(.system(size: 6))
+                        .foregroundStyle(.secondary)
+                    Text(commit.message)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                    Spacer()
+                    Text(commit.hash)
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, 34)
+                .padding(.trailing, 16)
+                .padding(.vertical, 3)
+            }
+        }
 
-        ForEach(detail.commits) { commit in
-            HStack(spacing: 7) {
-                Image(systemName: "circle")
-                    .font(.system(size: 6))
+        let filesKey = "pr:\(detail.number):files"
+        prSectionHeader("Files Changed \(detail.files.count)", key: filesKey, topPadding: 8)
+        if !collapsedPRSections.contains(filesKey) {
+            ForEach(detail.files) { file in
+                HStack(spacing: 7) {
+                    StatusBadge(status: file.deletions > 0 && file.additions == 0 ? .deleted : .modified)
+                    Text((file.path as NSString).lastPathComponent)
+                        .font(.system(size: 12))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.leading, 34)
+                .padding(.trailing, 16)
+                .padding(.vertical, 3)
+            }
+        }
+    }
+
+    private func prSectionHeader(_ title: String, key: String, topPadding: CGFloat) -> some View {
+        Button {
+            if collapsedPRSections.contains(key) {
+                collapsedPRSections.remove(key)
+            } else {
+                collapsedPRSections.insert(key)
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 7, weight: .bold))
+                    .rotationEffect(.degrees(collapsedPRSections.contains(key) ? 0 : 90))
                     .foregroundStyle(.secondary)
-                Text(commit.message)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
+                Text(title)
+                    .font(.system(size: 10, weight: .bold))
+                    .kerning(0.5)
+                    .textCase(.uppercase)
+                    .foregroundStyle(.secondary)
                 Spacer()
-                Text(commit.hash)
-                    .font(.system(size: 10.5, design: .monospaced))
-                    .foregroundStyle(.secondary)
             }
             .padding(.leading, 34)
             .padding(.trailing, 16)
-            .padding(.vertical, 3)
-        }
-
-        Text("Files Changed \(detail.files.count)")
-            .font(.system(size: 10, weight: .bold))
-            .kerning(0.5)
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
-            .padding(.leading, 34)
-            .padding(.top, 8)
+            .padding(.top, topPadding)
             .padding(.bottom, 3)
-
-        ForEach(detail.files) { file in
-            HStack(spacing: 7) {
-                StatusBadge(status: file.deletions > 0 && file.additions == 0 ? .deleted : .modified)
-                Text((file.path as NSString).lastPathComponent)
-                    .font(.system(size: 12))
-                    .lineLimit(1)
-                Spacer()
-            }
-            .padding(.leading, 34)
-            .padding(.trailing, 16)
-            .padding(.vertical, 3)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
     }
 
     private func prColor(_ pr: PullRequestSummary) -> Color {
