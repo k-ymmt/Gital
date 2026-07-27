@@ -365,6 +365,14 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["fetch", "--all", "--prune", "--tags"])
     }
 
+    /// Fetches a GitHub pull request's commits into the object store via the
+    /// `refs/pull/<n>/head` ref, without creating a local branch. This is the
+    /// only way to reach commits of PRs from forks (their remote is never
+    /// configured locally); the ref namespace is GitHub-specific.
+    func fetchPullRequestHead(number: Int) async throws {
+        try await executor.run(["fetch", "origin", "refs/pull/\(number)/head"])
+    }
+
     func pull() async throws {
         try await executor.run(["pull", "--ff-only"])
     }

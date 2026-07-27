@@ -230,9 +230,16 @@ extension RepoViewModel {
             switch item {
             case .commit(let hash):
                 // PR commits live in the local object store once the remote
-                // branch has been fetched; the error path below covers the
-                // not-yet-fetched case.
-                diffs = try await repository.diffCommit(hash)
+                // branch has been fetched. When the object is missing (fork
+                // PRs, never-fetched branches), pull it in via the PR head
+                // ref and retry once.
+                do {
+                    diffs = try await repository.diffCommit(hash)
+                } catch {
+                    try await repository.fetchPullRequestHead(number: number)
+                    guard generation == prItemGeneration else { return }
+                    diffs = try await repository.diffCommit(hash)
+                }
             case .file(let path):
                 let all: [FileDiff]
                 if let cached = prDiffsCache[number] {
@@ -254,7 +261,7 @@ extension RepoViewModel {
             guard generation == prItemGeneration, selectedPRItem == item else { return }
             switch item {
             case .commit:
-                prItemLoadError = "Could not load this commit locally — try Fetch first.\n\(error.localizedDescription)"
+                prItemLoadError = "Could not load this commit, even after fetching the pull request from origin.\n\(error.localizedDescription)"
             case .file:
                 prItemLoadError = error.localizedDescription
             }
