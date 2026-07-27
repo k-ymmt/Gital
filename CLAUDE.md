@@ -15,6 +15,15 @@ xcodebuild -project Gital.xcodeproj -scheme Gital -configuration Debug build
 
 There is no XCTest target. Tests live in `Tests/main.swift` as plain assertions (`expect(...)`); `Scripts/run-tests.sh` compiles them with `swiftc` together with the `Gital/Git/` layer. To test a new Git-layer file, add it to the `swiftc` file list in that script. There is no way to run a single test — the whole suite runs in seconds.
 
+## Release (Homebrew cask)
+
+Distributed via the `k-ymmt/homebrew-tap` tap (`brew install --cask k-ymmt/tap/gital`). Flow:
+
+1. Bump `MARKETING_VERSION` in the project if needed.
+2. `Scripts/release.sh` — archives, signs with Developer ID (team `8HUWJ2ZRK2`, Hardened Runtime on), notarizes via the `gital-notary` notarytool keychain profile, staples, zips, and prints the sha256. `SKIP_NOTARIZE=1` skips notarization for local testing.
+3. `gh release create v<version> build/release/Gital-<version>.zip` on the `k-ymmt/Gital` repo.
+4. Update `version`/`sha256` in `Casks/gital.rb` in the tap repo and push.
+
 ## Architecture
 
 - `Gital/Git/` — git CLI layer. `GitExecutor` (actor) runs `git` as a subprocess with `--no-optional-locks` and color disabled; `GitRepository` exposes typed operations (status, log, diff, stage, commit, fetch/pull/push, branches, stashes); `DiffParser` parses unified diffs; `CommitGraph` computes lane layout for the history graph.
