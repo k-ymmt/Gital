@@ -47,7 +47,6 @@ struct HistoryView: View {
                             CommitRowView(
                                 commit: commit,
                                 row: model.graph.rows[commit.hash],
-                                graphWidth: graphWidth,
                                 laneSpacing: laneSpacing,
                                 isSelected: model.selectedCommitHash == commit.hash
                             )
@@ -107,9 +106,9 @@ struct HistoryView: View {
         }
     }
 
-    // The graph column must stay bounded: its width feeds the header's
-    // leading padding, which is incompressible and would otherwise push the
-    // whole split view wider than the window on lane-heavy histories.
+    // The graph must stay bounded even on lane-heavy histories: rows size
+    // themselves to their own lane count, but the widest row is incompressible
+    // and would otherwise push the whole split view wider than the window.
     private static let maxGraphWidth: CGFloat = 240
     private static let naturalLaneSpacing: CGFloat = 15
 
@@ -121,15 +120,10 @@ struct HistoryView: View {
         return min(Self.naturalLaneSpacing, available / lanes)
     }
 
-    private var graphWidth: CGFloat {
-        min(Self.maxGraphWidth, 23 + laneSpacing * CGFloat(model.graph.maxLanes))
-    }
-
     private var columnHeader: some View {
         HStack(spacing: 0) {
             Text("Description")
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, CGFloat(14) + graphWidth)
             Text("Author")
                 .frame(width: 150, alignment: .leading)
             Text("Date")
@@ -194,16 +188,22 @@ struct RefCreationSheet: View {
 struct CommitRowView: View {
     let commit: Commit
     let row: CommitGraph.Row?
-    let graphWidth: CGFloat
     let laneSpacing: CGFloat
     let isSelected: Bool
 
     private static let maxVisibleRefs = 3
 
+    // Sized per row, not to the widest row in the history: the message starts
+    // a fixed gap after this row's rightmost lane, like `git log --graph`.
+    private var rowGraphWidth: CGFloat {
+        let lanes = CGFloat(max(row?.laneCount ?? 1, 1))
+        return 10 + (lanes - 1) * laneSpacing + 14
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             GraphRowCanvas(row: row, laneSpacing: laneSpacing)
-                .frame(width: graphWidth, height: 32)
+                .frame(width: rowGraphWidth, height: 32)
 
             HStack(spacing: 6) {
                 // Badge padding is incompressible, so an unbounded run of refs
