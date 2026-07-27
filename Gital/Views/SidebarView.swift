@@ -5,6 +5,7 @@ struct SidebarView: View {
     @Environment(AppModel.self) private var appModel
 
     @State private var expandedSections: Set<String> = ["branches", "remotes", "tags", "stashes"]
+    @State private var collapsedBranchFolders: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -258,36 +259,18 @@ struct SidebarView: View {
     private var branchesContent: some View {
         collapsibleHeader("Branches", key: "branches")
         if expandedSections.contains("branches") {
-            ForEach(model.branches) { branch in
-                HStack(spacing: 9) {
-                    Image(systemName: "arrow.triangle.branch")
-                        .font(.system(size: 12))
-                        .foregroundStyle(branch.isCurrent ? Color.accentColor : Color.secondary)
-                    Text(branch.name)
-                        .font(.system(size: 12.5))
-                        .lineLimit(1)
-                    Spacer()
-                    if branch.isCurrent {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(DesignStyle.addition)
-                    }
+            let rows = BranchTree.rows(
+                model.branches.map { ($0.name, $0) },
+                keyPrefix: "branches",
+                collapsed: collapsedBranchFolders
+            )
+            ForEach(rows) { row in
+                switch row {
+                case .folder(let path, let name, let depth):
+                    branchFolderRow(path: path, name: name, depth: depth, baseIndent: 16)
+                case .leaf(let branch, let name, _, let depth):
+                    localBranchRow(branch, displayName: name, depth: depth)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 5)
-                .contentShape(Rectangle())
-                .background(rowBackground(model.highlightedBranchName == branch.name))
-                .onTapGesture(count: 2) {
-                    model.checkout(branch: branch)
-                }
-                .onTapGesture {
-                    model.selectBranch(branch)
-                }
-                .contextMenu {
-                    Button("Checkout") { model.checkout(branch: branch) }
-                        .disabled(branch.isCurrent)
-                }
-                .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
             }
         }
 
@@ -305,29 +288,110 @@ struct SidebarView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 5)
 
-                ForEach(remote.branches, id: \.self) { branch in
-                    Text(branch)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.leading, 37)
-                        .padding(.trailing, 16)
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .contextMenu {
-                            Button("Checkout Tracking Branch") {
-                                Task {
-                                    try? await model.repository.checkoutRemote(branch: branch, remote: remote.name)
-                                    await model.refreshAll()
-                                }
-                            }
-                        }
+                let rows = BranchTree.rows(
+                    remote.branches.map { ($0, $0) },
+                    keyPrefix: "remote:\(remote.name)",
+                    collapsed: collapsedBranchFolders
+                )
+                ForEach(rows) { row in
+                    switch row {
+                    case .folder(let path, let name, let depth):
+                        branchFolderRow(path: path, name: name, depth: depth, baseIndent: 37)
+                    case .leaf(let branch, let name, _, let depth):
+                        remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
+                    }
                 }
             }
         }
 
         collapsibleHeader("Tags", key: "tags")
+        tagsSection
+    }
+
+    private func branchFolderRow(path: String, name: String, depth: Int, baseIndent: CGFloat) -> some View {
+        Button {
+            if collapsedBranchFolders.contains(path) {
+                collapsedBranchFolders.remove(path)
+            } else {
+                collapsedBranchFolders.insert(path)
+            }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8, weight: .bold))
+                    .rotationEffect(.degrees(collapsedBranchFolders.contains(path) ? 0 : 90))
+                    .foregroundStyle(.secondary)
+                Image(systemName: "folder")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                Text(name)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.leading, baseIndent + CGFloat(depth) * 14)
+            .padding(.trailing, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func localBranchRow(_ branch: Branch, displayName: String, depth: Int) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 12))
+                .foregroundStyle(branch.isCurrent ? Color.accentColor : Color.secondary)
+            Text(displayName)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
+            Spacer()
+            if branch.isCurrent {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(DesignStyle.addition)
+            }
+        }
+        .padding(.leading, 16 + CGFloat(depth) * 14)
+        .padding(.trailing, 16)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .background(rowBackground(model.highlightedBranchName == branch.name))
+        .onTapGesture(count: 2) {
+            model.checkout(branch: branch)
+        }
+        .onTapGesture {
+            model.selectBranch(branch)
+        }
+        .contextMenu {
+            Button("Checkout") { model.checkout(branch: branch) }
+                .disabled(branch.isCurrent)
+        }
+        .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
+    }
+
+    private func remoteBranchRow(_ branch: String, displayName: String, depth: Int, remote: String) -> some View {
+        Text(displayName)
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .padding(.leading, 37 + CGFloat(depth) * 14)
+            .padding(.trailing, 16)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Checkout Tracking Branch") {
+                    Task {
+                        try? await model.repository.checkoutRemote(branch: branch, remote: remote)
+                        await model.refreshAll()
+                    }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var tagsSection: some View {
         if expandedSections.contains("tags") {
             ForEach(model.tags) { tag in
                 HStack(spacing: 9) {
