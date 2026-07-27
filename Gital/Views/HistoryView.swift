@@ -107,8 +107,7 @@ struct HistoryView: View {
     }
 
     private var graphWidth: CGFloat {
-        let lanes = min(model.graph.maxLanes, 8)
-        return 15 + CGFloat(lanes) * 15 + 8
+        15 + CGFloat(model.graph.maxLanes) * 15 + 8
     }
 
     private var columnHeader: some View {
