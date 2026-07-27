@@ -6,6 +6,7 @@ struct SidebarView: View {
 
     @State private var expandedSections: Set<String> = ["branches", "remotes", "tags", "stashes"]
     @State private var collapsedBranchFolders: Set<String> = []
+    @State private var collapsedFileFolders: Set<String> = []
     @State private var collapsedPRSections: Set<String> = []
 
     var body: some View {
@@ -191,9 +192,7 @@ struct SidebarView: View {
                     .disabled(model.status.unstaged.isEmpty)
             )
         }
-        ForEach(model.status.unstaged) { change in
-            fileRow(change, staged: false)
-        }
+        fileTreeRows(model.status.unstaged, keyPrefix: "wc-unstaged", staged: false)
 
         sectionHeader("Staged (\(model.status.staged.count))") {
             AnyView(
@@ -204,12 +203,27 @@ struct SidebarView: View {
                     .disabled(model.status.staged.isEmpty)
             )
         }
-        ForEach(model.status.staged) { change in
-            fileRow(change, staged: true)
+        fileTreeRows(model.status.staged, keyPrefix: "wc-staged", staged: true)
+    }
+
+    @ViewBuilder
+    private func fileTreeRows(_ changes: [FileChange], keyPrefix: String, staged: Bool) -> some View {
+        let rows = BranchTree.rows(
+            changes.map { ($0.path, $0) },
+            keyPrefix: keyPrefix,
+            collapsed: collapsedFileFolders
+        )
+        ForEach(rows) { row in
+            switch row {
+            case .folder(let path, let name, let depth):
+                folderRow(path: path, name: name, depth: depth, baseIndent: 16, collapsed: $collapsedFileFolders)
+            case .leaf(let change, let name, _, let depth):
+                fileRow(change, displayName: name, depth: depth, staged: staged)
+            }
         }
     }
 
-    private func fileRow(_ change: FileChange, staged: Bool) -> some View {
+    private func fileRow(_ change: FileChange, displayName: String, depth: Int, staged: Bool) -> some View {
         HStack(spacing: 8) {
             Button {
                 staged ? model.unstage(change) : model.stage(change)
@@ -223,21 +237,13 @@ struct SidebarView: View {
 
             StatusBadge(status: change.status)
 
-            VStack(alignment: .leading, spacing: 0) {
-                Text(change.fileName)
-                    .font(.system(size: 12.5))
-                    .lineLimit(1)
-                if !change.directory.isEmpty {
-                    Text(change.directory)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
+            Text(displayName)
+                .font(.system(size: 12.5))
+                .lineLimit(1)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 16)
+        .padding(.leading, 16 + CGFloat(depth) * 14)
+        .padding(.trailing, 16)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .background(rowBackground(model.selectedChange == RepoViewModel.ChangeSelection(path: change.path, staged: staged)))
@@ -268,7 +274,7 @@ struct SidebarView: View {
             ForEach(rows) { row in
                 switch row {
                 case .folder(let path, let name, let depth):
-                    branchFolderRow(path: path, name: name, depth: depth, baseIndent: 16)
+                    folderRow(path: path, name: name, depth: depth, baseIndent: 16, collapsed: $collapsedBranchFolders)
                 case .leaf(let branch, let name, _, let depth):
                     localBranchRow(branch, displayName: name, depth: depth)
                 }
@@ -313,7 +319,7 @@ struct SidebarView: View {
                     ForEach(rows) { row in
                         switch row {
                         case .folder(let path, let name, let depth):
-                            branchFolderRow(path: path, name: name, depth: depth, baseIndent: 37)
+                            folderRow(path: path, name: name, depth: depth, baseIndent: 37, collapsed: $collapsedBranchFolders)
                         case .leaf(let branch, let name, _, let depth):
                             remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
                         }
@@ -326,18 +332,18 @@ struct SidebarView: View {
         tagsSection
     }
 
-    private func branchFolderRow(path: String, name: String, depth: Int, baseIndent: CGFloat) -> some View {
+    private func folderRow(path: String, name: String, depth: Int, baseIndent: CGFloat, collapsed: Binding<Set<String>>) -> some View {
         Button {
-            if collapsedBranchFolders.contains(path) {
-                collapsedBranchFolders.remove(path)
+            if collapsed.wrappedValue.contains(path) {
+                collapsed.wrappedValue.remove(path)
             } else {
-                collapsedBranchFolders.insert(path)
+                collapsed.wrappedValue.insert(path)
             }
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 8, weight: .bold))
-                    .rotationEffect(.degrees(collapsedBranchFolders.contains(path) ? 0 : 90))
+                    .rotationEffect(.degrees(collapsed.wrappedValue.contains(path) ? 0 : 90))
                     .foregroundStyle(.secondary)
                 Image(systemName: "folder")
                     .font(.system(size: 12))
