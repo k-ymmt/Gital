@@ -694,6 +694,15 @@ do {
            "viewed: un-viewing the commit un-views its files")
     expect(state.isEmpty, "viewed: fully cleared state is empty")
 
+    // Demoting a single-file commit leaves nothing behind — an empty
+    // per-file set would break isEmpty and linger as a phantom state.
+    var single = PRViewedState()
+    single.setCommitViewed(true, hash: "aaa1111")
+    single.toggleCommitFile(commit: "aaa1111", path: "only.swift", allPaths: ["only.swift"])
+    expect(!single.isCommitFileViewed(commit: "aaa1111", path: "only.swift"),
+           "viewed: demoting a single-file commit un-views the file")
+    expect(single.isEmpty, "viewed: demoting a single-file commit clears the state")
+
     // Partial progress never promotes.
     state.toggleCommitFile(commit: "def5678", path: "a.swift", allPaths: files)
     expect(!state.isCommitViewed("def5678"), "viewed: partial progress does not promote")
@@ -720,17 +729,18 @@ do {
     let repoA = URL(fileURLWithPath: "/repos/a")
     let repoB = URL(fileURLWithPath: "/repos/b")
 
+    let empty = PRViewedState()
     var stateA = PRViewedState()
     stateA.setCommitViewed(true, hash: "abc1234")
     stateA.toggleFile("a.swift")
     stateA.toggleCommitFile(commit: "0badf00", path: "p.swift", allPaths: ["p.swift", "q.swift"])
-    PRViewedStore(repoRoot: repoA, databaseURL: file).save(stateA, for: 7)
+    PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: empty, to: stateA, for: 7)
 
     var stateB = PRViewedState()
     stateB.toggleCommitFile(commit: "def5678", path: "x.swift", allPaths: ["x.swift", "y.swift"])
-    PRViewedStore(repoRoot: repoB, databaseURL: file).save(stateB, for: 3)
+    PRViewedStore(repoRoot: repoB, databaseURL: file).apply(from: empty, to: stateB, for: 3)
     // Same PR number as repo A's — must stay separate per repository.
-    PRViewedStore(repoRoot: repoB, databaseURL: file).save(stateB, for: 7)
+    PRViewedStore(repoRoot: repoB, databaseURL: file).apply(from: empty, to: stateB, for: 7)
 
     let loadedA = PRViewedStore(repoRoot: repoA, databaseURL: file).load()
     expect(loadedA[7] == stateA, "store: state round-trips through disk")
@@ -738,15 +748,33 @@ do {
     expect(PRViewedStore(repoRoot: repoB, databaseURL: file).load()[3] == stateB,
            "store: repositories do not clobber each other")
 
-    // Saving replaces the PR's previous rows instead of accumulating.
-    stateA.toggleFile("a.swift")
-    stateA.toggleFile("b.swift")
+    // A mutation persists as a delta against the previous state.
+    var stateA2 = stateA
+    stateA2.toggleFile("a.swift")
+    stateA2.toggleFile("b.swift")
+    stateA2.setCommitViewed(false, hash: "abc1234")
     let storeA = PRViewedStore(repoRoot: repoA, databaseURL: file)
-    storeA.save(stateA, for: 7)
-    expect(storeA.load()[7] == stateA, "store: re-saving a PR replaces its rows")
+    storeA.apply(from: stateA, to: stateA2, for: 7)
+    expect(storeA.load()[7] == stateA2, "store: delta save applies removals and additions")
 
-    storeA.save(PRViewedState(), for: 7)
-    expect(storeA.load().isEmpty, "store: saving an empty state deletes the PR's rows")
+    // A second instance whose in-memory picture is stale only writes the
+    // flags it touched — it must not wipe rows it never knew about.
+    var stale = PRViewedState()
+    stale.toggleFile("z.swift")
+    PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: empty, to: stale, for: 7)
+    var merged = stateA2
+    merged.toggleFile("z.swift")
+    expect(storeA.load()[7] == merged, "store: stale-instance delta does not clobber other rows")
+
+    // Re-inserting an already present flag (both instances viewed the same
+    // file) must not abort the transaction.
+    var reinsert = stale
+    reinsert.toggleFile("b.swift")
+    PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: stale, to: reinsert, for: 7)
+    expect(storeA.load()[7] == merged, "store: duplicate insert is absorbed, not fatal")
+
+    storeA.apply(from: merged, to: empty, for: 7)
+    expect(storeA.load().isEmpty, "store: clearing a state deletes the PR's rows")
     expect(PRViewedStore(repoRoot: repoB, databaseURL: file).load()[7] == stateB,
            "store: clearing one repo's PR keeps the other repo's same-numbered PR")
 }

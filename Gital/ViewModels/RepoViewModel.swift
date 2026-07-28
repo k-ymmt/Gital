@@ -302,10 +302,11 @@ final class RepoViewModel {
     }
 
     private func mutatePRViewed(_ number: Int, _ mutate: (inout PRViewedState) -> Void) {
-        var state = prViewedStates[number] ?? PRViewedState()
+        let old = prViewedStates[number] ?? PRViewedState()
+        var state = old
         mutate(&state)
         prViewedStates[number] = state.isEmpty ? nil : state
-        prViewedStore?.save(state, for: number)
+        prViewedStore?.apply(from: old, to: state, for: number)
     }
 
     func loadPRViewedStates() {
