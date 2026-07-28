@@ -129,16 +129,20 @@ struct AvatarView: View {
     var url: URL? = nil
 
     var body: some View {
-        ZStack {
-            initials
-            // Initials stay visible through the transparent placeholder and
-            // whenever the load fails; a successful image covers them.
+        Group {
             if let url {
-                AsyncImage(url: url) { image in
-                    image.resizable().scaledToFill()
-                } placeholder: {
-                    Color.clear
+                // Initials show only while loading and on failure — never
+                // underneath the image, where a transparent-background avatar
+                // (common for org logos) would let them bleed through.
+                AsyncImage(url: url) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFill()
+                    } else {
+                        initials
+                    }
                 }
+            } else {
+                initials
             }
         }
         .frame(width: size, height: size)

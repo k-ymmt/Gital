@@ -648,6 +648,9 @@ expect(GitHubAvatars.url(email: "12345+octocat@users.noreply.github.com", pixelS
 expect(GitHubAvatars.url(email: "octocat@users.noreply.github.com", pixelSize: 64)?.absoluteString
         == "https://avatars.githubusercontent.com/octocat?s=64",
        "avatars: legacy noreply email resolves by login")
+expect(GitHubAvatars.url(email: "u/583231@users.noreply.github.com", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/u/e?email=u/583231@users.noreply.github.com&s=64",
+       "avatars: crafted noreply local part cannot inject a URL path")
 expect(GitHubAvatars.url(email: "dev@example.com", pixelSize: 64)?.absoluteString
         == "https://avatars.githubusercontent.com/u/e?email=dev@example.com&s=64",
        "avatars: plain email goes through the email endpoint")

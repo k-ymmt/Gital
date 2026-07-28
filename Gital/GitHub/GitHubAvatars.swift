@@ -44,7 +44,13 @@ enum GitHubAvatars {
             if let plus = local.firstIndex(of: "+"), let id = Int(local[..<plus]) {
                 return URL(string: "https://avatars.githubusercontent.com/u/\(id)?s=\(pixelSize)")
             }
-            return url(login: local, pixelSize: pixelSize)
+            // Only a well-formed login may go into the URL path: a crafted
+            // author like "u/583231@users.noreply.github.com" must not select
+            // an arbitrary user id's avatar. Anything else falls through to
+            // the email endpoint like a regular address.
+            if isLogin(local) {
+                return url(login: local, pixelSize: pixelSize)
+            }
         }
         var components = URLComponents(string: "https://avatars.githubusercontent.com/u/e")!
         components.queryItems = [
@@ -56,5 +62,12 @@ enum GitHubAvatars {
         components.percentEncodedQuery = components.percentEncodedQuery?
             .replacingOccurrences(of: "+", with: "%2B")
         return components.url
+    }
+
+    /// GitHub login syntax: ASCII alphanumerics and hyphens only.
+    private static func isLogin(_ candidate: String) -> Bool {
+        !candidate.isEmpty && candidate.allSatisfy {
+            $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-")
+        }
     }
 }
