@@ -85,8 +85,15 @@ extension RepoViewModel {
 
     func refreshPullRequests() async {
         do {
+            // Fetched once per repo session; a failure (offline, gh not
+            // authenticated) is non-fatal — the "awaiting your review"
+            // filter just matches nothing until the next refresh.
+            async let viewerTask = prViewerLogin == nil ? github.viewerLogin() : nil
             pullRequests = try await github.listPullRequests()
             prLoadError = nil
+            if let login = try? await viewerTask, !login.isEmpty {
+                prViewerLogin = login
+            }
         } catch {
             pullRequests = []
             prLoadError = error.localizedDescription

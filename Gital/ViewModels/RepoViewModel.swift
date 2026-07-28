@@ -153,7 +153,7 @@ final class RepoViewModel {
     }
 
     enum PRStateFilter: String, CaseIterable, Identifiable {
-        case all, open, draft, merged, closed
+        case all, open, draft, awaitingYourReview, merged, closed
 
         var id: String { rawValue }
 
@@ -162,18 +162,29 @@ final class RepoViewModel {
             case .all: "All"
             case .open: "Open"
             case .draft: "Draft"
+            case .awaitingYourReview: "Awaiting review from you"
             case .merged: "Merged"
             case .closed: "Closed"
             }
         }
 
-        func matches(_ pr: PullRequestSummary) -> Bool {
+        /// Compact variant for the sidebar header chip, where the full
+        /// "Awaiting review from you" label would crowd out the section title.
+        var shortLabel: String {
+            self == .awaitingYourReview ? "Awaiting review" : label
+        }
+
+        func matches(_ pr: PullRequestSummary, viewerLogin: String?) -> Bool {
             switch self {
             case .all: true
             // GitHub counts drafts as open, so Open includes them; Draft
             // narrows to drafts only.
             case .open: pr.state == "OPEN"
             case .draft: pr.state == "OPEN" && pr.isDraft
+            case .awaitingYourReview:
+                pr.state == "OPEN" && viewerLogin.map { login in
+                    pr.reviewRequestLogins.contains { $0.caseInsensitiveCompare(login) == .orderedSame }
+                } ?? false
             case .merged: pr.state == "MERGED"
             case .closed: pr.state == "CLOSED"
             }
@@ -183,6 +194,9 @@ final class RepoViewModel {
     var pullRequests: [PullRequestSummary] = []
     var prLoadError: String?
     var prSearchText = ""
+    /// Authenticated `gh` login, fetched alongside the PR list; nil until
+    /// loaded (the "awaiting your review" filter matches nothing then).
+    var prViewerLogin: String?
     var prStateFilter: PRStateFilter = .all {
         didSet { savePRStateFilter() }
     }
@@ -218,7 +232,7 @@ final class RepoViewModel {
         let folded = query.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? query
         let numberQuery = Int(folded.hasPrefix("#") ? String(folded.dropFirst()) : folded)
         return pullRequests.filter { pr in
-            guard prStateFilter.matches(pr) else { return false }
+            guard prStateFilter.matches(pr, viewerLogin: prViewerLogin) else { return false }
             guard !query.isEmpty else { return true }
             if let numberQuery, pr.number == numberQuery { return true }
             return pr.title.localizedStandardContains(query)

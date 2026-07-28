@@ -475,7 +475,7 @@ struct SidebarView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                             .font(.system(size: 11))
-                        Text(model.prStateFilter.label)
+                        Text(model.prStateFilter.shortLabel)
                             .font(.system(size: 10.5))
                     }
                     .foregroundStyle(model.prStateFilter == .all ? Color.secondary : Color.accentColor)

@@ -7,6 +7,9 @@ struct PullRequestSummary: Identifiable, Hashable {
     let state: String        // OPEN / MERGED / CLOSED
     let isDraft: Bool
     let headRefName: String
+    /// Logins with a pending review request. User requests only — team
+    /// requests come through without a login and are dropped.
+    let reviewRequestLogins: [String]
 
     var id: Int { number }
 
@@ -86,17 +89,19 @@ struct GitHubService {
     func listPullRequests() async throws -> [PullRequestSummary] {
         let data = try await runGH([
             "pr", "list", "--state", "all", "--limit", "30",
-            "--json", "number,title,author,state,isDraft,headRefName",
+            "--json", "number,title,author,state,isDraft,headRefName,reviewRequests",
         ])
 
         struct Row: Decodable {
             struct Author: Decodable { let login: String; let name: String? }
+            struct ReviewRequest: Decodable { let login: String? }
             let number: Int
             let title: String
             let author: Author?
             let state: String
             let isDraft: Bool
             let headRefName: String
+            let reviewRequests: [ReviewRequest]?
         }
 
         let rows = try JSONDecoder().decode([Row].self, from: data)
@@ -107,9 +112,17 @@ struct GitHubService {
                 author: row.author.map { $0.name?.isEmpty == false ? $0.name! : $0.login } ?? "unknown",
                 state: row.state,
                 isDraft: row.isDraft,
-                headRefName: row.headRefName
+                headRefName: row.headRefName,
+                reviewRequestLogins: (row.reviewRequests ?? []).compactMap(\.login)
             )
         }
+    }
+
+    /// Login of the authenticated `gh` user, for "awaiting your review".
+    func viewerLogin() async throws -> String {
+        let data = try await runGH(["api", "user", "--jq", ".login"])
+        return String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func pullRequestDetail(number: Int) async throws -> PullRequestDetail {
