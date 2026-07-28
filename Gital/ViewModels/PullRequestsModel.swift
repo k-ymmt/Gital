@@ -129,6 +129,12 @@ final class PullRequestsModel {
     var diffsCache: [Int: [FileDiff]] = [:]
 
     @ObservationIgnored private let itemDiffsLoader = LatestLoader()
+    /// In-flight whole-PR diff fetches by PR number: the prefetch fired on
+    /// selection and a file click landing mid-fetch share one gh invocation.
+    @ObservationIgnored private var diffFetchTasks: [Int: Task<Result<[FileDiff], Error>, Never>] = [:]
+    /// When the PR list was last fetched; lets tab entry skip a re-fetch
+    /// that just ran (repo open, a merge, a recent entry).
+    @ObservationIgnored private var lastListRefresh: Date?
 
     init(repository: GitRepository, github: GitHubService) {
         self.repository = repository
@@ -170,7 +176,16 @@ final class PullRequestsModel {
 
     // MARK: - Loading
 
+    /// Tab-entry refresh: the cached list stays on screen and re-fetches in
+    /// place, at most once per `interval` — every switch to the tab would
+    /// otherwise spawn gh against the network.
+    func refreshIfStale(interval: TimeInterval = 60) async {
+        if let last = lastListRefresh, Date.now.timeIntervalSince(last) < interval { return }
+        await refresh()
+    }
+
     func refresh() async {
+        lastListRefresh = .now
         do {
             // Fetched once per repo session; a failure (offline, gh not
             // authenticated) is non-fatal — the "awaiting your review"
@@ -187,11 +202,44 @@ final class PullRequestsModel {
         }
     }
 
+    /// The PR's parsed whole diff, from cache or via a single shared gh
+    /// fetch. Failures are never cached — the next call simply retries.
+    private func wholeDiff(for number: Int) async throws -> [FileDiff] {
+        if let cached = diffsCache[number] { return cached }
+        let task = diffFetchTasks[number] ?? Task { [github] in
+            do {
+                let raw = try await github.pullRequestDiff(number: number)
+                return .success(DiffParser.parse(raw, scope: .snapshot))
+            } catch {
+                return .failure(error)
+            }
+        }
+        diffFetchTasks[number] = task
+        let result = await task.value
+        // Guard the removal: another caller may have already replaced a
+        // failed task with a fresh retry, which must not be knocked out.
+        if diffFetchTasks[number] == task {
+            diffFetchTasks[number] = nil
+        }
+        if case .success(let diffs) = result {
+            diffsCache[number] = diffs
+        }
+        return try result.get()
+    }
+
+    /// Fire-and-forget warm-up of the whole diff so the first file click of
+    /// a PR doesn't wait on gh. Errors stay silent here — the click retries
+    /// through `loadItemDiffs`, which does report them.
+    func prefetchDiff(_ number: Int) {
+        Task { _ = try? await wholeDiff(for: number) }
+    }
+
     func loadDetail() async {
         guard let number = selectedNumber else {
             detail = nil
             return
         }
+        prefetchDiff(number)
         if let cached = detailsCache[number] {
             detail = cached
             return
@@ -217,7 +265,7 @@ final class PullRequestsModel {
         }
         itemDiffs = []
         itemLoadError = nil
-        let result = await itemDiffsLoader.run { [repository, github] in
+        let result = await itemDiffsLoader.run { [repository] in
             switch item {
             case .commit(let hash):
                 // PR commits live in the local object store once the remote
@@ -231,15 +279,7 @@ final class PullRequestsModel {
                     return try await repository.diffCommit(hash)
                 }
             case .file(let path):
-                let all: [FileDiff]
-                if let cached = self.diffsCache[number] {
-                    all = cached
-                } else {
-                    let raw = try await github.pullRequestDiff(number: number)
-                    all = DiffParser.parse(raw, scope: .snapshot)
-                    self.diffsCache[number] = all
-                }
-                return all.filter { $0.path == path }
+                return try await self.wholeDiff(for: number).filter { $0.path == path }
             }
         }
         switch result {
@@ -266,6 +306,7 @@ final class PullRequestsModel {
             return
         }
         expanded.insert(number)
+        prefetchDiff(number)
         if detailsCache[number] == nil {
             do {
                 detailsCache[number] = try await github.pullRequestDetail(number: number)
