@@ -181,7 +181,30 @@ final class RepoViewModel {
     var pullRequests: [PullRequestSummary] = []
     var prLoadError: String?
     var prSearchText = ""
-    var prStateFilter: PRStateFilter = .all
+    var prStateFilter: PRStateFilter = .all {
+        didSet { savePRStateFilter() }
+    }
+
+    /// UserDefaults key for a `[repo path: PRStateFilter raw value]` map so
+    /// each repository remembers its own filter across launches. Entries are
+    /// removed when the filter returns to `.all` to keep the map from
+    /// accumulating stale paths.
+    private static let prStateFilterDefaultsKey = "prStateFilterByRepo"
+
+    private func savePRStateFilter() {
+        var map = UserDefaults.standard.dictionary(forKey: Self.prStateFilterDefaultsKey) as? [String: String] ?? [:]
+        if prStateFilter == .all {
+            map.removeValue(forKey: repository.root.path)
+        } else {
+            map[repository.root.path] = prStateFilter.rawValue
+        }
+        UserDefaults.standard.set(map, forKey: Self.prStateFilterDefaultsKey)
+    }
+
+    private static func storedPRStateFilter(for root: URL) -> PRStateFilter {
+        let map = UserDefaults.standard.dictionary(forKey: prStateFilterDefaultsKey) as? [String: String]
+        return map?[root.path].flatMap(PRStateFilter.init(rawValue:)) ?? .all
+    }
 
     var isPRFilterActive: Bool {
         prStateFilter != .all || !prSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -267,6 +290,7 @@ final class RepoViewModel {
         self.repository = repository
         self.github = GitHubService(repoRoot: repository.root)
         self.codex = CodexAppServer()
+        self.prStateFilter = Self.storedPRStateFilter(for: repository.root)
         startWatching()
     }
 
