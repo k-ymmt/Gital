@@ -73,7 +73,7 @@ struct SidebarView: View {
                         appModel.openRepository(at: url)
                     } label: {
                         Text(url.lastPathComponent)
-                        Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        Text(Self.abbreviatedPath(for: url))
                     }
                 }
             } label: {
@@ -86,6 +86,15 @@ struct SidebarView: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
+    }
+
+    /// Menu items ignore Text line-limit/truncation modifiers, so ellipsize the string itself.
+    private static func abbreviatedPath(for url: URL, maxLength: Int = 48) -> String {
+        let path = url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        guard path.count > maxLength else { return path }
+        let head = path.prefix((maxLength - 1) / 2)
+        let tail = path.suffix(maxLength / 2)
+        return "\(head)…\(tail)"
     }
 
     // MARK: - Tab strip
