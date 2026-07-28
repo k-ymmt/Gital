@@ -115,6 +115,17 @@ extension RepoViewModel {
         }
     }
 
+    /// Entry-point for the Changes tab appearing. Uses the cached
+    /// `workingDiffs` when a load has already happened — selection changes,
+    /// the file watcher, and refreshAll all keep it current — so switching
+    /// tabs doesn't spawn git (or cancel an in-flight load, as the
+    /// select-file-from-another-tab path otherwise would via its `didSet`).
+    /// Reloads when file watching is down: the cache goes stale silently then.
+    func loadWorkingDiffsIfNeeded() async {
+        guard !hasLoadedWorkingDiffs || !isWatchingFileSystem else { return }
+        await loadWorkingDiffs()
+    }
+
     func loadWorkingDiffs() async {
         let selection = selectedChange
         let status = self.status
@@ -162,6 +173,7 @@ extension RepoViewModel {
             )
             workingDiffs = diffs
             workingDiffLineIDs = Set(currentLines.keys)
+            hasLoadedWorkingDiffs = true
             selectedDiffLineIDs = selectedDiffLineIDs.filter { id in
                 guard let current = currentLines[id] else { return false }
                 return previousLines[id] == current

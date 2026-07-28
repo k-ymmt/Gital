@@ -19,6 +19,31 @@ private final class BranchTreeNode<Leaf> {
     var leaves: [(name: String, leaf: Leaf)] = []
 }
 
+/// Memoizes `BranchTree.rows` per key prefix. The sidebar re-evaluates its
+/// whole body on every status tick and tab switch, and the localized sort in
+/// `flatten` is expensive on large branch lists — hold one of these in
+/// `@State` and route calls through it so unchanged inputs skip the rebuild.
+final class BranchTreeRowsCache<Leaf: Hashable> {
+    private var entries: [String: (items: [(String, Leaf)], collapsed: Set<String>, compressChains: Bool, rows: [BranchTreeRow<Leaf>])] = [:]
+
+    func rows(
+        _ items: [(String, Leaf)],
+        keyPrefix: String,
+        collapsed: Set<String>,
+        compressChains: Bool = false
+    ) -> [BranchTreeRow<Leaf>] {
+        if let entry = entries[keyPrefix],
+           entry.collapsed == collapsed,
+           entry.compressChains == compressChains,
+           entry.items.elementsEqual(items, by: ==) {
+            return entry.rows
+        }
+        let rows = BranchTree.rows(items, keyPrefix: keyPrefix, collapsed: collapsed, compressChains: compressChains)
+        entries[keyPrefix] = (items, collapsed, compressChains, rows)
+        return rows
+    }
+}
+
 enum BranchTree {
     /// Builds visible rows for the given (fullName, leaf) pairs, skipping the
     /// contents of folders whose path is in `collapsed`. `keyPrefix` namespaces

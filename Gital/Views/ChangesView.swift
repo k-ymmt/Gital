@@ -42,10 +42,8 @@ struct ChangesView: View {
             Divider()
             CommitComposerView(model: model)
         }
-        .task(id: model.navTab) {
-            if model.navTab == .changes {
-                await model.loadWorkingDiffs()
-            }
+        .task {
+            await model.loadWorkingDiffsIfNeeded()
         }
     }
 

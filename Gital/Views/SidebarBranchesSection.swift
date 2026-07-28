@@ -6,10 +6,13 @@ struct SidebarBranchesSection: View {
     @Binding var expandedSections: Set<String>
     @Binding var collapsedBranchFolders: Set<String>
 
+    @State private var branchRowsCache = BranchTreeRowsCache<Branch>()
+    @State private var remoteRowsCache = BranchTreeRowsCache<String>()
+
     var body: some View {
         SidebarCollapsibleHeader(title: "Branches", key: "branches", expandedSections: $expandedSections)
         if expandedSections.contains("branches") {
-            let rows = BranchTree.rows(
+            let rows = branchRowsCache.rows(
                 model.branches.map { ($0.name, $0) },
                 keyPrefix: "branches",
                 collapsed: collapsedBranchFolders
@@ -39,7 +42,7 @@ struct SidebarBranchesSection: View {
                 }
 
                 if !collapsedBranchFolders.contains(remoteKey) {
-                    let rows = BranchTree.rows(
+                    let rows = remoteRowsCache.rows(
                         remote.branches.map { ($0, $0) },
                         keyPrefix: remoteKey,
                         collapsed: collapsedBranchFolders

@@ -5,6 +5,8 @@ struct SidebarWorkingCopySection: View {
     var model: RepoViewModel
     @Binding var collapsedFileFolders: Set<String>
 
+    @State private var fileRowsCache = BranchTreeRowsCache<FileChange>()
+
     var body: some View {
         SidebarSectionHeader("Unstaged (\(model.status.unstaged.count))") {
             Button("Stage All") { model.stageAll() }
@@ -27,7 +29,7 @@ struct SidebarWorkingCopySection: View {
 
     @ViewBuilder
     private func fileTreeRows(_ changes: [FileChange], keyPrefix: String, staged: Bool) -> some View {
-        let rows = BranchTree.rows(
+        let rows = fileRowsCache.rows(
             changes.map { ($0.path, $0) },
             keyPrefix: keyPrefix,
             collapsed: collapsedFileFolders

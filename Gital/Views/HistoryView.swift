@@ -67,6 +67,13 @@ struct HistoryView: View {
                         proxy.scrollTo(hash)
                     }
                 }
+                // Tab switches rebuild this list at the top; jump straight
+                // back to the selection instead of losing the position.
+                .onAppear {
+                    if let hash = model.selectedCommitHash {
+                        proxy.scrollTo(hash, anchor: .center)
+                    }
+                }
             }
         }
     }
@@ -314,6 +321,7 @@ struct GraphRowCanvas: View {
 struct CommitDetailView: View {
     @Bindable var model: RepoViewModel
     @State private var collapsedDirectories: Set<String> = []
+    @State private var fileRowsCache = BranchTreeRowsCache<CommitFileStat>()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -472,7 +480,7 @@ struct CommitDetailView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
 
-                let rows = BranchTree.rows(
+                let rows = fileRowsCache.rows(
                     model.commitFiles.map { ($0.path, $0) },
                     keyPrefix: "commit-files",
                     collapsed: collapsedDirectories,

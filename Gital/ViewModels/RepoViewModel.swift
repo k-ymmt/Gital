@@ -137,6 +137,12 @@ final class RepoViewModel {
     // loadMoreCommits share one loader on purpose: a refresh must invalidate
     // an in-flight page load and vice versa (offsets shift under both).
 
+    /// True once `loadWorkingDiffs` has delivered a result. Entering the
+    /// Changes tab consults this instead of always re-running `git diff`:
+    /// the model keeps `workingDiffs` across tab switches and the file
+    /// watcher refreshes it on every change, so a switch normally has
+    /// nothing to fetch.
+    @ObservationIgnored var hasLoadedWorkingDiffs = false
     @ObservationIgnored let workingDiffsLoader = LatestLoader()
     @ObservationIgnored let commitDetailLoader = LatestLoader()
     @ObservationIgnored let logLoader = LatestLoader()
@@ -145,6 +151,10 @@ final class RepoViewModel {
     @ObservationIgnored var pendingDiscardSnapshot: [FileDiff]?
 
     @ObservationIgnored private var watcher: RepoWatcher?
+
+    /// Whether FSEvents-based refresh is running. When it isn't, cached
+    /// working diffs can go stale silently, so tab entry must reload.
+    var isWatchingFileSystem: Bool { watcher?.isWatching == true }
 
     init(repository: GitRepository) {
         self.repository = repository
