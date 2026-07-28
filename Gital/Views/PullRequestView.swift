@@ -64,6 +64,9 @@ struct PullRequestItemDiffView: View {
                     .font(.system(size: 12))
                     .help("Mark the whole commit as viewed")
                 }
+                if let number = reviewNumber {
+                    ReviewChangesButton(model: model, number: number)
+                }
                 DiffModePicker(mode: $model.diffMode)
             }
 
@@ -87,7 +90,11 @@ struct PullRequestItemDiffView: View {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
                         ForEach(model.prs.itemDiffs) { diff in
                             Section {
-                                FileDiffContentView(diff: diff, mode: model.diffMode)
+                                if let number = reviewNumber, !diff.isBinary, !diff.hunks.isEmpty {
+                                    reviewableContent(diff, number: number)
+                                } else {
+                                    FileDiffContentView(diff: diff, mode: model.diffMode)
+                                }
                             } header: {
                                 FileSectionHeader(diff: diff) {
                                     fileViewedToggle(for: diff)
@@ -96,6 +103,67 @@ struct PullRequestItemDiffView: View {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// The selected PR's number when it accepts reviews (open, including
+    /// drafts) — gates the comment "+" buttons and the Review changes button.
+    private var reviewNumber: Int? {
+        guard let number = model.prs.selectedNumber,
+              model.prs.detailsCache[number]?.state == "OPEN" else { return nil }
+        return number
+    }
+
+    @ViewBuilder
+    private func reviewableContent(_ diff: FileDiff, number: Int) -> some View {
+        switch model.diffMode {
+        case .unified:
+            ForEach(diff.hunks) { hunk in
+                HunkHeaderView(text: hunk.header)
+                ForEach(hunk.lines) { line in
+                    reviewableLine(line, in: diff, number: number)
+                }
+            }
+        case .split:
+            // Split rows still surface existing drafts below the matching
+            // row; composing new comments happens in unified mode.
+            ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
+                SplitDiffRowView(row: row)
+                ForEach(splitRowComments(row, in: diff, number: number)) { comment in
+                    PendingReviewCommentCard(model: model, comment: comment, number: number)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func reviewableLine(_ line: DiffLine, in diff: FileDiff, number: Int) -> some View {
+        let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line)
+        ReviewableDiffLineView(line: line, canComment: anchor != nil) {
+            if let anchor {
+                model.prs.openReviewComposer(at: anchor)
+            }
+        }
+        if let anchor {
+            ForEach(model.prs.pendingComments(at: anchor, in: number)) { comment in
+                PendingReviewCommentCard(model: model, comment: comment, number: number)
+            }
+            if model.prs.reviewComposerAnchor == anchor {
+                ReviewCommentComposerView(model: model, number: number)
+            }
+        }
+    }
+
+    private func splitRowComments(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [PendingReviewComment] {
+        guard !row.isHunkHeader else { return [] }
+        return model.prs.pendingComments(for: number).filter { comment in
+            guard comment.anchor.path == diff.path else { return false }
+            switch comment.anchor.side {
+            case .left:
+                return row.left.kind == .deletion && row.left.number == comment.anchor.line
+            case .right:
+                return row.right.kind != nil && row.right.number == comment.anchor.line
             }
         }
     }
@@ -195,6 +263,11 @@ struct PullRequestDetailView: View {
 
                 sectionTitle("Reviewers")
                 reviewersCard
+
+                if detail.state == "OPEN" {
+                    reviewBox
+                        .padding(.top, 14)
+                }
 
                 sectionTitle("Commits", count: detail.commits.count)
                 commitsCard
@@ -389,6 +462,30 @@ struct PullRequestDetailView: View {
         .cardStyle()
     }
 
+    /// Overview entry point into the review flow: shows the pending draft
+    /// count and the same "Review changes" form the diff header offers.
+    private var reviewBox: some View {
+        let count = model.prs.pendingComments(for: detail.number).count
+        return HStack(spacing: 11) {
+            Image(systemName: "text.bubble")
+                .font(.system(size: 17))
+                .foregroundStyle(count > 0 ? DesignStyle.tagAmber : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(count > 0 ? "Review in progress" : "Review this pull request")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(count > 0
+                    ? "^[\(count) pending comment](inflect: true) will be submitted with your review."
+                    : "Comment on diff lines in Commits or Files Changed to draft review comments.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            ReviewChangesButton(model: model, number: detail.number)
+        }
+        .padding(16)
+        .glassEffect(in: .rect(cornerRadius: 12))
+    }
+
     private var canMerge: Bool {
         detail.state == "OPEN" && !detail.isDraft && detail.mergeable == "MERGEABLE"
     }
@@ -443,5 +540,254 @@ struct PullRequestDetailView: View {
             if detail.isDraft { return "Mark as ready for review before merging." }
             return "Merging will create a merge commit on \(detail.base)."
         }
+    }
+}
+
+// MARK: - Review comments
+
+/// Hoverable unified diff line with a "+" bubble that opens the review
+/// comment composer, GitHub-style.
+struct ReviewableDiffLineView: View {
+    let line: DiffLine
+    let canComment: Bool
+    let onComment: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        UnifiedDiffLineView(line: line)
+            .background(isHovering && canComment ? Color.primary.opacity(0.04) : .clear)
+            .overlay(alignment: .leading) {
+                if isHovering && canComment {
+                    Button(action: onComment) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 17, height: 17)
+                            .background(DesignStyle.linkBlue, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.leading, 3)
+                    .help("Add a review comment on this line")
+                }
+            }
+            .onHover { isHovering = $0 }
+    }
+}
+
+/// A draft review comment shown inline under its anchor line. Drafts stay
+/// pending until the review is submitted.
+struct PendingReviewCommentCard: View {
+    var model: RepoViewModel
+    let comment: PendingReviewComment
+    let number: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Pending")
+                    .font(.system(size: 10, weight: .semibold))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(DesignStyle.tagAmber.opacity(0.18), in: Capsule())
+                    .foregroundStyle(DesignStyle.tagAmber)
+                Text("Line \(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Edit") {
+                    model.prs.editComment(comment)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(DesignStyle.linkBlue)
+                Button("Delete") {
+                    model.prs.deleteComment(comment.id, in: number)
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 11))
+                .foregroundStyle(DesignStyle.deletion)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(.quaternary.opacity(0.3))
+            Divider()
+            Text(comment.body)
+                .font(.system(size: 12.5))
+                .lineSpacing(3)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .cardStyle()
+        .padding(.leading, 60)
+        .padding(.trailing, 16)
+        .padding(.vertical, 5)
+    }
+}
+
+/// Inline composer for adding or editing a draft review comment, anchored
+/// under the diff line it targets.
+struct ReviewCommentComposerView: View {
+    var model: RepoViewModel
+    let number: Int
+
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        @Bindable var prs = model.prs
+        VStack(alignment: .leading, spacing: 8) {
+            PlaceholderTextEditor(text: $prs.reviewComposerText, placeholder: "Leave a review comment")
+                .focused($focused)
+            HStack(spacing: 8) {
+                Text("Drafts are submitted together with your review.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancel") {
+                    model.prs.closeReviewComposer()
+                }
+                .controlSize(.small)
+                Button(model.prs.editingCommentID == nil ? "Add review comment" : "Save comment") {
+                    model.prs.saveComposerComment(in: number)
+                }
+                .buttonStyle(.glassProminent)
+                .controlSize(.small)
+                .disabled(prs.reviewComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(12)
+        .cardStyle()
+        .padding(.leading, 60)
+        .padding(.trailing, 16)
+        .padding(.vertical, 5)
+        .onAppear { focused = true }
+    }
+}
+
+/// "Review changes" button with the pending draft count, opening the review
+/// submission form as a popover — the GitHub Files Changed flow.
+struct ReviewChangesButton: View {
+    var model: RepoViewModel
+    let number: Int
+
+    @State private var showForm = false
+
+    var body: some View {
+        let count = model.prs.pendingComments(for: number).count
+        Button {
+            showForm = true
+        } label: {
+            HStack(spacing: 5) {
+                Text("Review changes")
+                    .font(.system(size: 12))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(.white.opacity(0.25), in: Capsule())
+                }
+            }
+        }
+        .buttonStyle(.glassProminent)
+        .tint(DesignStyle.addition)
+        .controlSize(.small)
+        .popover(isPresented: $showForm, arrowEdge: .bottom) {
+            ReviewSubmitForm(model: model, number: number, isPresented: $showForm)
+        }
+    }
+}
+
+/// Popover form finishing a review: optional summary, verdict radio group,
+/// and the submit action that sends every draft comment along with it.
+struct ReviewSubmitForm: View {
+    var model: RepoViewModel
+    let number: Int
+    @Binding var isPresented: Bool
+
+    @State private var event: ReviewEvent = .comment
+    @State private var summary = ""
+
+    private var pendingCount: Int {
+        model.prs.pendingComments(for: number).count
+    }
+
+    /// GitHub rejects APPROVE / REQUEST_CHANGES on the viewer's own PR.
+    private var isOwnPR: Bool {
+        guard let login = model.prs.viewerLogin,
+              let author = model.prs.detailsCache[number]?.authorLogin else { return false }
+        return login.caseInsensitiveCompare(author) == .orderedSame
+    }
+
+    private var canSubmit: Bool {
+        if model.prs.isSubmittingReview { return false }
+        if isOwnPR && event != .comment { return false }
+        if event == .approve { return true }
+        // COMMENT / REQUEST_CHANGES need something to say: a summary or at
+        // least one draft comment.
+        return !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingCount > 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Finish your review")
+                .font(.system(size: 13, weight: .bold))
+
+            PlaceholderTextEditor(text: $summary, placeholder: "Leave a summary comment", height: 84)
+
+            Picker("Verdict", selection: $event) {
+                ForEach(ReviewEvent.allCases) { event in
+                    Text(event.label).tag(event)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+
+            Text(event.detail)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+
+            if isOwnPR && event != .comment {
+                Text("You can't \(event == .approve ? "approve" : "request changes on") your own pull request.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignStyle.deletion)
+            }
+
+            if let error = model.prs.reviewSubmitError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignStyle.deletion)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack {
+                Text(pendingCount == 0
+                    ? "No pending comments"
+                    : "^[\(pendingCount) pending comment](inflect: true) will be submitted")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    Task {
+                        if await model.prs.submitReview(event, body: summary, for: number) {
+                            isPresented = false
+                        }
+                    }
+                } label: {
+                    if model.prs.isSubmittingReview {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Submit review")
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .disabled(!canSubmit)
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
+        .onAppear { model.prs.reviewSubmitError = nil }
     }
 }

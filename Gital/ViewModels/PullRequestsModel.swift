@@ -112,6 +112,10 @@ final class PullRequestsModel {
         didSet {
             if oldValue != selectedNumber {
                 selectedItem = nil
+                // The open comment composer must not carry over: another PR
+                // can contain the same path/line anchor, where it would
+                // resurface with the previous PR's half-typed text.
+                closeReviewComposer()
                 Task { await loadDetail() }
             }
         }
@@ -313,6 +317,102 @@ final class PullRequestsModel {
             } catch {
                 loadError = error.localizedDescription
             }
+        }
+    }
+
+    // MARK: - Review
+
+    /// Draft review comments per PR number. Like a GitHub pending review,
+    /// they stay in the draft state until submitted all together with a
+    /// verdict via `submitReview`.
+    var pendingComments: [Int: [PendingReviewComment]] = [:]
+    /// Anchor the review comment composer is currently open at, nil when
+    /// closed. Owned by the model so the composer survives LazyVStack row
+    /// recycling while the user scrolls.
+    var reviewComposerAnchor: ReviewCommentAnchor?
+    var reviewComposerText = ""
+    /// When set, the composer is editing this existing draft instead of
+    /// adding a new one.
+    var editingCommentID: UUID?
+    var isSubmittingReview = false
+    var reviewSubmitError: String?
+
+    func pendingComments(for number: Int) -> [PendingReviewComment] {
+        pendingComments[number] ?? []
+    }
+
+    func pendingComments(at anchor: ReviewCommentAnchor, in number: Int) -> [PendingReviewComment] {
+        pendingComments(for: number).filter { $0.anchor == anchor }
+    }
+
+    func openReviewComposer(at anchor: ReviewCommentAnchor) {
+        reviewComposerAnchor = anchor
+        reviewComposerText = ""
+        editingCommentID = nil
+    }
+
+    func editComment(_ comment: PendingReviewComment) {
+        reviewComposerAnchor = comment.anchor
+        reviewComposerText = comment.body
+        editingCommentID = comment.id
+    }
+
+    func closeReviewComposer() {
+        reviewComposerAnchor = nil
+        reviewComposerText = ""
+        editingCommentID = nil
+    }
+
+    /// Saves the composer's text as a new draft comment, or into the draft
+    /// being edited; empty text is ignored (the UI disables the button).
+    func saveComposerComment(in number: Int) {
+        guard let anchor = reviewComposerAnchor else { return }
+        let body = reviewComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        var comments = pendingComments(for: number)
+        if let id = editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
+            comments[index].body = body
+        } else {
+            comments.append(PendingReviewComment(anchor: anchor, body: body))
+        }
+        pendingComments[number] = comments
+        closeReviewComposer()
+    }
+
+    func deleteComment(_ id: UUID, in number: Int) {
+        var comments = pendingComments(for: number)
+        comments.removeAll { $0.id == id }
+        pendingComments[number] = comments.isEmpty ? nil : comments
+        if editingCommentID == id {
+            closeReviewComposer()
+        }
+    }
+
+    /// Submits the pending review: verdict, summary body, and all draft
+    /// comments go to GitHub in one call. Returns true on success (drafts
+    /// are cleared and the detail reloads so the reviewer list updates).
+    func submitReview(_ event: ReviewEvent, body: String, for number: Int) async -> Bool {
+        guard !isSubmittingReview else { return false }
+        isSubmittingReview = true
+        defer { isSubmittingReview = false }
+        do {
+            try await github.submitReview(
+                number: number,
+                event: event,
+                body: body,
+                comments: pendingComments(for: number)
+            )
+            pendingComments[number] = nil
+            reviewSubmitError = nil
+            closeReviewComposer()
+            detailsCache[number] = nil
+            if selectedNumber == number {
+                await loadDetail()
+            }
+            return true
+        } catch {
+            reviewSubmitError = error.localizedDescription
+            return false
         }
     }
 

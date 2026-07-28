@@ -241,6 +241,44 @@ struct GitHubService {
         _ = try await runGH(["pr", "merge", String(number), "--merge"])
     }
 
+    /// Submits a review with all of its draft comments in one shot, exactly
+    /// like GitHub's "Review changes" button: comments and verdict travel in
+    /// a single `POST /pulls/{n}/reviews` call. `{owner}/{repo}` placeholders
+    /// are resolved by gh from the repository the command runs in.
+    func submitReview(number: Int, event: ReviewEvent, body: String, comments: [PendingReviewComment]) async throws {
+        let payload = try Self.reviewSubmissionBody(event: event, body: body, comments: comments)
+        _ = try await runGH(
+            ["api", "repos/{owner}/{repo}/pulls/\(number)/reviews", "--method", "POST", "--input", "-"],
+            stdin: payload
+        )
+    }
+
+    static func reviewSubmissionBody(event: ReviewEvent, body: String, comments: [PendingReviewComment]) throws -> Data {
+        struct CommentPayload: Encodable {
+            let path: String
+            let side: String
+            let line: Int
+            let body: String
+        }
+        struct Payload: Encodable {
+            let event: String
+            let body: String?
+            let comments: [CommentPayload]?
+        }
+
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let payload = Payload(
+            event: event.rawValue,
+            body: trimmed.isEmpty ? nil : trimmed,
+            comments: comments.isEmpty ? nil : comments.map {
+                CommentPayload(path: $0.anchor.path, side: $0.anchor.side.rawValue, line: $0.anchor.line, body: $0.body)
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(payload)
+    }
+
     /// Decodes gh JSON output, wrapping decode failures with the subcommand
     /// that produced the data — a raw `DecodingError` in the UI gives the
     /// user no clue which gh call broke.
@@ -260,7 +298,7 @@ struct GitHubService {
         return relative.localizedString(for: date, relativeTo: Date())
     }
 
-    private func runGH(_ arguments: [String]) async throws -> Data {
+    private func runGH(_ arguments: [String], stdin: Data? = nil) async throws -> Data {
         // gh runs directly (no `zsh -lc`): a login profile that prints to
         // stdout would prepend garbage to gh's JSON and break every decode,
         // and the shell indirection also made the "gh not installed" branch
@@ -274,7 +312,8 @@ struct GitHubService {
             result = try await Subprocess.run(
                 executable: ghURL,
                 arguments: arguments,
-                currentDirectory: repoRoot
+                currentDirectory: repoRoot,
+                stdin: stdin
             )
         } catch {
             throw GitHubError.launchFailed(error.localizedDescription)
