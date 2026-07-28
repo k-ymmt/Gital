@@ -82,33 +82,20 @@ enum CommandLineToolInstaller {
             + " & \" \" & quoted form of \(appleScriptLiteral(installPath))"
             + " with administrator privileges"
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", appleScript]
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
+        let result = try await Subprocess.run(
+            executable: URL(fileURLWithPath: "/usr/bin/osascript"),
+            arguments: ["-e", appleScript]
+        )
 
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            process.terminationHandler = { _ in continuation.resume() }
-            do {
-                try process.run()
-            } catch {
-                process.terminationHandler = nil
-                continuation.resume(throwing: error)
-            }
-        }
-
-        guard process.terminationStatus == 0 else {
-            let stderrData = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
-            let stderr = String(decoding: stderrData, as: UTF8.self)
+        guard result.status == 0 else {
+            let stderr = String(decoding: result.stderr, as: UTF8.self)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if stderr.contains("(-128)") {  // user cancelled the password prompt
                 throw InstallError(message: "Installation was cancelled.")
             }
             throw InstallError(
                 message: stderr.isEmpty
-                    ? "The install helper exited with status \(process.terminationStatus)."
+                    ? "The install helper exited with status \(result.status)."
                     : stderr)
         }
     }

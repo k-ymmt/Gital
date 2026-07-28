@@ -255,7 +255,6 @@ struct GitHubService {
     }
 
     private func runGH(_ arguments: [String]) async throws -> Data {
-        let repoRoot = self.repoRoot
         // gh runs directly (no `zsh -lc`): a login profile that prints to
         // stdout would prepend garbage to gh's JSON and break every decode,
         // and the shell indirection also made the "gh not installed" branch
@@ -263,91 +262,26 @@ struct GitHubService {
         guard let ghURL = ExecutableLocator.shared.find("gh") else {
             throw GitHubError.notInstalled
         }
-        return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = ghURL
-                process.arguments = arguments
-                process.currentDirectoryURL = repoRoot
-                process.standardInput = FileHandle.nullDevice
 
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                // Drain both pipes concurrently; sequential reads deadlock
-                // when gh fills the stderr pipe buffer while stdout is open.
-                final class Buffer: @unchecked Sendable {
-                    private let lock = NSLock()
-                    private var data = Data()
-                    func append(_ chunk: Data) { lock.lock(); data.append(chunk); lock.unlock() }
-                    var value: Data { lock.lock(); defer { lock.unlock() }; return data }
-                }
-                let stdoutBuffer = Buffer()
-                let stderrBuffer = Buffer()
-                // Exit is observed via `terminationHandler`, not `waitUntilExit`:
-                // the latter polls the current thread's run loop, and on a GCD
-                // worker thread the termination notification can be missed,
-                // hanging forever after gh has already exited.
-                let done = DispatchGroup()
-                let stdoutGate = DrainGate()
-                let stderrGate = DrainGate()
-                for (pipe, buffer, gate) in [(stdoutPipe, stdoutBuffer, stdoutGate), (stderrPipe, stderrBuffer, stderrGate)] {
-                    done.enter()
-                    pipe.fileHandleForReading.readabilityHandler = { handle in
-                        let chunk = handle.availableData
-                        if chunk.isEmpty {
-                            handle.readabilityHandler = nil
-                            if gate.finish() { done.leave() }
-                        } else {
-                            buffer.append(chunk)
-                        }
-                    }
-                }
-                done.enter()
-                process.terminationHandler = { _ in
-                    done.leave()
-                    // Grace cutoff mirroring GitExecutor: a background child
-                    // of gh holding the pipe write ends must not hang this
-                    // request forever after gh itself exited.
-                    DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + GitExecutor.drainGracePeriod) {
-                        for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
-                            if gate.finish() {
-                                pipe.fileHandleForReading.readabilityHandler = nil
-                                done.leave()
-                            }
-                        }
-                    }
-                }
-
-                do {
-                    try process.run()
-                } catch {
-                    for (pipe, gate) in [(stdoutPipe, stdoutGate), (stderrPipe, stderrGate)] {
-                        pipe.fileHandleForReading.readabilityHandler = nil
-                        if gate.finish() { done.leave() }
-                    }
-                    process.terminationHandler = nil
-                    done.leave()
-                    continuation.resume(throwing: GitHubError.launchFailed(error.localizedDescription))
-                    return
-                }
-
-                done.notify(queue: .global(qos: .userInitiated)) {
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: stdoutBuffer.value)
-                    } else {
-                        let message = String(decoding: stderrBuffer.value, as: UTF8.self)
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        continuation.resume(throwing: GitHubError.commandFailed(
-                            command: "gh " + arguments.prefix(2).joined(separator: " "),
-                            status: process.terminationStatus,
-                            stderr: message
-                        ))
-                    }
-                }
-            }
+        let result: Subprocess.Output
+        do {
+            result = try await Subprocess.run(
+                executable: ghURL,
+                arguments: arguments,
+                currentDirectory: repoRoot
+            )
+        } catch {
+            throw GitHubError.launchFailed(error.localizedDescription)
         }
+
+        guard result.status == 0 else {
+            throw GitHubError.commandFailed(
+                command: "gh " + arguments.prefix(2).joined(separator: " "),
+                status: result.status,
+                stderr: String(decoding: result.stderr, as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        return result.stdout
     }
 }

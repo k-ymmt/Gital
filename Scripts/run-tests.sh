@@ -7,6 +7,7 @@ BUILD_DIR="${TMPDIR:-/tmp}/gital-tests"
 mkdir -p "$BUILD_DIR"
 
 swiftc \
+  Gital/Support/Subprocess.swift \
   Gital/Git/GitModels.swift \
   Gital/Git/GitExecutor.swift \
   Gital/Git/DiffParser.swift \
