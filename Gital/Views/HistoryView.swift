@@ -47,7 +47,6 @@ struct HistoryView: View {
                             CommitRowView(
                                 commit: commit,
                                 row: model.graph.rows[commit.hash],
-                                laneSpacing: laneSpacing,
                                 isSelected: model.selectedCommitHash == commit.hash
                             )
                             .contentShape(Rectangle())
@@ -104,20 +103,6 @@ struct HistoryView: View {
         .task(id: model.commits.count) {
             await model.loadMoreCommits()
         }
-    }
-
-    // The graph must stay bounded even on lane-heavy histories: rows size
-    // themselves to their own lane count, but the widest row is incompressible
-    // and would otherwise push the whole split view wider than the window.
-    private static let maxGraphWidth: CGFloat = 240
-    private static let naturalLaneSpacing: CGFloat = 15
-
-    // No lower bound on the spacing: a floor would push lanes past the capped
-    // width and silently clip them, so extreme histories get denser, not cut.
-    private var laneSpacing: CGFloat {
-        let lanes = CGFloat(max(model.graph.maxLanes, 1))
-        let available = Self.maxGraphWidth - 24
-        return min(Self.naturalLaneSpacing, available / lanes)
     }
 
     private var columnHeader: some View {
@@ -188,21 +173,23 @@ struct RefCreationSheet: View {
 struct CommitRowView: View {
     let commit: Commit
     let row: CommitGraph.Row?
-    let laneSpacing: CGFloat
     let isSelected: Bool
 
     private static let maxVisibleRefs = 3
+    private static let laneSpacing: CGFloat = 15
 
     // Sized per row, not to the widest row in the history: the message starts
     // a fixed gap after this row's rightmost lane, like `git log --graph`.
+    // Lane spacing never compresses on lane-heavy histories — the graph keeps
+    // its natural look and the commit message truncates instead.
     private var rowGraphWidth: CGFloat {
         let lanes = CGFloat(max(row?.laneCount ?? 1, 1))
-        return 10 + (lanes - 1) * laneSpacing + 14
+        return 10 + (lanes - 1) * Self.laneSpacing + 14
     }
 
     var body: some View {
         HStack(spacing: 0) {
-            GraphRowCanvas(row: row, laneSpacing: laneSpacing)
+            GraphRowCanvas(row: row, laneSpacing: Self.laneSpacing)
                 .frame(width: rowGraphWidth, height: 32)
 
             HStack(spacing: 6) {
@@ -219,6 +206,9 @@ struct CommitRowView: View {
                 Text(commit.subject)
                     .font(.system(size: 12.5))
                     .lineLimit(1)
+                    // Lowest priority in the row: when the graph or ref badges
+                    // need room, the message is what gets truncated.
+                    .layoutPriority(-1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
