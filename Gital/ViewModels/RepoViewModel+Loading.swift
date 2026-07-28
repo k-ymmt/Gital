@@ -17,7 +17,7 @@ extension RepoViewModel {
         if selectedCommitHash == nil {
             selectedCommitHash = commits.first?.hash
         }
-        Task { await refreshPullRequests() }
+        Task { await prs.refresh() }
     }
 
     func refreshStatus() async {
@@ -29,19 +29,18 @@ extension RepoViewModel {
     }
 
     func refreshLog() async {
-        logGeneration += 1
-        let generation = logGeneration
-        do {
-            // Re-fetch at least as many commits as are already loaded so a
-            // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
-            let limit = max(Self.logPageSize, commits.count)
-            let loaded = try await repository.log(limit: limit)
-            guard generation == logGeneration else { return }
+        // Re-fetch at least as many commits as are already loaded so a
+        // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
+        let limit = max(Self.logPageSize, commits.count)
+        switch await logLoader.run({ try await self.repository.log(limit: limit) }) {
+        case .success(let loaded):
             commits = loaded
             hasMoreCommits = loaded.count >= limit
             graph = CommitGraph(commits: commits)
-        } catch {
+        case .failure(let error):
             report(error)
+        case nil:
+            break
         }
     }
 
@@ -49,19 +48,20 @@ extension RepoViewModel {
         guard hasMoreCommits, !isLoadingMoreCommits, !commits.isEmpty else { return }
         isLoadingMoreCommits = true
         defer { isLoadingMoreCommits = false }
-        logGeneration += 1
-        let generation = logGeneration
-        do {
-            let page = try await repository.log(limit: Self.logPageSize, skip: commits.count)
-            // A refresh that started later has replaced `commits`; appending a
-            // page computed against the old offsets would rewind or duplicate.
-            guard generation == logGeneration else { return }
+        let skip = commits.count
+        // Shares logLoader with refreshLog: a refresh that started later has
+        // replaced `commits`, and appending a page computed against the old
+        // offsets would rewind or duplicate.
+        switch await logLoader.run({ try await self.repository.log(limit: Self.logPageSize, skip: skip) }) {
+        case .success(let page):
             hasMoreCommits = page.count >= Self.logPageSize
             let known = Set(commits.map(\.hash))
             commits.append(contentsOf: page.filter { !known.contains($0.hash) })
             graph = CommitGraph(commits: commits)
-        } catch {
+        case .failure(let error):
             report(error)
+        case nil:
+            break
         }
     }
 
@@ -83,42 +83,22 @@ extension RepoViewModel {
         }
     }
 
-    func refreshPullRequests() async {
-        do {
-            // Fetched once per repo session; a failure (offline, gh not
-            // authenticated) is non-fatal — the "awaiting your review"
-            // filter just matches nothing until the next refresh.
-            async let viewerTask = prViewerLogin == nil ? github.viewerLogin() : nil
-            pullRequests = try await github.listPullRequests()
-            prLoadError = nil
-            if let login = try? await viewerTask, !login.isEmpty {
-                prViewerLogin = login
-            }
-        } catch {
-            pullRequests = []
-            prLoadError = error.localizedDescription
-        }
-    }
-
     func loadCommitDetail() async {
         guard let hash = selectedCommitHash else {
             commitDetail = nil
             commitFiles = []
             commitDiffs = []
+            commitDetailLoader.invalidate()
             return
         }
-        commitDetailGeneration += 1
-        let generation = commitDetailGeneration
-        do {
+        let result = await commitDetailLoader.run { [repository] in
             async let detailTask = repository.commitDetail(hash)
             async let filesTask = repository.commitFileStats(hash)
             async let diffsTask = repository.diffCommit(hash)
-            let detail = try await detailTask
-            let files = try await filesTask
-            let diffs = try await diffsTask
-            // A newer selection's load may already have finished — never let
-            // this slower result overwrite it.
-            guard generation == commitDetailGeneration, selectedCommitHash == hash else { return }
+            return (try await detailTask, try await filesTask, try await diffsTask)
+        }
+        switch result {
+        case .success(let (detail, files, diffs)):
             commitDetail = detail
             commitFiles = files
             commitDiffs = diffs
@@ -128,16 +108,17 @@ extension RepoViewModel {
             } else if selectedCommitFilePath == nil {
                 selectedCommitFilePath = commitFiles.first?.path
             }
-        } catch {
+        case .failure(let error):
             report(error)
+        case nil:
+            break
         }
     }
 
     func loadWorkingDiffs() async {
-        workingDiffsGeneration += 1
-        let generation = workingDiffsGeneration
         let selection = selectedChange
-        do {
+        let status = self.status
+        let result = await workingDiffsLoader.run { [repository] in
             var diffs: [FileDiff]
             if let selection {
                 let side = selection.staged ? status.staged : status.unstaged
@@ -162,8 +143,10 @@ extension RepoViewModel {
                     diffs.append(contentsOf: untracked)
                 }
             }
-            guard generation == workingDiffsGeneration, selection == selectedChange else { return }
-
+            return diffs
+        }
+        switch result {
+        case .success(let diffs):
             // Line IDs are positional: after a re-parse the same ID can denote
             // a *different physical line* (an edit earlier in the file shifts
             // everything below). Keep a selected ID only when the line it now
@@ -182,8 +165,10 @@ extension RepoViewModel {
                 guard let current = currentLines[id] else { return false }
                 return previousLines[id] == current
             }
-        } catch {
+        case .failure(let error):
             report(error)
+        case nil:
+            break
         }
     }
 
@@ -191,105 +176,16 @@ extension RepoViewModel {
         guard let ref = selectedStashRef,
               let stash = stashes.first(where: { $0.id == ref }) else {
             stashDiffs = []
+            stashDiffLoader.invalidate()
             return
         }
-        stashDiffGeneration += 1
-        let generation = stashDiffGeneration
-        do {
-            let diffs = try await repository.stashDiff(stash)
-            guard generation == stashDiffGeneration, selectedStashRef == ref else { return }
+        switch await stashDiffLoader.run({ try await self.repository.stashDiff(stash) }) {
+        case .success(let diffs):
             stashDiffs = diffs
-        } catch {
+        case .failure(let error):
             report(error)
-        }
-    }
-
-    func loadPRDetail() async {
-        guard let number = selectedPRNumber else {
-            prDetail = nil
-            return
-        }
-        if let cached = prDetailsCache[number] {
-            prDetail = cached
-            return
-        }
-        prDetail = nil
-        do {
-            let detail = try await github.pullRequestDetail(number: number)
-            prDetailsCache[number] = detail
-            if selectedPRNumber == number {
-                prDetail = detail
-            }
-        } catch {
-            prLoadError = error.localizedDescription
-        }
-    }
-
-    func loadPRItemDiffs() async {
-        prItemGeneration += 1
-        let generation = prItemGeneration
-        guard let item = selectedPRItem, let number = selectedPRNumber else {
-            prItemDiffs = []
-            prItemLoadError = nil
-            return
-        }
-        prItemDiffs = []
-        prItemLoadError = nil
-        do {
-            let diffs: [FileDiff]
-            switch item {
-            case .commit(let hash):
-                // PR commits live in the local object store once the remote
-                // branch has been fetched. When the object is missing (fork
-                // PRs, never-fetched branches), pull it in via the PR head
-                // ref and retry once.
-                do {
-                    diffs = try await repository.diffCommit(hash)
-                } catch {
-                    try await repository.fetchPullRequestHead(number: number)
-                    guard generation == prItemGeneration else { return }
-                    diffs = try await repository.diffCommit(hash)
-                }
-            case .file(let path):
-                let all: [FileDiff]
-                if let cached = prDiffsCache[number] {
-                    all = cached
-                } else {
-                    let raw = try await github.pullRequestDiff(number: number)
-                    all = DiffParser.parse(raw, scope: .snapshot)
-                    guard generation == prItemGeneration else { return }
-                    prDiffsCache[number] = all
-                }
-                diffs = all.filter { $0.path == path }
-            }
-            guard generation == prItemGeneration, selectedPRItem == item else { return }
-            prItemDiffs = diffs
-            if diffs.isEmpty {
-                prItemLoadError = "No changes found for this item."
-            }
-        } catch {
-            guard generation == prItemGeneration, selectedPRItem == item else { return }
-            switch item {
-            case .commit:
-                prItemLoadError = "Could not load this commit, even after fetching the pull request from origin.\n\(error.localizedDescription)"
-            case .file:
-                prItemLoadError = error.localizedDescription
-            }
-        }
-    }
-
-    func expandPR(_ number: Int) async {
-        if expandedPRs.contains(number) {
-            expandedPRs.remove(number)
-            return
-        }
-        expandedPRs.insert(number)
-        if prDetailsCache[number] == nil {
-            do {
-                prDetailsCache[number] = try await github.pullRequestDetail(number: number)
-            } catch {
-                prLoadError = error.localizedDescription
-            }
+        case nil:
+            break
         }
     }
 }

@@ -4,11 +4,11 @@ struct PullRequestView: View {
     @Bindable var model: RepoViewModel
 
     var body: some View {
-        if let item = model.selectedPRItem {
+        if let item = model.prs.selectedItem {
             PullRequestItemDiffView(model: model, item: item)
-        } else if let detail = model.prDetail {
+        } else if let detail = model.prs.detail {
             PullRequestDetailView(model: model, detail: detail)
-        } else if model.selectedPRNumber != nil {
+        } else if model.prs.selectedNumber != nil {
             ProgressView("Loading pull request…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
@@ -16,7 +16,7 @@ struct PullRequestView: View {
                 Image(systemName: "arrow.triangle.pull")
                     .font(.system(size: 34))
                     .foregroundStyle(.secondary)
-                Text(model.prLoadError ?? "Select a pull request")
+                Text(model.prs.loadError ?? "Select a pull request")
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 420)
@@ -29,13 +29,13 @@ struct PullRequestView: View {
 /// Diff pane for a commit or changed file selected in a PR's sidebar rows.
 struct PullRequestItemDiffView: View {
     @Bindable var model: RepoViewModel
-    let item: RepoViewModel.PRItemSelection
+    let item: PullRequestsModel.ItemSelection
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Button {
-                    model.selectedPRItem = nil
+                    model.prs.selectedItem = nil
                 } label: {
                     Label("Overview", systemImage: "chevron.left")
                         .font(.system(size: 12))
@@ -48,10 +48,10 @@ struct PullRequestItemDiffView: View {
 
                 itemTitle
                 Spacer()
-                if case .commit(let hash) = item, let number = model.selectedPRNumber {
+                if case .commit(let hash) = item, let number = model.prs.selectedNumber {
                     Toggle("Viewed", isOn: Binding(
-                        get: { model.isPRCommitViewed(hash, in: number) },
-                        set: { _ in model.togglePRCommitViewed(hash, in: number) }
+                        get: { model.prs.isCommitViewed(hash, in: number) },
+                        set: { _ in model.prs.toggleCommitViewed(hash, in: number) }
                     ))
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
@@ -64,7 +64,7 @@ struct PullRequestItemDiffView: View {
             .background(.quaternary.opacity(0.25))
             Divider()
 
-            if let error = model.prItemLoadError {
+            if let error = model.prs.itemLoadError {
                 VStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle")
                         .font(.system(size: 30))
@@ -76,13 +76,13 @@ struct PullRequestItemDiffView: View {
                         .frame(maxWidth: 460)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if model.prItemDiffs.isEmpty {
+            } else if model.prs.itemDiffs.isEmpty {
                 ProgressView()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                        ForEach(model.prItemDiffs) { diff in
+                        ForEach(model.prs.itemDiffs) { diff in
                             Section {
                                 FileDiffContentView(diff: diff, mode: model.diffMode)
                             } header: {
@@ -126,16 +126,16 @@ struct PullRequestItemDiffView: View {
     /// is viewed); on a Files Changed selection it toggles the PR-wide flag.
     @ViewBuilder
     private func fileViewedToggle(for diff: FileDiff) -> some View {
-        if let number = model.selectedPRNumber {
+        if let number = model.prs.selectedNumber {
             switch item {
             case .commit(let hash):
                 Toggle("Viewed", isOn: Binding(
-                    get: { model.isPRCommitFileViewed(commit: hash, path: diff.path, in: number) },
+                    get: { model.prs.isCommitFileViewed(commit: hash, path: diff.path, in: number) },
                     set: { _ in
-                        model.togglePRCommitFileViewed(
+                        model.prs.toggleCommitFileViewed(
                             commit: hash,
                             path: diff.path,
-                            allPaths: model.prItemDiffs.map(\.path),
+                            allPaths: model.prs.itemDiffs.map(\.path),
                             in: number
                         )
                     }
@@ -144,8 +144,8 @@ struct PullRequestItemDiffView: View {
                 .font(.system(size: 11.5))
             case .file(let path):
                 Toggle("Viewed", isOn: Binding(
-                    get: { model.isPRFileViewed(path, in: number) },
-                    set: { _ in model.togglePRFileViewed(path, in: number) }
+                    get: { model.prs.isFileViewed(path, in: number) },
+                    set: { _ in model.prs.toggleFileViewed(path, in: number) }
                 ))
                 .toggleStyle(.checkbox)
                 .font(.system(size: 11.5))
@@ -154,8 +154,8 @@ struct PullRequestItemDiffView: View {
     }
 
     private func commitMessage(for hash: String) -> String? {
-        guard let number = model.selectedPRNumber else { return nil }
-        return model.prDetailsCache[number]?.commits.first { $0.hash == hash }?.message
+        guard let number = model.prs.selectedNumber else { return nil }
+        return model.prs.detailsCache[number]?.commits.first { $0.hash == hash }?.message
     }
 }
 
@@ -163,7 +163,7 @@ struct PullRequestDetailView: View {
     @Bindable var model: RepoViewModel
     let detail: PullRequestDetail
 
-    private var isMerging: Bool { model.mergingPRNumber == detail.number }
+    private var isMerging: Bool { model.prs.mergingNumber == detail.number }
 
     var body: some View {
         ScrollView {
@@ -357,7 +357,7 @@ struct PullRequestDetailView: View {
     private var commitsCard: some View {
         VStack(spacing: 0) {
             ForEach(detail.commits) { commit in
-                let viewed = model.isPRCommitViewed(commit.hash, in: detail.number)
+                let viewed = model.prs.isCommitViewed(commit.hash, in: detail.number)
                 HStack(spacing: 10) {
                     HStack(spacing: 10) {
                         Image(systemName: "circle")
@@ -376,7 +376,7 @@ struct PullRequestDetailView: View {
                     }
                     .opacity(viewed ? 0.4 : 1)
                     Button {
-                        model.togglePRCommitViewed(commit.hash, in: detail.number)
+                        model.prs.toggleCommitViewed(commit.hash, in: detail.number)
                     } label: {
                         Image(systemName: viewed ? "checkmark.circle.fill" : "checkmark.circle")
                             .font(.system(size: 12))
@@ -389,7 +389,7 @@ struct PullRequestDetailView: View {
                 .padding(.vertical, 8)
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    model.selectPRItem(.commit(hash: commit.hash), in: detail.number)
+                    model.prs.selectItem(.commit(hash: commit.hash), in: detail.number)
                 }
                 .help("Click to show this commit's diff")
                 if commit.id != detail.commits.last?.id {
@@ -420,7 +420,7 @@ struct PullRequestDetailView: View {
             }
             Spacer()
             Button {
-                model.mergePullRequest(detail.number)
+                model.prs.merge(detail.number)
             } label: {
                 if isMerging {
                     ProgressView().controlSize(.small)

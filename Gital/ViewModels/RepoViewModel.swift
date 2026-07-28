@@ -1,54 +1,17 @@
 import Foundation
 import Observation
 
-enum NavTab: String, CaseIterable, Identifiable {
-    case changes, branches, pullRequests, stashes
-
-    var id: String { rawValue }
-
-    var symbol: String {
-        switch self {
-        case .changes: "doc.text"
-        case .branches: "arrow.triangle.branch"
-        case .pullRequests: "arrow.triangle.pull"
-        case .stashes: "archivebox"
-        }
-    }
-
-    var help: String {
-        switch self {
-        case .changes: "Working Copy"
-        case .branches: "Branches"
-        case .pullRequests: "Pull Requests"
-        case .stashes: "Stashes"
-        }
-    }
-}
-
-/// Tabs in the history detail pane: full commit metadata vs. changed files.
-enum CommitDetailTab: String, CaseIterable, Identifiable {
-    case commit = "Commit"
-    case files = "Files"
-
-    var id: String { rawValue }
-}
-
-enum DiffMode: String, CaseIterable, Identifiable {
-    case unified = "Unified"
-    case split = "Split"
-
-    var id: String { rawValue }
-}
-
 /// Screen state and actions for the open repository. Split across extensions:
 /// loading (`+Loading`), staging/committing (`+WorkingCopy`), branches and
 /// history operations (`+SourceControl`), and the AI agent (`+Agent`).
+/// Pull request state lives in the owned `prs` sub-model.
 @MainActor
 @Observable
 final class RepoViewModel {
     let repository: GitRepository
     let github: GitHubService
     let codex: CodexAppServer
+    let prs: PullRequestsModel
 
     // MARK: Navigation
 
@@ -143,201 +106,6 @@ final class RepoViewModel {
     }
     var stashDiffs: [FileDiff] = []
 
-    // MARK: Pull requests
-
-    /// A selected row inside a PR's sidebar expansion: one of its commits or
-    /// one of its changed files.
-    enum PRItemSelection: Equatable, Hashable {
-        case commit(hash: String)
-        case file(path: String)
-    }
-
-    enum PRStateFilter: String, CaseIterable, Identifiable {
-        case all, open, draft, awaitingYourReview, merged, closed
-
-        var id: String { rawValue }
-
-        var label: String {
-            switch self {
-            case .all: "All"
-            case .open: "Open"
-            case .draft: "Draft"
-            case .awaitingYourReview: "Awaiting review from you"
-            case .merged: "Merged"
-            case .closed: "Closed"
-            }
-        }
-
-        /// Compact variant for the sidebar header chip, where the full
-        /// "Awaiting review from you" label would crowd out the section title.
-        var shortLabel: String {
-            self == .awaitingYourReview ? "Awaiting review" : label
-        }
-
-        func matches(_ pr: PullRequestSummary, viewerLogin: String?) -> Bool {
-            switch self {
-            case .all: true
-            // GitHub counts drafts as open, so Open includes them; Draft
-            // narrows to drafts only.
-            case .open: pr.state == "OPEN"
-            case .draft: pr.state == "OPEN" && pr.isDraft
-            case .awaitingYourReview:
-                pr.state == "OPEN" && viewerLogin.map { login in
-                    pr.reviewRequestLogins.contains { $0.caseInsensitiveCompare(login) == .orderedSame }
-                } ?? false
-            case .merged: pr.state == "MERGED"
-            case .closed: pr.state == "CLOSED"
-            }
-        }
-    }
-
-    var pullRequests: [PullRequestSummary] = []
-    var prLoadError: String?
-    var prSearchText = ""
-    /// Authenticated `gh` login, fetched alongside the PR list; nil until
-    /// loaded (the "awaiting your review" filter matches nothing then).
-    var prViewerLogin: String?
-    var prStateFilter: PRStateFilter = .all {
-        didSet { savePRStateFilter() }
-    }
-
-    /// UserDefaults key for a `[repo path: PRStateFilter raw value]` map so
-    /// each repository remembers its own filter across launches. Entries are
-    /// removed when the filter returns to `.all` to keep the map from
-    /// accumulating stale paths.
-    private static let prStateFilterDefaultsKey = "prStateFilterByRepo"
-
-    private func savePRStateFilter() {
-        var map = UserDefaults.standard.dictionary(forKey: Self.prStateFilterDefaultsKey) as? [String: String] ?? [:]
-        if prStateFilter == .all {
-            map.removeValue(forKey: repository.root.path)
-        } else {
-            map[repository.root.path] = prStateFilter.rawValue
-        }
-        UserDefaults.standard.set(map, forKey: Self.prStateFilterDefaultsKey)
-    }
-
-    private static func storedPRStateFilter(for root: URL) -> PRStateFilter {
-        let map = UserDefaults.standard.dictionary(forKey: prStateFilterDefaultsKey) as? [String: String]
-        return map?[root.path].flatMap(PRStateFilter.init(rawValue:)) ?? .all
-    }
-
-    var isPRFilterActive: Bool {
-        prStateFilter != .all || !prSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
-
-    var filteredPullRequests: [PullRequestSummary] {
-        let query = prSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Fold full-width digits (Japanese IME) so "１２３" parses as a number.
-        let folded = query.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? query
-        let numberQuery = Int(folded.hasPrefix("#") ? String(folded.dropFirst()) : folded)
-        return pullRequests.filter { pr in
-            guard prStateFilter.matches(pr, viewerLogin: prViewerLogin) else { return false }
-            guard !query.isEmpty else { return true }
-            if let numberQuery, pr.number == numberQuery { return true }
-            return pr.title.localizedStandardContains(query)
-                || pr.author.localizedStandardContains(query)
-                || pr.headRefName.localizedStandardContains(query)
-        }
-    }
-    var selectedPRNumber: Int? {
-        didSet {
-            if oldValue != selectedPRNumber {
-                selectedPRItem = nil
-                Task { await loadPRDetail() }
-            }
-        }
-    }
-    var prDetail: PullRequestDetail?
-    var prDetailsCache: [Int: PullRequestDetail] = [:]
-    var expandedPRs: Set<Int> = []
-    var selectedPRItem: PRItemSelection? {
-        didSet { if oldValue != selectedPRItem { Task { await loadPRItemDiffs() } } }
-    }
-    var prItemDiffs: [FileDiff] = []
-    var prItemLoadError: String?
-    /// Parsed `gh pr diff` output per PR, so switching between files of the
-    /// same PR doesn't re-run gh each time.
-    var prDiffsCache: [Int: [FileDiff]] = [:]
-
-    /// Selects a commit/file row of a PR, switching the shown PR if needed.
-    func selectPRItem(_ item: PRItemSelection, in number: Int) {
-        selectedPRNumber = number
-        selectedPRItem = item
-    }
-
-    /// PR number currently being merged, or nil; drives the merge button's
-    /// spinner and guards against double-submission.
-    var mergingPRNumber: Int?
-
-    func mergePullRequest(_ number: Int) {
-        guard mergingPRNumber == nil else { return }
-        mergingPRNumber = number
-        Task {
-            defer { mergingPRNumber = nil }
-            do {
-                try await github.merge(number: number)
-                // Reload the detail directly — flipping selectedPRNumber
-                // nil→back spawned two loads that both hit gh.
-                prDetailsCache[number] = nil
-                prDiffsCache[number] = nil
-                await loadPRDetail()
-                await refreshPullRequests()
-            } catch {
-                prLoadError = error.localizedDescription
-            }
-        }
-    }
-
-    // MARK: Pull request "Viewed" flags
-
-    /// Review-progress flags per PR number, persisted across launches.
-    var prViewedStates: [Int: PRViewedState] = [:]
-    @ObservationIgnored private var prViewedStore: PRViewedStore?
-
-    func isPRFileViewed(_ path: String, in number: Int) -> Bool {
-        prViewedStates[number]?.files.contains(path) == true
-    }
-
-    func isPRCommitViewed(_ hash: String, in number: Int) -> Bool {
-        prViewedStates[number]?.isCommitViewed(hash) == true
-    }
-
-    func isPRCommitFileViewed(commit: String, path: String, in number: Int) -> Bool {
-        prViewedStates[number]?.isCommitFileViewed(commit: commit, path: path) == true
-    }
-
-    func togglePRFileViewed(_ path: String, in number: Int) {
-        mutatePRViewed(number) { $0.toggleFile(path) }
-    }
-
-    func togglePRCommitViewed(_ hash: String, in number: Int) {
-        mutatePRViewed(number) { state in
-            state.setCommitViewed(!state.isCommitViewed(hash), hash: hash)
-        }
-    }
-
-    /// Toggles one file inside a commit's diff. `allPaths` is the commit's
-    /// complete file list (the caller has the loaded diff), so viewing the
-    /// last file promotes the whole commit to viewed.
-    func togglePRCommitFileViewed(commit: String, path: String, allPaths: [String], in number: Int) {
-        mutatePRViewed(number) { $0.toggleCommitFile(commit: commit, path: path, allPaths: allPaths) }
-    }
-
-    private func mutatePRViewed(_ number: Int, _ mutate: (inout PRViewedState) -> Void) {
-        let old = prViewedStates[number] ?? PRViewedState()
-        var state = old
-        mutate(&state)
-        prViewedStates[number] = state.isEmpty ? nil : state
-        prViewedStore?.apply(from: old, to: state, for: number)
-    }
-
-    func loadPRViewedStates() {
-        let store = PRViewedStore(repoRoot: repository.root)
-        prViewedStore = store
-        prViewedStates = store.load()
-    }
-
     // MARK: Agent
 
     var agentThreads: [AgentThread] = []
@@ -358,17 +126,17 @@ final class RepoViewModel {
     var syncActivity: String?
     var errorMessage: String?
 
-    // MARK: Load generations
+    // MARK: Load supersession
     //
-    // Every async load bumps its generation before awaiting and only assigns
-    // its result while still current — a slow stale load can never overwrite
-    // the state a newer one produced.
+    // Each load kind runs through its own LatestLoader — a slow stale load
+    // can never overwrite the state a newer one produced. refreshLog and
+    // loadMoreCommits share one loader on purpose: a refresh must invalidate
+    // an in-flight page load and vice versa (offsets shift under both).
 
-    @ObservationIgnored var workingDiffsGeneration = 0
-    @ObservationIgnored var commitDetailGeneration = 0
-    @ObservationIgnored var logGeneration = 0
-    @ObservationIgnored var stashDiffGeneration = 0
-    @ObservationIgnored var prItemGeneration = 0
+    @ObservationIgnored let workingDiffsLoader = LatestLoader()
+    @ObservationIgnored let commitDetailLoader = LatestLoader()
+    @ObservationIgnored let logLoader = LatestLoader()
+    @ObservationIgnored let stashDiffLoader = LatestLoader()
     @ObservationIgnored private var syncCount = 0
     @ObservationIgnored var pendingDiscardSnapshot: [FileDiff]?
 
@@ -376,10 +144,10 @@ final class RepoViewModel {
 
     init(repository: GitRepository) {
         self.repository = repository
-        self.github = GitHubService(repoRoot: repository.root)
+        let github = GitHubService(repoRoot: repository.root)
+        self.github = github
         self.codex = CodexAppServer()
-        self.prStateFilter = Self.storedPRStateFilter(for: repository.root)
-        loadPRViewedStates()
+        self.prs = PullRequestsModel(repository: repository, github: github)
         startWatching()
     }
 

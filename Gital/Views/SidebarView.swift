@@ -452,17 +452,18 @@ struct SidebarView: View {
 
     @ViewBuilder
     private var pullRequestContent: some View {
-        let filtered = model.filteredPullRequests
-        let isFiltering = model.isPRFilterActive
+        let filtered = model.prs.filtered
+        let isFiltering = model.prs.isFilterActive
 
         sectionHeader(isFiltering
-            ? "Pull Requests \(filtered.count)/\(model.pullRequests.count)"
-            : "Pull Requests \(model.pullRequests.count)"
+            ? "Pull Requests \(filtered.count)/\(model.prs.pullRequests.count)"
+            : "Pull Requests \(model.prs.pullRequests.count)"
         ) {
             AnyView(
                 Menu {
-                    Picker("State", selection: $model.prStateFilter) {
-                        ForEach(RepoViewModel.PRStateFilter.allCases) { filter in
+                    @Bindable var prs = model.prs
+                    Picker("State", selection: $prs.stateFilter) {
+                        ForEach(PullRequestsModel.StateFilter.allCases) { filter in
                             Text(filter.label).tag(filter)
                         }
                     }
@@ -472,10 +473,10 @@ struct SidebarView: View {
                     HStack(spacing: 3) {
                         Image(systemName: "line.3.horizontal.decrease.circle")
                             .font(.system(size: 11))
-                        Text(model.prStateFilter.shortLabel)
+                        Text(model.prs.stateFilter.shortLabel)
                             .font(.system(size: 10.5))
                     }
-                    .foregroundStyle(model.prStateFilter == .all ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(model.prs.stateFilter == .all ? Color.secondary : Color.accentColor)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
@@ -486,7 +487,7 @@ struct SidebarView: View {
 
         prSearchField
 
-        if let error = model.prLoadError, model.pullRequests.isEmpty {
+        if let error = model.prs.loadError, model.prs.pullRequests.isEmpty {
             Text(error)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -494,7 +495,7 @@ struct SidebarView: View {
                 .padding(.vertical, 4)
         }
 
-        if filtered.isEmpty, model.prLoadError == nil {
+        if filtered.isEmpty, model.prs.loadError == nil {
             Text(isFiltering ? "No matching pull requests" : "No pull requests")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
@@ -505,11 +506,11 @@ struct SidebarView: View {
         ForEach(filtered) { pr in
             HStack(alignment: .top, spacing: 7) {
                 Button {
-                    Task { await model.expandPR(pr.number) }
+                    Task { await model.prs.expand(pr.number) }
                 } label: {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .bold))
-                        .rotationEffect(.degrees(model.expandedPRs.contains(pr.number) ? 90 : 0))
+                        .rotationEffect(.degrees(model.prs.expanded.contains(pr.number) ? 90 : 0))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
@@ -533,29 +534,30 @@ struct SidebarView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 4)
             .contentShape(Rectangle())
-            .background(rowBackground(model.selectedPRNumber == pr.number && model.selectedPRItem == nil))
+            .background(rowBackground(model.prs.selectedNumber == pr.number && model.prs.selectedItem == nil))
             .onTapGesture {
-                model.selectedPRNumber = pr.number
-                model.selectedPRItem = nil
+                model.prs.selectedNumber = pr.number
+                model.prs.selectedItem = nil
             }
 
-            if model.expandedPRs.contains(pr.number), let detail = model.prDetailsCache[pr.number] {
+            if model.prs.expanded.contains(pr.number), let detail = model.prs.detailsCache[pr.number] {
                 prExpansion(detail)
             }
         }
     }
 
     private var prSearchField: some View {
-        HStack(spacing: 6) {
+        @Bindable var prs = model.prs
+        return HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
-            TextField("Filter pull requests", text: $model.prSearchText)
+            TextField("Filter pull requests", text: $prs.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
-            if !model.prSearchText.isEmpty {
+            if !model.prs.searchText.isEmpty {
                 Button {
-                    model.prSearchText = ""
+                    model.prs.searchText = ""
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 10.5))
@@ -578,7 +580,7 @@ struct SidebarView: View {
         prSectionHeader("Commits \(detail.commits.count)", key: commitsKey, topPadding: 6)
         if !collapsedPRSections.contains(commitsKey) {
             ForEach(detail.commits) { commit in
-                let viewed = model.isPRCommitViewed(commit.hash, in: detail.number)
+                let viewed = model.prs.isCommitViewed(commit.hash, in: detail.number)
                 HStack(spacing: 7) {
                     HStack(spacing: 7) {
                         Image(systemName: "circle")
@@ -594,7 +596,7 @@ struct SidebarView: View {
                     }
                     .opacity(viewed ? 0.4 : 1)
                     viewedToggle(viewed) {
-                        model.togglePRCommitViewed(commit.hash, in: detail.number)
+                        model.prs.toggleCommitViewed(commit.hash, in: detail.number)
                     }
                 }
                 .padding(.leading, 34)
@@ -603,7 +605,7 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
                 .background(rowBackground(isPRItemSelected(.commit(hash: commit.hash), in: detail.number)))
                 .onTapGesture {
-                    model.selectPRItem(.commit(hash: commit.hash), in: detail.number)
+                    model.prs.selectItem(.commit(hash: commit.hash), in: detail.number)
                 }
             }
         }
@@ -612,7 +614,7 @@ struct SidebarView: View {
         prSectionHeader("Files Changed \(detail.files.count)", key: filesKey, topPadding: 8)
         if !collapsedPRSections.contains(filesKey) {
             ForEach(detail.files) { file in
-                let viewed = model.isPRFileViewed(file.path, in: detail.number)
+                let viewed = model.prs.isFileViewed(file.path, in: detail.number)
                 HStack(spacing: 7) {
                     HStack(spacing: 7) {
                         StatusBadge(status: file.deletions > 0 && file.additions == 0 ? .deleted : .modified)
@@ -623,7 +625,7 @@ struct SidebarView: View {
                     }
                     .opacity(viewed ? 0.4 : 1)
                     viewedToggle(viewed) {
-                        model.togglePRFileViewed(file.path, in: detail.number)
+                        model.prs.toggleFileViewed(file.path, in: detail.number)
                     }
                 }
                 .padding(.leading, 34)
@@ -632,7 +634,7 @@ struct SidebarView: View {
                 .contentShape(Rectangle())
                 .background(rowBackground(isPRItemSelected(.file(path: file.path), in: detail.number)))
                 .onTapGesture {
-                    model.selectPRItem(.file(path: file.path), in: detail.number)
+                    model.prs.selectItem(.file(path: file.path), in: detail.number)
                 }
             }
         }
@@ -650,8 +652,8 @@ struct SidebarView: View {
         .help(viewed ? "Mark as not viewed" : "Mark as viewed")
     }
 
-    private func isPRItemSelected(_ item: RepoViewModel.PRItemSelection, in number: Int) -> Bool {
-        model.selectedPRNumber == number && model.selectedPRItem == item
+    private func isPRItemSelected(_ item: PullRequestsModel.ItemSelection, in number: Int) -> Bool {
+        model.prs.selectedNumber == number && model.prs.selectedItem == item
     }
 
     private func prSectionHeader(_ title: String, key: String, topPadding: CGFloat) -> some View {
