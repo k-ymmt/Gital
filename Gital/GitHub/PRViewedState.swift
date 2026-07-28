@@ -88,10 +88,18 @@ struct PRViewedState: Equatable {
 /// touched, never wipe another instance's progress wholesale. Failures make
 /// the store inert rather than surfacing: losing review progress is never
 /// worth failing an interaction over.
-final class PRViewedStore {
+final class PRViewedStore: @unchecked Sendable {
     /// `sqlite3_bind_text` destructor telling SQLite to copy the string —
     /// required because Swift's bridged C strings die when the call returns.
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    /// All SQLite access is confined to this serial queue — a raw sqlite3
+    /// handle is not safe for concurrent use, and nothing else pins this
+    /// class to one isolation domain. Calls stay synchronous (`queue.sync`)
+    /// so callers keep today's ordering guarantees; the documented worst
+    /// case remains the 1s busy timeout when a second instance holds the
+    /// database.
+    private let queue = DispatchQueue(label: "app.kymmt.Gital.PRViewedStore")
 
     private enum Kind: Int32 {
         case file = 0        // PR-wide "Files Changed" path (no commit)
@@ -151,6 +159,10 @@ final class PRViewedStore {
     }
 
     func load() -> [Int: PRViewedState] {
+        queue.sync { loadLocked() }
+    }
+
+    private func loadLocked() -> [Int: PRViewedState] {
         guard let db else { return [:] }
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(
@@ -182,6 +194,10 @@ final class PRViewedStore {
     /// PR survive. INSERT OR IGNORE absorbs the race where both instances
     /// viewed the same flag.
     func apply(from old: PRViewedState, to new: PRViewedState, for number: Int) {
+        queue.sync { applyLocked(from: old, to: new, for: number) }
+    }
+
+    private func applyLocked(from old: PRViewedState, to new: PRViewedState, for number: Int) {
         guard let db else { return }
         let oldRows = Self.rows(of: old)
         let newRows = Self.rows(of: new)

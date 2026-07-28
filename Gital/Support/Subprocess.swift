@@ -152,14 +152,22 @@ enum Subprocess {
             }
         }
 
-        return await withCheckedContinuation { continuation in
-            done.notify(queue: .global(qos: .userInitiated)) {
-                continuation.resume(returning: Output(
-                    status: process.terminationStatus,
-                    stdout: stdoutBuffer.value,
-                    stderr: stderrBuffer.value
-                ))
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                done.notify(queue: .global(qos: .userInitiated)) {
+                    continuation.resume(returning: Output(
+                        status: process.terminationStatus,
+                        stdout: stdoutBuffer.value,
+                        stderr: stderrBuffer.value
+                    ))
+                }
             }
+        } onCancel: {
+            // A cancelled caller has no use for the output; kill the child so
+            // a long-running command (e.g. a network fetch) stops occupying
+            // its caller's queue. Death by signal reaches the caller as a
+            // non-zero status through the normal termination path.
+            process.terminate()
         }
     }
 }

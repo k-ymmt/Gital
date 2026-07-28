@@ -48,6 +48,11 @@ actor GitExecutor {
         let previous = tail
         let task = Task<Data, Error> {
             await previous?.value
+            // The command task is unstructured, so the caller's cancellation
+            // is forwarded explicitly below. Cancelled while queued: skip the
+            // spawn entirely. Cancelled while running: Subprocess terminates
+            // the child.
+            try Task.checkCancellation()
             return try await Self.execute(
                 arguments,
                 workingDirectory: workingDirectory,
@@ -56,7 +61,11 @@ actor GitExecutor {
             )
         }
         tail = Task { _ = try? await task.value }
-        return try await task.value
+        return try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
     }
 
     private static func execute(
@@ -80,6 +89,10 @@ actor GitExecutor {
         )
 
         guard successCodes.contains(result.status) else {
+            // Death by cancellation-triggered terminate() is not a git
+            // failure — surface it as CancellationError so callers can tell
+            // "superseded" from "broken".
+            try Task.checkCancellation()
             throw GitError(
                 command: arguments.joined(separator: " "),
                 exitCode: result.status,

@@ -265,7 +265,7 @@ struct GitHubService {
         // stdout would prepend garbage to gh's JSON and break every decode,
         // and the shell indirection also made the "gh not installed" branch
         // unreachable (zsh itself always launches).
-        guard let ghURL = ExecutableLocator.shared.find("gh") else {
+        guard let ghURL = await ExecutableLocator.shared.find("gh") else {
             throw GitHubError.notInstalled
         }
 

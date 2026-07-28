@@ -718,6 +718,20 @@ Task {
     let afterLeak = (try? await executor.run(["rev-parse", "--show-toplevel"])) != nil
     expect(afterLeak, "executor: chain keeps serving commands after the cutoff")
 
+    // Cancelling a caller must terminate its long-running command (instead
+    // of returning output or a GitError) and leave the chain serving.
+    let slowTask = Task { try await executor.run(["-c", "alias.slow=!sleep 20", "slow"]) }
+    try? await Task.sleep(nanoseconds: 300_000_000)
+    let cancelStart = Date()
+    slowTask.cancel()
+    let cancelledResult = try? await slowTask.value
+    let cancelElapsed = Date().timeIntervalSince(cancelStart)
+    expect(cancelledResult == nil, "executor: cancelled command yields no result")
+    expect(cancelElapsed < 15,
+           "executor: cancellation terminates the command promptly (took \(String(format: "%.1f", cancelElapsed))s)")
+    let afterCancel = (try? await executor.run(["rev-parse", "--show-toplevel"])) != nil
+    expect(afterCancel, "executor: chain keeps serving after a cancellation")
+
     // Hammer the chain with concurrent mixed success/failure commands; every
     // call must complete with the expected outcome.
     let outcomes = await withTaskGroup(of: Bool.self) { group -> [Bool] in

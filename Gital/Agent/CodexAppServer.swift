@@ -29,12 +29,15 @@ enum CodexTurnEvent {
 
 /// JSON-RPC client for `codex app-server` speaking newline-delimited JSON over stdio.
 actor CodexAppServer {
-    /// Book-keeping for one in-flight turn. Mutated only on the actor's
-    /// executor (dispatch + actor methods), so plain vars are safe.
+    /// Book-keeping for one in-flight turn, including its notification
+    /// handler. Mutated only on the actor's executor (dispatch + actor
+    /// methods), so plain vars are safe. The handler captures the record
+    /// weakly — a strong capture would be a retain cycle.
     private nonisolated final class TurnRecord: @unchecked Sendable {
         let threadID: String
         let continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         var completed = false
+        var handle: ((CodexNotification) -> Void)?
 
         init(threadID: String, continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation) {
             self.threadID = threadID
@@ -48,8 +51,10 @@ actor CodexAppServer {
     private var stdinHandle: FileHandle?
     private var nextRequestID = 10
     private var pendingRequests: [Int: CheckedContinuation<[String: Any], Error>] = [:]
+    /// The single turn registry: each record owns its notification handler,
+    /// so registration and cleanup are one map operation (the old separate
+    /// handler dictionary invited drift between the two).
     private var activeTurns: [UUID: TurnRecord] = [:]
-    private var notificationHandlers: [UUID: (CodexNotification) -> Void] = [:]
     private var lineBuffer = NewlineBuffer()
     private var initTask: Task<Void, Error>?
     /// Bumped whenever `initTask` is replaced; lets awaiting callers detect
@@ -105,9 +110,10 @@ actor CodexAppServer {
         let turnID = UUID()
         let record = TurnRecord(threadID: threadID, continuation: continuation)
         var finalText = ""
-        let observer: (CodexNotification) -> Void = { [weak self] notification in
-            guard notification.threadID == nil || notification.threadID == threadID else { return }
-
+        // Thread routing happens in deliver(_:); this handler only sees
+        // notifications meant for this turn.
+        record.handle = { [weak self, weak record] notification in
+            guard let record else { return }
             switch notification {
             case .agentMessageDelta(_, let delta):
                 finalText += delta
@@ -139,7 +145,6 @@ actor CodexAppServer {
             }
         }
         activeTurns[turnID] = record
-        notificationHandlers[turnID] = observer
 
         continuation.onTermination = { [weak self] _ in
             Task { await self?.turnTerminated(turnID) }
@@ -157,7 +162,6 @@ actor CodexAppServer {
     }
 
     private func cleanUpTurn(_ id: UUID) {
-        notificationHandlers[id] = nil
         activeTurns[id] = nil
     }
 
@@ -166,7 +170,6 @@ actor CodexAppServer {
     /// running, tell codex to stop: it edits repository files and would keep
     /// going with nobody watching.
     private func turnTerminated(_ id: UUID) {
-        notificationHandlers[id] = nil
         guard let record = activeTurns.removeValue(forKey: id) else { return }
         guard !record.completed else { return }
         let threadID = record.threadID
@@ -218,17 +221,17 @@ actor CodexAppServer {
     }
 
     private func launchAndInitialize() async throws {
-        try launchProcess()
+        try await launchProcess()
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         _ = try await sendRequest(method: "initialize", params: [
             "clientInfo": ["name": "gital", "title": "Gital", "version": version],
         ])
     }
 
-    private func launchProcess() throws {
+    private func launchProcess() async throws {
         shutdown()
 
-        guard let codexURL = ExecutableLocator.shared.find("codex") else {
+        guard let codexURL = await ExecutableLocator.shared.find("codex") else {
             throw CodexError.notInstalled
         }
         let process = Process()
@@ -297,8 +300,7 @@ actor CodexAppServer {
         }
         let turns = activeTurns
         activeTurns = [:]
-        for (id, record) in turns {
-            notificationHandlers[id] = nil
+        for record in turns.values {
             record.completed = true
             record.continuation.finish(throwing: error)
         }
@@ -360,9 +362,21 @@ actor CodexAppServer {
         case .serverRequest(let id, let method):
             respond(toServerRequest: method, id: id)
         case .notification(let notification):
-            for handler in notificationHandlers.values {
-                handler(notification)
+            deliver(notification)
+        }
+    }
+
+    /// Routes a notification to the turns of its thread. A notification
+    /// without a threadId cannot be attributed, so it is delivered only when
+    /// exactly one turn is active — fanning it out to every turn recreated
+    /// the cross-talk the per-conversation-thread design exists to prevent.
+    private func deliver(_ notification: CodexNotification) {
+        if let threadID = notification.threadID {
+            for record in activeTurns.values where record.threadID == threadID {
+                record.handle?(notification)
             }
+        } else if activeTurns.count == 1, let record = activeTurns.values.first {
+            record.handle?(notification)
         }
     }
 
