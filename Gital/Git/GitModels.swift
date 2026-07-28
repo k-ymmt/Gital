@@ -99,6 +99,39 @@ struct WorkingStatus {
     static let empty = WorkingStatus()
 }
 
+// MARK: - Merge / rebase state
+
+/// A multi-step git operation that can stop on conflicts and then must be
+/// continued or aborted.
+enum RepoOperation: String, Hashable {
+    case merge, rebase, cherryPick = "cherry-pick", revert
+
+    var displayName: String {
+        switch self {
+        case .merge: "Merge"
+        case .rebase: "Rebase"
+        case .cherryPick: "Cherry-pick"
+        case .revert: "Revert"
+        }
+    }
+
+    /// What "--ours" means to the user. During a rebase HEAD points at the
+    /// base the branch is replayed onto, so ours/theirs read inverted from
+    /// every other operation.
+    var oursDescription: String {
+        self == .rebase ? "Base Branch" : "Current Branch"
+    }
+
+    var theirsDescription: String {
+        self == .rebase ? "Rebased Commit" : "Incoming Change"
+    }
+}
+
+/// Which side of a conflict to take wholesale (`git checkout --ours/--theirs`).
+enum ConflictSide: String {
+    case ours, theirs
+}
+
 // MARK: - Branches / tags / stashes
 
 struct Branch: Hashable, Identifiable {

@@ -9,6 +9,11 @@ struct ChangesView: View {
             headerBar
             Divider()
 
+            if let operation = model.pendingOperation {
+                ConflictBannerView(model: model, operation: operation)
+                Divider()
+            }
+
             if model.workingDiffs.isEmpty {
                 emptyState
             } else {
@@ -220,6 +225,52 @@ struct ChangesView: View {
 
     private func threadsAnchored(at lineID: String) -> [AgentThread] {
         model.agentThreads.filter { $0.anchorLineID == lineID }
+    }
+}
+
+// MARK: - Conflict banner
+
+/// Shown while a merge/rebase/cherry-pick/revert is stopped: names the
+/// operation, counts the remaining conflicts, and offers Continue/Abort.
+/// Continue stays disabled until every conflict is resolved — git would
+/// reject it anyway, with a less helpful error.
+struct ConflictBannerView: View {
+    var model: RepoViewModel
+    let operation: RepoOperation
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(operation.displayName) in progress")
+                    .font(.system(size: 12.5, weight: .semibold))
+                Text(statusText)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Abort…") { model.requestAbort() }
+                .disabled(model.isSyncing)
+            Button("Continue \(operation.displayName)") { model.continuePendingOperation() }
+                .buttonStyle(.borderedProminent)
+                .disabled(!conflictsResolved || model.isSyncing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(.orange.opacity(0.09))
+    }
+
+    private var conflictsResolved: Bool {
+        model.conflictedChanges.isEmpty
+    }
+
+    private var statusText: String {
+        let count = model.conflictedChanges.count
+        if count == 0 {
+            return "All conflicts resolved — ready to continue"
+        }
+        return "\(count) conflicted file\(count == 1 ? "" : "s") — resolve them, then continue"
     }
 }
 

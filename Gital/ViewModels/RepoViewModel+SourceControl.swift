@@ -15,11 +15,11 @@ extension RepoViewModel {
     }
 
     func cherryPick(_ commit: Commit) {
-        runSync("Cherry-picking…") { try await self.repository.cherryPick(commit.hash) }
+        runConflictAware("Cherry-picking…") { try await self.repository.cherryPick(commit.hash) }
     }
 
     func revertCommit(_ commit: Commit) {
-        runSync("Reverting…") { try await self.repository.revert(commit.hash) }
+        runConflictAware("Reverting…") { try await self.repository.revert(commit.hash) }
     }
 
     func requestReset(to commit: Commit, mode: GitRepository.ResetMode) {
@@ -47,6 +47,56 @@ extension RepoViewModel {
         guard !trimmed.isEmpty else { return }
         perform(refresh: .refs) {
             try await self.repository.createTag(name: trimmed, at: commit.hash)
+        }
+    }
+
+    // MARK: - Merge / rebase / conflicts
+
+    var conflictedChanges: [FileChange] {
+        status.unstaged.filter { $0.status == .conflicted }
+    }
+
+    func merge(branch: String) {
+        runConflictAware("Merging…") { try await self.repository.merge(branch: branch) }
+    }
+
+    func rebaseCurrentBranch(onto target: String) {
+        runConflictAware("Rebasing…") { try await self.repository.rebase(onto: target) }
+    }
+
+    func continuePendingOperation() {
+        guard let operation = pendingOperation else { return }
+        runConflictAware("Continuing…") { try await self.repository.continueOperation(operation) }
+    }
+
+    func requestAbort() {
+        pendingAbort = pendingOperation
+    }
+
+    func abortOperation(_ operation: RepoOperation) {
+        runSync("Aborting…") { try await self.repository.abortOperation(operation) }
+    }
+
+    func resolveConflicts(_ paths: [String], using side: ConflictSide) {
+        perform(refresh: .workingCopy) {
+            try await self.repository.resolveConflicts(paths, using: side)
+        }
+    }
+
+    /// Like `runSync`, but when the failure left a stopped operation behind
+    /// (merge/rebase/cherry-pick hit conflicts), switches to the Changes tab
+    /// so the conflicts and the Continue/Abort banner are in front of the
+    /// user instead of hidden behind whichever tab launched the operation.
+    private func runConflictAware(_ activity: String, _ operation: @escaping @MainActor () async throws -> Void) {
+        runSync(activity) {
+            do {
+                try await operation()
+            } catch {
+                if ((try? await self.repository.pendingOperation()) ?? nil) != nil {
+                    self.navTab = .changes
+                }
+                throw error
+            }
         }
     }
 

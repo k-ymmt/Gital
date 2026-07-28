@@ -22,6 +22,9 @@ final class RepoViewModel {
     // MARK: Repository data
 
     var status: WorkingStatus = .empty
+    /// Stopped multi-step operation (merge/rebase/cherry-pick/revert) that
+    /// must be continued or aborted; drives the conflict banner.
+    var pendingOperation: RepoOperation?
     var commits: [Commit] = []
     var graph = CommitGraph(commits: [])
     var hasMoreCommits = true
@@ -123,6 +126,9 @@ final class RepoViewModel {
     var pendingDiscard: DiscardTarget?
     var pendingReset: PendingReset?
     var pendingStashDrop: Stash?
+    /// Operation whose abort awaits user confirmation — aborting throws away
+    /// every conflict resolution made so far.
+    var pendingAbort: RepoOperation?
 
     // MARK: Busy / errors
 

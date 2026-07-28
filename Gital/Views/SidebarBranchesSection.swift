@@ -92,6 +92,8 @@ struct SidebarBranchesSection: View {
         .contextMenu {
             Button("Checkout") { model.checkout(branch: branch) }
                 .disabled(branch.isCurrent)
+            Divider()
+            mergeRebaseMenuItems(target: branch.name, disabled: branch.isCurrent)
         }
         .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
     }
@@ -110,7 +112,26 @@ struct SidebarBranchesSection: View {
                 Button("Checkout Tracking Branch") {
                     model.checkoutRemote(branch: branch, remote: remote)
                 }
+                Divider()
+                mergeRebaseMenuItems(target: "\(remote)/\(branch)", disabled: false)
             }
+    }
+
+    /// Merge/rebase entries shared by local and remote branch rows. Disabled
+    /// on a detached HEAD (no current branch to merge into) and while another
+    /// multi-step operation is still stopped on conflicts.
+    @ViewBuilder
+    private func mergeRebaseMenuItems(target: String, disabled: Bool) -> some View {
+        let current = model.status.branch
+        let blocked = disabled || current == nil || model.pendingOperation != nil
+        Button("Merge into “\(current ?? "HEAD")”") {
+            model.merge(branch: target)
+        }
+        .disabled(blocked)
+        Button("Rebase “\(current ?? "HEAD")” onto This") {
+            model.rebaseCurrentBranch(onto: target)
+        }
+        .disabled(blocked)
     }
 
     @ViewBuilder

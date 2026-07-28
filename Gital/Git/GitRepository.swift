@@ -520,6 +520,79 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["tag", name, hash])
     }
 
+    // MARK: - Merge / rebase / conflicts
+
+    /// Marker files (or directories) inside the git dir that identify a
+    /// stopped multi-step operation, in classification priority order: a
+    /// conflicted rebase also leaves CHERRY_PICK_HEAD behind (the merge
+    /// backend replays commits through the cherry-pick machinery), so the
+    /// rebase directories must win over the sequencer heads.
+    static let operationProbes: [(marker: String, operation: RepoOperation)] = [
+        ("rebase-merge", .rebase),
+        ("rebase-apply", .rebase),
+        ("MERGE_HEAD", .merge),
+        ("CHERRY_PICK_HEAD", .cherryPick),
+        ("REVERT_HEAD", .revert),
+    ]
+
+    static func classifyOperation(existingMarkers: Set<String>) -> RepoOperation? {
+        operationProbes.first { existingMarkers.contains($0.marker) }?.operation
+    }
+
+    /// The stopped operation in progress, if any — detected by probing marker
+    /// files in the git dir. `rev-parse --git-path` resolves the real git dir
+    /// (worktrees, submodules) instead of assuming `root/.git`, and file
+    /// existence probes don't depend on localized `git status` wording.
+    func pendingOperation() async throws -> RepoOperation? {
+        var args = ["rev-parse"]
+        for probe in Self.operationProbes {
+            args += ["--git-path", probe.marker]
+        }
+        let output = try await executor.run(args)
+        let paths = output.split(separator: "\n").map(String.init)
+        guard paths.count == Self.operationProbes.count else { return nil }
+        var existing: Set<String> = []
+        for (probe, path) in zip(Self.operationProbes, paths) {
+            // Relative --git-path output is relative to the repo root (the
+            // executor's cwd). Not resolved via URL(fileURLWithPath:relativeTo:):
+            // a base URL without the directory hint drops its last component.
+            let url = path.hasPrefix("/")
+                ? URL(fileURLWithPath: path)
+                : root.appendingPathComponent(path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                existing.insert(probe.marker)
+            }
+        }
+        return Self.classifyOperation(existingMarkers: existing)
+    }
+
+    func merge(branch: String) async throws {
+        try await executor.run(["merge", "--no-edit", branch])
+    }
+
+    func rebase(onto target: String) async throws {
+        try await executor.run(["rebase", target])
+    }
+
+    /// `--continue` finalizes with a commit whose message git already
+    /// prepared; `core.editor=true` (the `true` binary) accepts it without
+    /// opening an editor the app has no terminal for.
+    func continueOperation(_ operation: RepoOperation) async throws {
+        try await executor.run(["-c", "core.editor=true", operation.rawValue, "--continue"])
+    }
+
+    func abortOperation(_ operation: RepoOperation) async throws {
+        try await executor.run([operation.rawValue, "--abort"])
+    }
+
+    /// Resolves conflicted paths by taking one side wholesale, then stages
+    /// them — `checkout --ours/--theirs` alone leaves the index conflicted.
+    func resolveConflicts(_ paths: [String], using side: ConflictSide) async throws {
+        guard !paths.isEmpty else { return }
+        try await executor.run(["checkout", "--\(side.rawValue)", "--"] + paths)
+        try await executor.run(["add", "--"] + paths)
+    }
+
     // MARK: - History operations
 
     func cherryPick(_ hash: String) async throws {

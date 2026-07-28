@@ -73,7 +73,18 @@ struct SidebarWorkingCopySection: View {
             model.navTab = .changes
         }
         .contextMenu {
-            if !staged {
+            if change.status == .conflicted {
+                let operation = model.pendingOperation
+                Button("Resolve Using \(operation?.oursDescription ?? "Ours") (Ours)") {
+                    model.resolveConflicts([change.path], using: .ours)
+                }
+                Button("Resolve Using \(operation?.theirsDescription ?? "Theirs") (Theirs)") {
+                    model.resolveConflicts([change.path], using: .theirs)
+                }
+                Button("Mark as Resolved") {
+                    model.stage(change)
+                }
+            } else if !staged {
                 Button(change.status == .untracked ? "Delete File…" : "Discard Changes…", role: .destructive) {
                     model.requestDiscard(.file(change))
                 }

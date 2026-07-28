@@ -23,6 +23,7 @@ extension RepoViewModel {
     func refreshStatus() async {
         do {
             status = try await repository.status()
+            pendingOperation = try await repository.pendingOperation()
         } catch {
             report(error)
         }

@@ -120,6 +120,21 @@ struct ContentView: View {
         } message: { stash in
             Text("“\(stash.message)” will be permanently deleted. This cannot be undone.")
         }
+        .alert(
+            "Abort \(model.pendingAbort?.displayName ?? "Operation")?",
+            isPresented: Binding(
+                get: { model.pendingAbort != nil },
+                set: { if !$0 { model.pendingAbort = nil } }
+            ),
+            presenting: model.pendingAbort
+        ) { operation in
+            Button("Abort \(operation.displayName)", role: .destructive) {
+                model.abortOperation(operation)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { operation in
+            Text("The \(operation.displayName.lowercased()) will be aborted and the repository restored to its previous state. Conflict resolutions made so far will be lost.")
+        }
         .alert("Git Error", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
