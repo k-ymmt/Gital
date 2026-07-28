@@ -18,7 +18,7 @@
 
 /* Begin PBXFileReference section */
 		C495110D3012FEBC00E91416 /* Gital.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Gital.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		C49513BF3018B01D00E91416 /* GItalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GItalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C49513BF3018B01D00E91416 /* GitalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GitalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -27,9 +27,9 @@
 			path = Gital;
 			sourceTree = "<group>";
 		};
-		C49513C03018B01D00E91416 /* GItalTests */ = {
+		C49513C03018B01D00E91416 /* GitalTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = GItalTests;
+			path = GitalTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -52,7 +52,7 @@
 			isa = PBXGroup;
 			children = (
 				C495110F3012FEBC00E91416 /* Gital */,
-				C49513C03018B01D00E91416 /* GItalTests */,
+				C49513C03018B01D00E91416 /* GitalTests */,
 				C495110E3012FEBC00E91416 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -61,7 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				C495110D3012FEBC00E91416 /* Gital.app */,
-				C49513BF3018B01D00E91416 /* GItalTests.xctest */,
+				C49513BF3018B01D00E91416 /* GitalTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -87,9 +87,9 @@
 			productReference = C495110D3012FEBC00E91416 /* Gital.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C49513BE3018B01D00E91416 /* GItalTests */ = {
+		C49513BE3018B01D00E91416 /* GitalTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GItalTests" */;
+			buildConfigurationList = C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GitalTests" */;
 			buildPhases = (
 				C49513BB3018B01D00E91416 /* Sources */,
 				C49513BC3018B01D00E91416 /* Frameworks */,
@@ -101,11 +101,11 @@
 				C49513C43018B01D00E91416 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				C49513C03018B01D00E91416 /* GItalTests */,
+				C49513C03018B01D00E91416 /* GitalTests */,
 			);
-			name = GItalTests;
-			productName = GItalTests;
-			productReference = C49513BF3018B01D00E91416 /* GItalTests.xctest */;
+			name = GitalTests;
+			productName = GitalTests;
+			productReference = C49513BF3018B01D00E91416 /* GitalTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -142,7 +142,7 @@
 			projectRoot = "";
 			targets = (
 				C495110C3012FEBC00E91416 /* Gital */,
-				C49513BE3018B01D00E91416 /* GItalTests */,
+				C49513BE3018B01D00E91416 /* GitalTests */,
 			);
 		};
 /* End PBXProject section */
@@ -366,7 +366,7 @@
 			};
 			name = Release;
 		};
-		C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GItalTests" */ = {
+		C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GitalTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -376,7 +376,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GItalTests;
+				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GitalTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -387,7 +387,7 @@
 			};
 			name = Debug;
 		};
-		C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GItalTests" */ = {
+		C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GitalTests" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
@@ -397,7 +397,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 27.0;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GItalTests;
+				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GitalTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -427,11 +427,11 @@
 			);
 			defaultConfigurationName = Release;
 		};
-		C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GItalTests" */ = {
+		C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GitalTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GItalTests" */,
-				C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GItalTests" */,
+				C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GitalTests" */,
+				C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GitalTests" */,
 			);
 			defaultConfigurationName = Release;
 		};
