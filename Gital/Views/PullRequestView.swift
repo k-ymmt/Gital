@@ -64,7 +64,8 @@ struct PullRequestItemDiffView: View {
                     .font(.system(size: 12))
                     .help("Mark the whole commit as viewed")
                 }
-                if let number = reviewNumber {
+                if let number = model.prs.selectedNumber,
+                   isOpenPR || !model.prs.pendingComments(for: number).isEmpty {
                     ReviewChangesButton(model: model, number: number)
                 }
                 DiffModePicker(mode: $model.diffMode)
@@ -90,8 +91,8 @@ struct PullRequestItemDiffView: View {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
                         ForEach(model.prs.itemDiffs) { diff in
                             Section {
-                                if let number = reviewNumber, !diff.isBinary, !diff.hunks.isEmpty {
-                                    reviewableContent(diff, number: number)
+                                if let number = model.prs.selectedNumber, !diff.isBinary, !diff.hunks.isEmpty {
+                                    reviewableContent(diff, number: number, canComment: isOpenPR)
                                 } else {
                                     FileDiffContentView(diff: diff, mode: model.diffMode)
                                 }
@@ -107,22 +108,23 @@ struct PullRequestItemDiffView: View {
         }
     }
 
-    /// The selected PR's number when it accepts reviews (open, including
-    /// drafts) — gates the comment "+" buttons and the Review changes button.
-    private var reviewNumber: Int? {
-        guard let number = model.prs.selectedNumber,
-              model.prs.detailsCache[number]?.state == "OPEN" else { return nil }
-        return number
+    /// Whether the selected PR accepts new review comments (open, including
+    /// draft PRs) — gates the "+" buttons and the composer. Existing drafts
+    /// stay visible (and deletable/submittable as a COMMENT review) even
+    /// after the PR is closed or merged, so they never become unreachable.
+    private var isOpenPR: Bool {
+        guard let number = model.prs.selectedNumber else { return false }
+        return model.prs.detailsCache[number]?.state == "OPEN"
     }
 
     @ViewBuilder
-    private func reviewableContent(_ diff: FileDiff, number: Int) -> some View {
+    private func reviewableContent(_ diff: FileDiff, number: Int, canComment: Bool) -> some View {
         switch model.diffMode {
         case .unified:
             ForEach(diff.hunks) { hunk in
                 HunkHeaderView(text: hunk.header)
                 ForEach(hunk.lines) { line in
-                    reviewableLine(line, in: diff, number: number)
+                    reviewableLine(line, in: diff, number: number, canComment: canComment)
                 }
             }
         case .split:
@@ -138,18 +140,19 @@ struct PullRequestItemDiffView: View {
     }
 
     @ViewBuilder
-    private func reviewableLine(_ line: DiffLine, in diff: FileDiff, number: Int) -> some View {
+    private func reviewableLine(_ line: DiffLine, in diff: FileDiff, number: Int, canComment: Bool) -> some View {
         let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line)
-        ReviewableDiffLineView(line: line, canComment: anchor != nil) {
+        ReviewableDiffLineView(line: line, canComment: canComment && anchor != nil) {
             if let anchor {
-                model.prs.openReviewComposer(at: anchor)
+                model.prs.openReviewComposer(at: anchor, lineText: line.text)
             }
         }
-        if let anchor {
-            ForEach(model.prs.pendingComments(at: anchor, in: number)) { comment in
+        if anchor != nil {
+            ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
                 PendingReviewCommentCard(model: model, comment: comment, number: number)
             }
-            if model.prs.reviewComposerAnchor == anchor {
+            if canComment, model.prs.reviewComposerAnchor == anchor,
+               model.prs.reviewComposerLineText == line.text {
                 ReviewCommentComposerView(model: model, number: number)
             }
         }
@@ -162,8 +165,10 @@ struct PullRequestItemDiffView: View {
             switch comment.anchor.side {
             case .left:
                 return row.left.kind == .deletion && row.left.number == comment.anchor.line
+                    && row.left.text == comment.lineText
             case .right:
                 return row.right.kind != nil && row.right.number == comment.anchor.line
+                    && row.right.text == comment.lineText
             }
         }
     }
@@ -264,7 +269,9 @@ struct PullRequestDetailView: View {
                 sectionTitle("Reviewers")
                 reviewersCard
 
-                if detail.state == "OPEN" {
+                // Also shown on closed/merged PRs while drafts remain, so
+                // leftover pending comments never become unreachable.
+                if detail.state == "OPEN" || !model.prs.pendingComments(for: detail.number).isEmpty {
                     reviewBox
                         .padding(.top, 14)
                 }
@@ -478,6 +485,12 @@ struct PullRequestDetailView: View {
                     : "Comment on diff lines in Commits or Files Changed to draft review comments.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                if let error = model.prs.reviewSubmitError {
+                    Text(error)
+                        .font(.system(size: 11))
+                        .foregroundStyle(DesignStyle.deletion)
+                        .textSelection(.enabled)
+                }
             }
             Spacer()
             ReviewChangesButton(model: model, number: detail.number)
@@ -639,6 +652,11 @@ struct ReviewCommentComposerView: View {
         VStack(alignment: .leading, spacing: 8) {
             PlaceholderTextEditor(text: $prs.reviewComposerText, placeholder: "Leave a review comment")
                 .focused($focused)
+            if let error = model.prs.reviewComposerError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignStyle.deletion)
+            }
             HStack(spacing: 8) {
                 Text("Drafts are submitted together with your review.")
                     .font(.system(size: 11))
@@ -720,13 +738,19 @@ struct ReviewSubmitForm: View {
         return login.caseInsensitiveCompare(author) == .orderedSame
     }
 
+    /// Verdicts the API can accept here: a closed or merged PR only takes
+    /// COMMENT reviews (submitting leftover drafts stays possible).
+    private var availableEvents: [ReviewEvent] {
+        model.prs.detailsCache[number]?.state == "OPEN" ? ReviewEvent.allCases : [.comment]
+    }
+
     private var canSubmit: Bool {
         if model.prs.isSubmittingReview { return false }
         if isOwnPR && event != .comment { return false }
-        if event == .approve { return true }
-        // COMMENT / REQUEST_CHANGES need something to say: a summary or at
-        // least one draft comment.
-        return !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pendingCount > 0
+        // The API requires a summary body for COMMENT and REQUEST_CHANGES;
+        // only APPROVE may go out bare.
+        if event != .approve && summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return false }
+        return true
     }
 
     var body: some View {
@@ -734,10 +758,16 @@ struct ReviewSubmitForm: View {
             Text("Finish your review")
                 .font(.system(size: 13, weight: .bold))
 
-            PlaceholderTextEditor(text: $summary, placeholder: "Leave a summary comment", height: 84)
+            PlaceholderTextEditor(
+                text: $summary,
+                placeholder: event == .approve
+                    ? "Leave a summary comment (optional)"
+                    : "Leave a summary comment (required)",
+                height: 84
+            )
 
             Picker("Verdict", selection: $event) {
-                ForEach(ReviewEvent.allCases) { event in
+                ForEach(availableEvents) { event in
                     Text(event.label).tag(event)
                 }
             }
@@ -788,6 +818,14 @@ struct ReviewSubmitForm: View {
         }
         .padding(16)
         .frame(width: 380)
-        .onAppear { model.prs.reviewSubmitError = nil }
+        // A submit error is deliberately NOT cleared here: when a submission
+        // fails after the popover was dismissed, reopening the form is the
+        // only place the user can still read what went wrong. It resets when
+        // the next submission starts.
+        .onAppear {
+            if !availableEvents.contains(event) {
+                event = .comment
+            }
+        }
     }
 }

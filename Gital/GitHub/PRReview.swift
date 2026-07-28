@@ -31,8 +31,8 @@ enum ReviewEvent: String, CaseIterable, Identifiable {
 /// on that side. Anchoring by coordinates instead of `DiffLine.id` lets the
 /// same comment surface in both the Files Changed diff and a commit diff,
 /// whose parsed line IDs differ for the same physical line.
-struct ReviewCommentAnchor: Hashable {
-    enum Side: String {
+struct ReviewCommentAnchor: Hashable, Codable {
+    enum Side: String, Codable {
         case left = "LEFT"
         case right = "RIGHT"
     }
@@ -71,16 +71,53 @@ struct ReviewCommentAnchor: Hashable {
     }
 }
 
-/// One draft review comment. Like GitHub's pending reviews, drafts stay
-/// local until the review is submitted together with a verdict.
-struct PendingReviewComment: Identifiable, Hashable {
+/// One draft review comment. Drafts stay local (persisted per repo by
+/// `PendingReviewStore`) until the review is submitted together with a
+/// verdict. `lineText` is the content of the anchored diff line at drafting
+/// time — it lets display reject same-number-different-content lines and
+/// lets submission re-anchor drafts whose line numbers no longer match the
+/// PR's whole diff.
+struct PendingReviewComment: Identifiable, Hashable, Codable {
     let id: UUID
     let anchor: ReviewCommentAnchor
+    let lineText: String
     var body: String
 
-    init(id: UUID = UUID(), anchor: ReviewCommentAnchor, body: String) {
+    init(id: UUID = UUID(), anchor: ReviewCommentAnchor, lineText: String, body: String) {
         self.id = id
         self.anchor = anchor
+        self.lineText = lineText
         self.body = body
+    }
+
+    /// Whether this draft belongs under the given displayed diff line: the
+    /// coordinates must match AND the content must be the one the comment
+    /// was written on. Commit diffs and the whole-PR diff number the same
+    /// file differently, so a bare coordinate match would hang the comment
+    /// under an unrelated line.
+    func isAnchored(to diffLine: DiffLine, path: String) -> Bool {
+        anchor.path == path && anchor.matches(diffLine) && lineText == diffLine.text
+    }
+
+    /// The anchor to submit to GitHub, resolved against the PR's whole
+    /// base…head diff. GitHub interprets review coordinates against that
+    /// diff, but a draft written on an individual commit's diff carries the
+    /// commit's own numbering. Returns the anchor unchanged when it already
+    /// points at a line with the drafted content, a re-anchored copy when
+    /// the content moved but occurs exactly once on the anchor's side, and
+    /// nil when the line can't be found — submitting then would either 422
+    /// or silently attach the comment to the wrong line.
+    func resolvedAnchor(in diffs: [FileDiff]) -> ReviewCommentAnchor? {
+        guard let file = diffs.first(where: { $0.path == anchor.path }) else { return nil }
+        let lines = file.hunks.flatMap(\.lines)
+        if lines.contains(where: { anchor.matches($0) && $0.text == lineText }) {
+            return anchor
+        }
+        let candidates = lines.filter { line in
+            line.text == lineText
+                && (anchor.side == .left ? line.kind == .deletion : line.kind != .deletion)
+        }
+        guard candidates.count == 1 else { return nil }
+        return ReviewCommentAnchor(path: file.path, diffLine: candidates[0])
     }
 }

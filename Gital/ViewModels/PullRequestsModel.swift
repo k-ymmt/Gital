@@ -124,7 +124,15 @@ final class PullRequestsModel {
     var detailsCache: [Int: PullRequestDetail] = [:]
     var expanded: Set<Int> = []
     var selectedItem: ItemSelection? {
-        didSet { if oldValue != selectedItem { Task { await loadItemDiffs() } } }
+        didSet {
+            if oldValue != selectedItem {
+                // Different items number the same file differently (commit
+                // diff vs whole-PR diff), so an open composer would resurface
+                // under an unrelated line that shares its coordinates.
+                closeReviewComposer()
+                Task { await loadItemDiffs() }
+            }
+        }
     }
     var itemDiffs: [FileDiff] = []
     var itemLoadError: String?
@@ -145,6 +153,9 @@ final class PullRequestsModel {
         self.github = github
         self.stateFilter = Self.storedStateFilter(for: repository.root)
         loadViewedStates()
+        let store = PendingReviewStore(repoRoot: repository.root)
+        pendingReviewStore = store
+        pendingComments = store.load()
     }
 
     /// Selects a commit/file row of a PR, switching the shown PR if needed.
@@ -324,13 +335,20 @@ final class PullRequestsModel {
 
     /// Draft review comments per PR number. Like a GitHub pending review,
     /// they stay in the draft state until submitted all together with a
-    /// verdict via `submitReview`.
+    /// verdict via `submitReview`; unlike GitHub's they live locally,
+    /// persisted per repo by `PendingReviewStore`.
     var pendingComments: [Int: [PendingReviewComment]] = [:]
+    @ObservationIgnored private var pendingReviewStore: PendingReviewStore?
     /// Anchor the review comment composer is currently open at, nil when
     /// closed. Owned by the model so the composer survives LazyVStack row
     /// recycling while the user scrolls.
     var reviewComposerAnchor: ReviewCommentAnchor?
+    /// Content of the anchored diff line, captured when the composer opens;
+    /// stored on the draft for display matching and submit-time re-anchoring.
+    var reviewComposerLineText = ""
     var reviewComposerText = ""
+    /// Save-time validation failure shown inside the composer.
+    var reviewComposerError: String?
     /// When set, the composer is editing this existing draft instead of
     /// adding a new one.
     var editingCommentID: UUID?
@@ -341,30 +359,46 @@ final class PullRequestsModel {
         pendingComments[number] ?? []
     }
 
-    func pendingComments(at anchor: ReviewCommentAnchor, in number: Int) -> [PendingReviewComment] {
-        pendingComments(for: number).filter { $0.anchor == anchor }
+    func pendingComments(on line: DiffLine, path: String, in number: Int) -> [PendingReviewComment] {
+        pendingComments(for: number).filter { $0.isAnchored(to: line, path: path) }
     }
 
-    func openReviewComposer(at anchor: ReviewCommentAnchor) {
-        reviewComposerAnchor = anchor
-        reviewComposerText = ""
+    func openReviewComposer(at anchor: ReviewCommentAnchor, lineText: String) {
+        if reviewComposerAnchor == anchor && editingCommentID == nil { return }
+        // Unsaved new-comment text travels to the new anchor instead of
+        // being silently discarded; an edit in progress is dropped — its
+        // draft still holds the saved body.
+        if editingCommentID != nil {
+            reviewComposerText = ""
+        }
         editingCommentID = nil
+        reviewComposerAnchor = anchor
+        reviewComposerLineText = lineText
+        reviewComposerError = nil
     }
 
     func editComment(_ comment: PendingReviewComment) {
         reviewComposerAnchor = comment.anchor
+        reviewComposerLineText = comment.lineText
         reviewComposerText = comment.body
+        reviewComposerError = nil
         editingCommentID = comment.id
     }
 
     func closeReviewComposer() {
         reviewComposerAnchor = nil
+        reviewComposerLineText = ""
         reviewComposerText = ""
+        reviewComposerError = nil
         editingCommentID = nil
     }
 
     /// Saves the composer's text as a new draft comment, or into the draft
     /// being edited; empty text is ignored (the UI disables the button).
+    /// When the whole-PR diff is already cached, the anchor is validated
+    /// against it up front so a comment GitHub could never accept (a
+    /// commit-diff line missing from the PR's final diff) fails here, with
+    /// the composer still open, instead of poisoning the submission later.
     func saveComposerComment(in number: Int) {
         guard let anchor = reviewComposerAnchor else { return }
         let body = reviewComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -373,38 +407,61 @@ final class PullRequestsModel {
         if let id = editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
             comments[index].body = body
         } else {
-            comments.append(PendingReviewComment(anchor: anchor, body: body))
+            let comment = PendingReviewComment(anchor: anchor, lineText: reviewComposerLineText, body: body)
+            if let diffs = diffsCache[number], comment.resolvedAnchor(in: diffs) == nil {
+                reviewComposerError = "This line isn't part of the pull request's final diff, so GitHub can't accept a comment here."
+                return
+            }
+            comments.append(comment)
         }
-        pendingComments[number] = comments
+        setPendingComments(comments, for: number)
         closeReviewComposer()
     }
 
     func deleteComment(_ id: UUID, in number: Int) {
         var comments = pendingComments(for: number)
         comments.removeAll { $0.id == id }
-        pendingComments[number] = comments.isEmpty ? nil : comments
+        setPendingComments(comments, for: number)
         if editingCommentID == id {
             closeReviewComposer()
         }
     }
 
+    private func setPendingComments(_ comments: [PendingReviewComment], for number: Int) {
+        pendingComments[number] = comments.isEmpty ? nil : comments
+        pendingReviewStore?.save(pendingComments)
+    }
+
     /// Submits the pending review: verdict, summary body, and all draft
-    /// comments go to GitHub in one call. Returns true on success (drafts
-    /// are cleared and the detail reloads so the reviewer list updates).
+    /// comments go to GitHub in one call. Every draft is first resolved
+    /// against a freshly fetched whole-PR diff — GitHub interprets comment
+    /// coordinates against that diff, while drafts may carry an individual
+    /// commit's numbering or predate newly pushed commits. Returns true on
+    /// success; the submitted drafts are cleared (only those — a comment
+    /// added while the call was in flight was not sent and must survive)
+    /// and the detail reloads so the reviewer list updates.
     func submitReview(_ event: ReviewEvent, body: String, for number: Int) async -> Bool {
         guard !isSubmittingReview else { return false }
         isSubmittingReview = true
+        reviewSubmitError = nil
         defer { isSubmittingReview = false }
+        let drafts = pendingComments(for: number)
         do {
-            try await github.submitReview(
-                number: number,
-                event: event,
-                body: body,
-                comments: pendingComments(for: number)
-            )
-            pendingComments[number] = nil
-            reviewSubmitError = nil
-            closeReviewComposer()
+            var resolved: [PendingReviewComment] = []
+            if !drafts.isEmpty {
+                diffsCache[number] = nil
+                let diffs = try await wholeDiff(for: number)
+                for draft in drafts {
+                    guard let anchor = draft.resolvedAnchor(in: diffs) else {
+                        reviewSubmitError = "The draft on \(draft.anchor.path) line \(draft.anchor.line) no longer matches the pull request diff (the code changed since it was written). Edit or delete that comment, then submit again."
+                        return false
+                    }
+                    resolved.append(PendingReviewComment(id: draft.id, anchor: anchor, lineText: draft.lineText, body: draft.body))
+                }
+            }
+            try await github.submitReview(number: number, event: event, body: body, comments: resolved)
+            let sentIDs = Set(drafts.map(\.id))
+            setPendingComments(pendingComments(for: number).filter { !sentIDs.contains($0.id) }, for: number)
             detailsCache[number] = nil
             if selectedNumber == number {
                 await loadDetail()
