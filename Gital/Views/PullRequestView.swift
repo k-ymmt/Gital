@@ -48,6 +48,15 @@ struct PullRequestItemDiffView: View {
 
                 itemTitle
                 Spacer()
+                if case .commit(let hash) = item, let number = model.selectedPRNumber {
+                    Toggle("Viewed", isOn: Binding(
+                        get: { model.isPRCommitViewed(hash, in: number) },
+                        set: { _ in model.togglePRCommitViewed(hash, in: number) }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 12))
+                    .help("Mark the whole commit as viewed")
+                }
                 DiffModePicker(mode: $model.diffMode)
             }
             .padding(.horizontal, 14)
@@ -77,7 +86,9 @@ struct PullRequestItemDiffView: View {
                             Section {
                                 FileDiffContentView(diff: diff, mode: model.diffMode)
                             } header: {
-                                FileSectionHeader(diff: diff)
+                                FileSectionHeader(diff: diff) {
+                                    fileViewedToggle(for: diff)
+                                }
                             }
                         }
                     }
@@ -107,6 +118,38 @@ struct PullRequestItemDiffView: View {
                 .font(.system(size: 12.5, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
+        }
+    }
+
+    /// Per-file "Viewed" checkbox in a diff section header. Inside a commit it
+    /// toggles the commit-scoped flag (promoting the commit when its last file
+    /// is viewed); on a Files Changed selection it toggles the PR-wide flag.
+    @ViewBuilder
+    private func fileViewedToggle(for diff: FileDiff) -> some View {
+        if let number = model.selectedPRNumber {
+            switch item {
+            case .commit(let hash):
+                Toggle("Viewed", isOn: Binding(
+                    get: { model.isPRCommitFileViewed(commit: hash, path: diff.path, in: number) },
+                    set: { _ in
+                        model.togglePRCommitFileViewed(
+                            commit: hash,
+                            path: diff.path,
+                            allPaths: model.prItemDiffs.map(\.path),
+                            in: number
+                        )
+                    }
+                ))
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5))
+            case .file(let path):
+                Toggle("Viewed", isOn: Binding(
+                    get: { model.isPRFileViewed(path, in: number) },
+                    set: { _ in model.togglePRFileViewed(path, in: number) }
+                ))
+                .toggleStyle(.checkbox)
+                .font(.system(size: 11.5))
+            }
         }
     }
 
@@ -314,20 +357,33 @@ struct PullRequestDetailView: View {
     private var commitsCard: some View {
         VStack(spacing: 0) {
             ForEach(detail.commits) { commit in
+                let viewed = model.isPRCommitViewed(commit.hash, in: detail.number)
                 HStack(spacing: 10) {
-                    Image(systemName: "circle")
-                        .font(.system(size: 8))
-                        .foregroundStyle(.secondary)
-                    Text(commit.message)
-                        .font(.system(size: 12.5))
-                        .lineLimit(1)
-                    Spacer()
-                    Text(commit.author)
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                    Text(commit.hash)
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Image(systemName: "circle")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.secondary)
+                        Text(commit.message)
+                            .font(.system(size: 12.5))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(commit.author)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                        Text(commit.hash)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .opacity(viewed ? 0.4 : 1)
+                    Button {
+                        model.togglePRCommitViewed(commit.hash, in: detail.number)
+                    } label: {
+                        Image(systemName: viewed ? "checkmark.circle.fill" : "checkmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(viewed ? DesignStyle.addition : Color.secondary.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .help(viewed ? "Mark as not viewed" : "Mark as viewed")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)

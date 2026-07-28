@@ -660,6 +660,88 @@ expect(GitHubAvatars.url(email: "dev+tag@example.com", pixelSize: 64)?.absoluteS
 expect(GitHubAvatars.url(email: "", pixelSize: 64) == nil,
        "avatars: empty email yields no URL")
 
+// MARK: - PRViewedState
+
+do {
+    var state = PRViewedState()
+    let files = ["a.swift", "b.swift", "c.swift"]
+
+    // Commit-level viewed marks every file inside it viewed.
+    state.setCommitViewed(true, hash: "abc1234")
+    expect(state.isCommitViewed("abc1234"), "viewed: commit flag set")
+    expect(state.isCommitFileViewed(commit: "abc1234", path: "a.swift"),
+           "viewed: commit viewed implies its files viewed")
+    expect(state.isCommitFileViewed(commit: "abc1234", path: "anything.txt"),
+           "viewed: commit viewed covers files not yet enumerated")
+
+    // Un-viewing one file demotes the commit but keeps the other files viewed.
+    state.toggleCommitFile(commit: "abc1234", path: "b.swift", allPaths: files)
+    expect(!state.isCommitViewed("abc1234"), "viewed: un-viewing a file demotes the commit")
+    expect(!state.isCommitFileViewed(commit: "abc1234", path: "b.swift"),
+           "viewed: the toggled file is no longer viewed")
+    expect(state.isCommitFileViewed(commit: "abc1234", path: "a.swift")
+            && state.isCommitFileViewed(commit: "abc1234", path: "c.swift"),
+           "viewed: sibling files stay viewed after demotion")
+
+    // Viewing the last remaining file promotes the commit.
+    state.toggleCommitFile(commit: "abc1234", path: "b.swift", allPaths: files)
+    expect(state.isCommitViewed("abc1234"), "viewed: last file viewed promotes the commit")
+    expect(state.commitFiles["abc1234"] == nil, "viewed: promotion clears the per-file record")
+
+    // Un-viewing the commit un-views all of its files.
+    state.setCommitViewed(false, hash: "abc1234")
+    expect(!state.isCommitFileViewed(commit: "abc1234", path: "a.swift"),
+           "viewed: un-viewing the commit un-views its files")
+    expect(state.isEmpty, "viewed: fully cleared state is empty")
+
+    // Partial progress never promotes.
+    state.toggleCommitFile(commit: "def5678", path: "a.swift", allPaths: files)
+    expect(!state.isCommitViewed("def5678"), "viewed: partial progress does not promote")
+    state.toggleCommitFile(commit: "def5678", path: "a.swift", allPaths: files)
+    expect(state.isEmpty, "viewed: removing the only viewed file prunes the record")
+
+    // PR-wide Files Changed flags are independent of commit flags.
+    state.toggleFile("a.swift")
+    expect(state.files.contains("a.swift"), "viewed: PR file toggles on")
+    expect(!state.isCommitFileViewed(commit: "def5678", path: "a.swift"),
+           "viewed: PR file flag is independent of commit flags")
+    state.toggleFile("a.swift")
+    expect(state.files.isEmpty, "viewed: PR file toggles off")
+}
+
+// MARK: - PRViewedStore
+
+do {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("gital-viewed-test-\(UUID().uuidString)")
+    let file = dir.appendingPathComponent("pr-viewed.json")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let repoA = URL(fileURLWithPath: "/repos/a")
+    let repoB = URL(fileURLWithPath: "/repos/b")
+
+    var stateA = PRViewedState()
+    stateA.setCommitViewed(true, hash: "abc1234")
+    stateA.toggleFile("a.swift")
+    PRViewedStore(repoRoot: repoA, fileURL: file).save([7: stateA, 8: PRViewedState()])
+
+    var stateB = PRViewedState()
+    stateB.toggleCommitFile(commit: "def5678", path: "x.swift", allPaths: ["x.swift", "y.swift"])
+    PRViewedStore(repoRoot: repoB, fileURL: file).save([3: stateB])
+
+    let loadedA = PRViewedStore(repoRoot: repoA, fileURL: file).load()
+    expect(loadedA[7] == stateA, "store: state round-trips through disk")
+    expect(loadedA[8] == nil, "store: empty states are pruned on save")
+    expect(PRViewedStore(repoRoot: repoB, fileURL: file).load()[3] == stateB,
+           "store: repositories do not clobber each other")
+
+    PRViewedStore(repoRoot: repoA, fileURL: file).save([:])
+    expect(PRViewedStore(repoRoot: repoA, fileURL: file).load().isEmpty,
+           "store: clearing a repo removes its entry")
+    expect(PRViewedStore(repoRoot: repoB, fileURL: file).load()[3] == stateB,
+           "store: clearing one repo keeps the others")
+}
+
 // MARK: - Result
 
 print(failures == 0 ? "\nAll tests passed." : "\n\(failures) test(s) FAILED.")

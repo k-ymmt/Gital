@@ -266,6 +266,54 @@ final class RepoViewModel {
         selectedPRItem = item
     }
 
+    // MARK: Pull request "Viewed" flags
+
+    /// Review-progress flags per PR number, persisted across launches.
+    var prViewedStates: [Int: PRViewedState] = [:]
+    @ObservationIgnored private var prViewedStore: PRViewedStore?
+
+    func isPRFileViewed(_ path: String, in number: Int) -> Bool {
+        prViewedStates[number]?.files.contains(path) == true
+    }
+
+    func isPRCommitViewed(_ hash: String, in number: Int) -> Bool {
+        prViewedStates[number]?.isCommitViewed(hash) == true
+    }
+
+    func isPRCommitFileViewed(commit: String, path: String, in number: Int) -> Bool {
+        prViewedStates[number]?.isCommitFileViewed(commit: commit, path: path) == true
+    }
+
+    func togglePRFileViewed(_ path: String, in number: Int) {
+        mutatePRViewed(number) { $0.toggleFile(path) }
+    }
+
+    func togglePRCommitViewed(_ hash: String, in number: Int) {
+        mutatePRViewed(number) { state in
+            state.setCommitViewed(!state.isCommitViewed(hash), hash: hash)
+        }
+    }
+
+    /// Toggles one file inside a commit's diff. `allPaths` is the commit's
+    /// complete file list (the caller has the loaded diff), so viewing the
+    /// last file promotes the whole commit to viewed.
+    func togglePRCommitFileViewed(commit: String, path: String, allPaths: [String], in number: Int) {
+        mutatePRViewed(number) { $0.toggleCommitFile(commit: commit, path: path, allPaths: allPaths) }
+    }
+
+    private func mutatePRViewed(_ number: Int, _ mutate: (inout PRViewedState) -> Void) {
+        var state = prViewedStates[number] ?? PRViewedState()
+        mutate(&state)
+        prViewedStates[number] = state.isEmpty ? nil : state
+        prViewedStore?.save(prViewedStates)
+    }
+
+    func loadPRViewedStates() {
+        let store = PRViewedStore(repoRoot: repository.root)
+        prViewedStore = store
+        prViewedStates = store.load()
+    }
+
     // MARK: Agent
 
     var agentThreads: [AgentThread] = []
@@ -307,6 +355,7 @@ final class RepoViewModel {
         self.github = GitHubService(repoRoot: repository.root)
         self.codex = CodexAppServer()
         self.prStateFilter = Self.storedPRStateFilter(for: repository.root)
+        loadPRViewedStates()
         startWatching()
     }
 

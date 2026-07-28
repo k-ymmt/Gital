@@ -581,17 +581,24 @@ struct SidebarView: View {
         prSectionHeader("Commits \(detail.commits.count)", key: commitsKey, topPadding: 6)
         if !collapsedPRSections.contains(commitsKey) {
             ForEach(detail.commits) { commit in
+                let viewed = model.isPRCommitViewed(commit.hash, in: detail.number)
                 HStack(spacing: 7) {
-                    Image(systemName: "circle")
-                        .font(.system(size: 6))
-                        .foregroundStyle(.secondary)
-                    Text(commit.message)
-                        .font(.system(size: 12))
-                        .lineLimit(1)
-                    Spacer()
-                    Text(commit.hash)
-                        .font(.system(size: 10.5, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 7) {
+                        Image(systemName: "circle")
+                            .font(.system(size: 6))
+                            .foregroundStyle(.secondary)
+                        Text(commit.message)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                        Spacer()
+                        Text(commit.hash)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .opacity(viewed ? 0.4 : 1)
+                    viewedToggle(viewed) {
+                        model.togglePRCommitViewed(commit.hash, in: detail.number)
+                    }
                 }
                 .padding(.leading, 34)
                 .padding(.trailing, 16)
@@ -608,12 +615,19 @@ struct SidebarView: View {
         prSectionHeader("Files Changed \(detail.files.count)", key: filesKey, topPadding: 8)
         if !collapsedPRSections.contains(filesKey) {
             ForEach(detail.files) { file in
+                let viewed = model.isPRFileViewed(file.path, in: detail.number)
                 HStack(spacing: 7) {
-                    StatusBadge(status: file.deletions > 0 && file.additions == 0 ? .deleted : .modified)
-                    Text((file.path as NSString).lastPathComponent)
-                        .font(.system(size: 12))
-                        .lineLimit(1)
-                    Spacer()
+                    HStack(spacing: 7) {
+                        StatusBadge(status: file.deletions > 0 && file.additions == 0 ? .deleted : .modified)
+                        Text((file.path as NSString).lastPathComponent)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .opacity(viewed ? 0.4 : 1)
+                    viewedToggle(viewed) {
+                        model.togglePRFileViewed(file.path, in: detail.number)
+                    }
                 }
                 .padding(.leading, 34)
                 .padding(.trailing, 16)
@@ -625,6 +639,18 @@ struct SidebarView: View {
                 }
             }
         }
+    }
+
+    /// Checkmark button toggling a row's "Viewed" flag. Kept outside the
+    /// grayed-out portion so it stays legible on viewed rows.
+    private func viewedToggle(_ viewed: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: viewed ? "checkmark.circle.fill" : "checkmark.circle")
+                .font(.system(size: 11))
+                .foregroundStyle(viewed ? DesignStyle.addition : Color.secondary.opacity(0.55))
+        }
+        .buttonStyle(.plain)
+        .help(viewed ? "Mark as not viewed" : "Mark as viewed")
     }
 
     private func isPRItemSelected(_ item: RepoViewModel.PRItemSelection, in number: Int) -> Bool {
