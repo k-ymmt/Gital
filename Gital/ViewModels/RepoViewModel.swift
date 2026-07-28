@@ -170,7 +170,9 @@ final class RepoViewModel {
         func matches(_ pr: PullRequestSummary) -> Bool {
             switch self {
             case .all: true
-            case .open: pr.state == "OPEN" && !pr.isDraft
+            // GitHub counts drafts as open, so Open includes them; Draft
+            // narrows to drafts only.
+            case .open: pr.state == "OPEN"
             case .draft: pr.state == "OPEN" && pr.isDraft
             case .merged: pr.state == "MERGED"
             case .closed: pr.state == "CLOSED"
