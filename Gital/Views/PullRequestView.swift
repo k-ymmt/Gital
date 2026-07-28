@@ -33,7 +33,7 @@ struct PullRequestItemDiffView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            PaneHeader(horizontalPadding: 14, verticalPadding: 10) {
                 Button {
                     model.prs.selectedItem = nil
                 } label: {
@@ -59,10 +59,6 @@ struct PullRequestItemDiffView: View {
                 }
                 DiffModePicker(mode: $model.diffMode)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.quaternary.opacity(0.25))
-            Divider()
 
             if let error = model.prs.itemLoadError {
                 VStack(spacing: 10) {
@@ -210,11 +206,7 @@ struct PullRequestDetailView: View {
     // MARK: - Pieces
 
     private var statusColor: Color {
-        switch detail.state {
-        case "MERGED": Color(hex: 0x8957e5)
-        case "CLOSED": DesignStyle.deletion
-        default: detail.isDraft ? Color.secondary : DesignStyle.addition
-        }
+        DesignStyle.prStateColor(state: detail.state, isDraft: detail.isDraft)
     }
 
     private var statusChip: some View {
@@ -235,7 +227,7 @@ struct PullRequestDetailView: View {
     private func refText(_ name: String) -> Text {
         Text(name)
             .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(Color(hex: 0x6ea8fe))
+            .foregroundStyle(DesignStyle.linkBlue)
     }
 
     private var metaRow: some View {
@@ -291,9 +283,7 @@ struct PullRequestDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(16)
         }
-        .background(.background.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator, lineWidth: 1))
+        .cardStyle()
     }
 
     private func sectionTitle(_ title: String, count: Int? = nil) -> some View {
@@ -334,9 +324,7 @@ struct PullRequestDetailView: View {
                 }
             }
         }
-        .background(.background.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator, lineWidth: 1))
+        .cardStyle()
     }
 
     private func reviewerState(_ state: String) -> some View {
@@ -375,15 +363,9 @@ struct PullRequestDetailView: View {
                             .foregroundStyle(.secondary)
                     }
                     .opacity(viewed ? 0.4 : 1)
-                    Button {
+                    ViewedToggle(viewed: viewed, size: 12) {
                         model.prs.toggleCommitViewed(commit.hash, in: detail.number)
-                    } label: {
-                        Image(systemName: viewed ? "checkmark.circle.fill" : "checkmark.circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(viewed ? DesignStyle.addition : Color.secondary.opacity(0.55))
                     }
-                    .buttonStyle(.plain)
-                    .help(viewed ? "Mark as not viewed" : "Mark as viewed")
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
@@ -397,9 +379,7 @@ struct PullRequestDetailView: View {
                 }
             }
         }
-        .background(.background.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.separator, lineWidth: 1))
+        .cardStyle()
     }
 
     private var canMerge: Bool {

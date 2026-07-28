@@ -7,7 +7,7 @@ struct StashDetailView: View {
         if let ref = model.selectedStashRef,
            let stash = model.stashes.first(where: { $0.id == ref }) {
             VStack(spacing: 0) {
-                HStack(spacing: 10) {
+                PaneHeader(horizontalPadding: 14, verticalPadding: 10) {
                     Image(systemName: "archivebox")
                         .foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 1) {
@@ -24,10 +24,6 @@ struct StashDetailView: View {
                     Button("Drop…", role: .destructive) { model.pendingStashDrop = stash }
                     DiffModePicker(mode: $model.diffMode)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(.quaternary.opacity(0.25))
-                Divider()
 
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {

@@ -472,12 +472,18 @@ struct CommitDetailView: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 6)
 
-                ForEach(fileTreeRows) { row in
-                    switch row.kind {
-                    case .directory(let name, let path):
-                        directoryRow(name: name, path: path, depth: row.depth)
-                    case .file(let file):
-                        fileRow(file, depth: row.depth)
+                let rows = BranchTree.rows(
+                    model.commitFiles.map { ($0.path, $0) },
+                    keyPrefix: "commit-files",
+                    collapsed: collapsedDirectories,
+                    compressChains: true
+                )
+                ForEach(rows) { row in
+                    switch row {
+                    case .folder(let path, let name, let depth):
+                        directoryRow(name: name, path: path, depth: depth)
+                    case .leaf(let file, _, _, let depth):
+                        fileRow(file, depth: depth)
                     }
                 }
             }
@@ -485,11 +491,13 @@ struct CommitDetailView: View {
     }
 
     private func directoryRow(name: String, path: String, depth: Int) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: collapsedDirectories.contains(path) ? "chevron.right" : "chevron.down")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 10)
+        DisclosureRow(
+            isExpanded: !collapsedDirectories.contains(path),
+            spacing: 5,
+            insets: EdgeInsets(top: 4, leading: 14 + CGFloat(depth) * 16, bottom: 4, trailing: 14)
+        ) {
+            collapsedDirectories.toggleMembership(path)
+        } label: {
             Image(systemName: "folder.fill")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
@@ -497,18 +505,6 @@ struct CommitDetailView: View {
                 .font(.system(size: 12.5))
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 4)
-        }
-        .padding(.leading, 14 + CGFloat(depth) * 16)
-        .padding(.trailing, 14)
-        .padding(.vertical, 4)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            if collapsedDirectories.contains(path) {
-                collapsedDirectories.remove(path)
-            } else {
-                collapsedDirectories.insert(path)
-            }
         }
     }
 
@@ -538,78 +534,9 @@ struct CommitDetailView: View {
         }
     }
 
-    // MARK: File tree
-
-    private struct FileTreeRow: Identifiable {
-        enum Kind {
-            case directory(name: String, path: String)
-            case file(CommitFileStat)
-        }
-
-        let id: String
-        let depth: Int
-        let kind: Kind
-    }
-
-    private final class TreeDirectory {
-        var subdirectories: [String: TreeDirectory] = [:]
-        var files: [CommitFileStat] = []
-    }
-
-    /// Flattens the commit's files into tree rows: directories first (single-child
-    /// chains compressed into one "a/b/c" row), then files, both name-sorted.
-    /// Collapsed directories keep their row but drop their descendants.
-    private var fileTreeRows: [FileTreeRow] {
-        let root = TreeDirectory()
-        for file in model.commitFiles {
-            var node = root
-            for component in file.path.split(separator: "/").dropLast() {
-                let name = String(component)
-                if let child = node.subdirectories[name] {
-                    node = child
-                } else {
-                    let child = TreeDirectory()
-                    node.subdirectories[name] = child
-                    node = child
-                }
-            }
-            node.files.append(file)
-        }
-
-        var rows: [FileTreeRow] = []
-        func emit(_ directory: TreeDirectory, path: String, depth: Int) {
-            let subdirectories = directory.subdirectories.sorted {
-                $0.key.localizedStandardCompare($1.key) == .orderedAscending
-            }
-            for (name, child) in subdirectories {
-                var displayName = name
-                var node = child
-                var nodePath = path.isEmpty ? name : "\(path)/\(name)"
-                while node.files.isEmpty, node.subdirectories.count == 1,
-                      let (onlyName, onlyChild) = node.subdirectories.first {
-                    displayName += "/\(onlyName)"
-                    nodePath += "/\(onlyName)"
-                    node = onlyChild
-                }
-                rows.append(FileTreeRow(id: "dir:\(nodePath)", depth: depth, kind: .directory(name: displayName, path: nodePath)))
-                if !collapsedDirectories.contains(nodePath) {
-                    emit(node, path: nodePath, depth: depth + 1)
-                }
-            }
-            let files = directory.files.sorted {
-                $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending
-            }
-            for file in files {
-                rows.append(FileTreeRow(id: file.path, depth: depth, kind: .file(file)))
-            }
-        }
-        emit(root, path: "", depth: 0)
-        return rows
-    }
-
     private var diffPane: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
+            PaneHeader {
                 if let diff = model.selectedCommitDiff {
                     Text(diff.path)
                         .font(.system(size: 12.5, design: .monospaced))
@@ -620,10 +547,6 @@ struct CommitDetailView: View {
                 Spacer()
                 DiffModePicker(mode: $model.diffMode)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.quaternary.opacity(0.25))
-            Divider()
 
             ScrollView([.vertical, .horizontal]) {
                 if let diff = model.selectedCommitDiff {

@@ -161,6 +161,7 @@ extension RepoViewModel {
                 uniquingKeysWith: { first, _ in first }
             )
             workingDiffs = diffs
+            workingDiffLineIDs = Set(currentLines.keys)
             selectedDiffLineIDs = selectedDiffLineIDs.filter { id in
                 guard let current = currentLines[id] else { return false }
                 return previousLines[id] == current

@@ -97,7 +97,7 @@ struct AgentThreadView: View {
                             .font(.system(size: 10, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 22, height: 22)
-                            .background(Color(hex: 0x8957e5), in: Circle())
+                            .background(DesignStyle.mergedPurple, in: Circle())
                     } else {
                         Image(systemName: "person.fill")
                             .font(.system(size: 10, weight: .bold))
@@ -143,12 +143,7 @@ struct AgentThreadView: View {
                 .padding(.vertical, 7)
             }
         }
-        .background(.background.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(.separator, lineWidth: 1)
-        )
+        .cardStyle(cornerRadius: 10)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
     }

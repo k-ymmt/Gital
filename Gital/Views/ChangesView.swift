@@ -32,7 +32,7 @@ struct ChangesView: View {
                         // Same for the composer: don't let a background diff
                         // refresh silently swallow the box mid-typing.
                         if let range = model.composerRange, let file = model.composerFile,
-                           let anchorID = model.composerAnchorID, !visibleLineIDs.contains(anchorID) {
+                           let anchorID = model.composerAnchorID, !model.workingDiffLineIDs.contains(anchorID) {
                             AgentComposerView(model: model, range: range, fileName: (file as NSString).lastPathComponent)
                         }
                     }
@@ -50,7 +50,7 @@ struct ChangesView: View {
     }
 
     private var headerBar: some View {
-        HStack(spacing: 10) {
+        PaneHeader {
             Text(headerTitle)
                 .font(.system(size: 12.5, design: .monospaced))
                 .lineLimit(1)
@@ -68,9 +68,6 @@ struct ChangesView: View {
             Spacer()
             DiffModePicker(mode: $model.diffMode)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.quaternary.opacity(0.25))
     }
 
     private var headerTitle: String {
@@ -82,14 +79,10 @@ struct ChangesView: View {
         return selection.path + (selection.staged ? " — staged" : " — unstaged")
     }
 
-    private var visibleLineIDs: Set<String> {
-        Set(model.workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map(\.id))
-    }
-
     /// Agent threads whose anchor line ID is no longer present in the
     /// displayed diffs; rendered at the end of the list so they stay visible.
     private var orphanedThreads: [AgentThread] {
-        let visible = visibleLineIDs
+        let visible = model.workingDiffLineIDs
         return model.agentThreads.filter { !visible.contains($0.anchorLineID) }
     }
 

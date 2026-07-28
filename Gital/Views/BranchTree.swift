@@ -23,10 +23,13 @@ enum BranchTree {
     /// Builds visible rows for the given (fullName, leaf) pairs, skipping the
     /// contents of folders whose path is in `collapsed`. `keyPrefix` namespaces
     /// folder paths so sections (local vs. each remote) never collide.
+    /// `compressChains` folds single-child folder chains into one "a/b/c" row
+    /// (the commit file tree wants this; branch folders do not).
     static func rows<Leaf: Hashable>(
         _ items: [(String, Leaf)],
         keyPrefix: String,
-        collapsed: Set<String>
+        collapsed: Set<String>,
+        compressChains: Bool = false
     ) -> [BranchTreeRow<Leaf>] {
         let root = BranchTreeNode<Leaf>()
         for (fullName, leaf) in items {
@@ -45,7 +48,7 @@ enum BranchTree {
         }
 
         var rows: [BranchTreeRow<Leaf>] = []
-        flatten(root, path: keyPrefix, depth: 0, collapsed: collapsed, into: &rows)
+        flatten(root, path: keyPrefix, depth: 0, collapsed: collapsed, compressChains: compressChains, into: &rows)
         return rows
     }
 
@@ -54,15 +57,26 @@ enum BranchTree {
         path: String,
         depth: Int,
         collapsed: Set<String>,
+        compressChains: Bool,
         into rows: inout [BranchTreeRow<Leaf>]
     ) {
         for (name, child) in node.subfolders.sorted(by: {
             $0.key.localizedStandardCompare($1.key) == .orderedAscending
         }) {
-            let folderPath = path + "/" + name
-            rows.append(.folder(path: folderPath, name: name, depth: depth))
+            var displayName = name
+            var node = child
+            var folderPath = path + "/" + name
+            if compressChains {
+                while node.leaves.isEmpty, node.subfolders.count == 1,
+                      let (onlyName, onlyChild) = node.subfolders.first {
+                    displayName += "/\(onlyName)"
+                    folderPath += "/\(onlyName)"
+                    node = onlyChild
+                }
+            }
+            rows.append(.folder(path: folderPath, name: displayName, depth: depth))
             if !collapsed.contains(folderPath) {
-                flatten(child, path: folderPath, depth: depth + 1, collapsed: collapsed, into: &rows)
+                flatten(node, path: folderPath, depth: depth + 1, collapsed: collapsed, compressChains: compressChains, into: &rows)
             }
         }
         for (name, leaf) in node.leaves.sorted(by: {

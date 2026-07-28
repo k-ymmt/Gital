@@ -21,6 +21,19 @@ enum DesignStyle {
     static let hunkBackground = Color(hex: 0x388bfd, opacity: 0.10)
     static let hunkText = Color(hex: 0x6ea8fe)
     static let tagAmber = Color(hex: 0xe0b25a)
+    /// GitHub's merged-purple; also the agent accent.
+    static let mergedPurple = Color(hex: 0x8957e5)
+    static let linkBlue = Color(hex: 0x6ea8fe)
+    static let brandBlue = Color(hex: 0x2f6fed)
+
+    /// State color of a pull request (list icon, detail status chip).
+    static func prStateColor(state: String, isDraft: Bool) -> Color {
+        switch state {
+        case "MERGED": mergedPurple
+        case "CLOSED": deletion
+        default: isDraft ? Color.secondary : addition
+        }
+    }
 
     static let laneColors: [Color] = [
         Color(hex: 0x4d9fff),

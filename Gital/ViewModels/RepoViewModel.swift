@@ -90,6 +90,10 @@ final class RepoViewModel {
 
     var selectedChangePath: String? { selectedChange?.path }
     var workingDiffs: [FileDiff] = []
+    /// IDs of every visible line in `workingDiffs`, maintained by
+    /// `loadWorkingDiffs` — views must not rebuild this O(all lines) set on
+    /// every render.
+    var workingDiffLineIDs: Set<String> = []
     var commitMessage = ""
     var amend = false
     var isCommitting = false
