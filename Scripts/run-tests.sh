@@ -1,26 +1,13 @@
 #!/bin/zsh
-# Compiles the git parsing layer together with Tests/main.swift and runs the assertions.
+# Runs the GItalTests unit-test bundle (Swift Testing, hosted in Gital.app).
+# Extra arguments are passed through to xcodebuild, e.g.:
+#   Scripts/run-tests.sh -only-testing:GItalTests/DiffParserTests
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BUILD_DIR="${TMPDIR:-/tmp}/gital-tests"
-mkdir -p "$BUILD_DIR"
-
-swiftc \
-  Gital/Support/Subprocess.swift \
-  Gital/Git/GitModels.swift \
-  Gital/Git/GitExecutor.swift \
-  Gital/Git/DiffParser.swift \
-  Gital/Git/PatchBuilder.swift \
-  Gital/Git/GitRepository.swift \
-  Gital/Git/CommitGraph.swift \
-  Gital/Git/RepoWatcher.swift \
-  Gital/GitHub/GitHubAvatars.swift \
-  Gital/GitHub/PRViewedState.swift \
-  Gital/GitHub/GitHubService.swift \
-  Gital/Support/ExecutableLocator.swift \
-  Gital/Agent/CodexProtocol.swift \
-  Tests/main.swift \
-  -o "$BUILD_DIR/gital-tests"
-
-"$BUILD_DIR/gital-tests"
+xcodebuild test \
+  -project Gital.xcodeproj \
+  -scheme Gital \
+  -destination 'platform=macOS' \
+  -quiet \
+  "$@"

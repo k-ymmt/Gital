@@ -6,8 +6,19 @@
 	objectVersion = 110;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		C49513C33018B01D00E91416 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C49511053012FEBC00E91416 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C495110C3012FEBC00E91416;
+			remoteInfo = Gital;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		C495110D3012FEBC00E91416 /* Gital.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Gital.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C49513BF3018B01D00E91416 /* GItalTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GItalTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +27,20 @@
 			path = Gital;
 			sourceTree = "<group>";
 		};
+		C49513C03018B01D00E91416 /* GItalTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = GItalTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		C495110A3012FEBC00E91416 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		C49513BC3018B01D00E91416 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
 			);
@@ -31,6 +52,7 @@
 			isa = PBXGroup;
 			children = (
 				C495110F3012FEBC00E91416 /* Gital */,
+				C49513C03018B01D00E91416 /* GItalTests */,
 				C495110E3012FEBC00E91416 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -39,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				C495110D3012FEBC00E91416 /* Gital.app */,
+				C49513BF3018B01D00E91416 /* GItalTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -64,6 +87,27 @@
 			productReference = C495110D3012FEBC00E91416 /* Gital.app */;
 			productType = "com.apple.product-type.application";
 		};
+		C49513BE3018B01D00E91416 /* GItalTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GItalTests" */;
+			buildPhases = (
+				C49513BB3018B01D00E91416 /* Sources */,
+				C49513BC3018B01D00E91416 /* Frameworks */,
+				C49513BD3018B01D00E91416 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C49513C43018B01D00E91416 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C49513C03018B01D00E91416 /* GItalTests */,
+			);
+			name = GItalTests;
+			productName = GItalTests;
+			productReference = C49513BF3018B01D00E91416 /* GItalTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -76,6 +120,10 @@
 				TargetAttributes = {
 					C495110C3012FEBC00E91416 = {
 						CreatedOnToolsVersion = 27.0;
+					};
+					C49513BE3018B01D00E91416 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = C495110C3012FEBC00E91416;
 					};
 				};
 			};
@@ -94,12 +142,18 @@
 			projectRoot = "";
 			targets = (
 				C495110C3012FEBC00E91416 /* Gital */,
+				C49513BE3018B01D00E91416 /* GItalTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		C495110B3012FEBC00E91416 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		C49513BD3018B01D00E91416 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -112,7 +166,20 @@
 			files = (
 			);
 		};
+		C49513BB3018B01D00E91416 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		C49513C43018B01D00E91416 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C495110C3012FEBC00E91416 /* Gital */;
+			targetProxy = C49513C33018B01D00E91416 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		C49511163012FEBE00E91416 /* Debug configuration for PBXProject "Gital" */ = {
@@ -299,6 +366,48 @@
 			};
 			name = Release;
 		};
+		C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GItalTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8HUWJ2ZRK2;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GItalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gital.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Gital";
+			};
+			name = Debug;
+		};
+		C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GItalTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 8HUWJ2ZRK2;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.kymmt.GItalTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Gital.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Gital";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -315,6 +424,14 @@
 			buildConfigurations = (
 				C49511193012FEBE00E91416 /* Debug configuration for PBXNativeTarget "Gital" */,
 				C495111A3012FEBE00E91416 /* Release configuration for PBXNativeTarget "Gital" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		C49513C53018B01D00E91416 /* Build configuration list for PBXNativeTarget "GItalTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C49513C63018B01D00E91416 /* Debug configuration for PBXNativeTarget "GItalTests" */,
+				C49513C73018B01D00E91416 /* Release configuration for PBXNativeTarget "GItalTests" */,
 			);
 			defaultConfigurationName = Release;
 		};

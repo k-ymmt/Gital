@@ -10,10 +10,10 @@ A native macOS Git client built with SwiftUI (macOS 26+ Liquid Glass design lang
 
 ```sh
 xcodebuild -project Gital.xcodeproj -scheme Gital -configuration Debug build
-./Scripts/run-tests.sh   # parser/graph tests; exits non-zero on failure
+./Scripts/run-tests.sh   # runs the GItalTests bundle via `xcodebuild test`; exits non-zero on failure
 ```
 
-There is no XCTest target. Tests live in `Tests/main.swift` as plain assertions (`expect(...)`); `Scripts/run-tests.sh` compiles them with `swiftc` together with the `Gital/Git/` layer plus the other files listed in the script (`Subprocess`, `GitHubService`, `CodexProtocol`, …). To test a new file, add it to the `swiftc` file list in that script. There is no way to run a single test — the whole suite runs in seconds.
+Tests live in the `GItalTests` unit-test target (note the capital I — Xcode's spelling) as Swift Testing suites (`@Test` / `#expect`), hosted in Gital.app with `@testable import Gital`. The target uses a synchronized folder group, so a new `.swift` file dropped into `GItalTests/` joins the target automatically — no pbxproj edits. The app module builds with `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, so test suites are annotated `@MainActor` to call into it. Run a subset with `./Scripts/run-tests.sh -only-testing:GItalTests/DiffParserTests` (extra args pass through to xcodebuild). `AppModel` skips auto-opening the most recent repository when XCTest is loaded, so hosted test runs don't spawn git/codex against a real repo.
 
 ## Release (Homebrew cask)
 

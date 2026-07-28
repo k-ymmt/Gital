@@ -25,6 +25,11 @@ final class AppModel {
             .map { URL(fileURLWithPath: $0) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
 
+        // Unit tests host this app; auto-opening the user's most recent
+        // repository would spawn git (and codex) against a real repo in the
+        // middle of a test run.
+        guard NSClassFromString("XCTestCase") == nil else { return }
+
         if let mostRecent = recentRepositories.first {
             openRepository(at: mostRecent)
         }
