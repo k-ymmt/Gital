@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 enum CodexError: LocalizedError {
     case notInstalled
@@ -41,13 +42,15 @@ actor CodexAppServer {
         }
     }
 
+    private static let logger = Logger(subsystem: "app.kymmt.Gital", category: "CodexAppServer")
+
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var nextRequestID = 10
     private var pendingRequests: [Int: CheckedContinuation<[String: Any], Error>] = [:]
     private var activeTurns: [UUID: TurnRecord] = [:]
-    private var notificationHandlers: [UUID: ([String: Any]) -> Void] = [:]
-    private var buffer = Data()
+    private var notificationHandlers: [UUID: (CodexNotification) -> Void] = [:]
+    private var lineBuffer = NewlineBuffer()
     private var initTask: Task<Void, Error>?
     /// Bumped whenever `initTask` is replaced; lets awaiting callers detect
     /// that the task they waited on is no longer the current one.
@@ -102,50 +105,36 @@ actor CodexAppServer {
         let turnID = UUID()
         let record = TurnRecord(threadID: threadID, continuation: continuation)
         var finalText = ""
-        let observer: ([String: Any]) -> Void = { [weak self] message in
-            guard let method = message["method"] as? String,
-                  let params = message["params"] as? [String: Any] else { return }
-            let messageThreadID = params["threadId"] as? String
-            guard messageThreadID == nil || messageThreadID == threadID else { return }
+        let observer: (CodexNotification) -> Void = { [weak self] notification in
+            guard notification.threadID == nil || notification.threadID == threadID else { return }
 
-            switch method {
-            case "item/agentMessage/delta":
-                if let delta = params["delta"] as? String {
-                    finalText += delta
-                    continuation.yield(.delta(delta))
+            switch notification {
+            case .agentMessageDelta(_, let delta):
+                finalText += delta
+                continuation.yield(.delta(delta))
+            case .itemStarted(_, let kind):
+                switch kind {
+                case .commandExecution(let command):
+                    continuation.yield(.status("$ \(command)"))
+                case .fileChange:
+                    continuation.yield(.status("Editing files…"))
+                case .reasoning:
+                    continuation.yield(.status("Thinking…"))
+                case .other:
+                    break
                 }
-            case "item/started":
-                if let item = params["item"] as? [String: Any],
-                   let type = item["type"] as? String {
-                    switch type {
-                    case "commandExecution":
-                        let command = item["command"] as? String ?? ""
-                        continuation.yield(.status("$ \(command)"))
-                    case "fileChange":
-                        continuation.yield(.status("Editing files…"))
-                    case "reasoning":
-                        continuation.yield(.status("Thinking…"))
-                    default:
-                        break
-                    }
-                }
-            case "item/completed":
-                if let item = params["item"] as? [String: Any],
-                   item["type"] as? String == "agentMessage",
-                   let text = item["text"] as? String {
-                    finalText = text
-                }
-            case "turn/completed":
+            case .agentMessageCompleted(_, let text):
+                finalText = text
+            case .turnCompleted:
                 record.completed = true  // before finish: onTermination must not send an interrupt
                 continuation.yield(.completed(finalText))
                 continuation.finish()
                 Task { [weak self] in await self?.cleanUpTurn(turnID) }
-            case "turn/failed":
-                let reason = ((params["error"] as? [String: Any])?["message"] as? String) ?? "unknown error"
+            case .turnFailed(_, let message):
                 record.completed = true
-                continuation.finish(throwing: CodexError.turnFailed(reason))
+                continuation.finish(throwing: CodexError.turnFailed(message))
                 Task { [weak self] in await self?.cleanUpTurn(turnID) }
-            default:
+            case .unknown:
                 break
             }
         }
@@ -230,8 +219,9 @@ actor CodexAppServer {
 
     private func launchAndInitialize() async throws {
         try launchProcess()
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
         _ = try await sendRequest(method: "initialize", params: [
-            "clientInfo": ["name": "gital", "title": "Gital", "version": "0.1.0"],
+            "clientInfo": ["name": "gital", "title": "Gital", "version": version],
         ])
     }
 
@@ -347,37 +337,32 @@ actor CodexAppServer {
     }
 
     private func consume(_ data: Data) {
-        buffer.append(data)
-        while let newlineIndex = buffer.firstIndex(of: 0x0a) {
-            let lineData = buffer.subdata(in: buffer.startIndex..<newlineIndex)
-            buffer.removeSubrange(buffer.startIndex...newlineIndex)
-            guard !lineData.isEmpty,
-                  let message = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any] else { continue }
+        for lineData in lineBuffer.append(data) {
+            guard let message = CodexServerMessage.parse(lineData) else {
+                // Never drop a line silently — an unexpected shape here is
+                // the first symptom of a protocol change.
+                Self.logger.warning("Dropped undecodable app-server line (\(lineData.count) bytes)")
+                continue
+            }
             dispatch(message)
         }
     }
 
-    private func dispatch(_ message: [String: Any]) {
-        let isRequest = message["method"] != nil
-        // A response has an id and no method. Matching on id alone let a
-        // server-initiated request with a colliding id swallow a pending
-        // continuation.
-        if !isRequest, let id = message["id"] as? Int {
+    private func dispatch(_ message: CodexServerMessage) {
+        switch message {
+        case .response(let id, let result, let errorMessage):
             guard let continuation = pendingRequests.removeValue(forKey: id) else { return }
-            if let error = message["error"] as? [String: Any] {
-                let text = error["message"] as? String ?? "unknown error"
-                continuation.resume(throwing: CodexError.protocolError(text))
+            if let errorMessage {
+                continuation.resume(throwing: CodexError.protocolError(errorMessage))
             } else {
-                continuation.resume(returning: message["result"] as? [String: Any] ?? [:])
+                continuation.resume(returning: result)
             }
-            return
-        }
-        if isRequest, let id = message["id"] {
-            respond(toServerRequest: message, id: id)
-            return
-        }
-        for handler in notificationHandlers.values {
-            handler(message)
+        case .serverRequest(let id, let method):
+            respond(toServerRequest: method, id: id)
+        case .notification(let notification):
+            for handler in notificationHandlers.values {
+                handler(notification)
+            }
         }
     }
 
@@ -385,14 +370,13 @@ actor CodexAppServer {
     /// waiting (the turn silently hangs). Approval requests are approved:
     /// every turn in this app is an explicit user instruction to change the
     /// repository. Anything unknown gets a method-not-found error.
-    private func respond(toServerRequest message: [String: Any], id: Any) {
-        guard let method = message["method"] as? String else { return }
+    private func respond(toServerRequest method: String, id: CodexRequestID) {
         let response: [String: Any]
         if method.localizedCaseInsensitiveContains("approval") {
-            response = ["jsonrpc": "2.0", "id": id, "result": ["decision": "approved"]]
+            response = ["jsonrpc": "2.0", "id": id.jsonValue, "result": ["decision": "approved"]]
         } else {
             response = [
-                "jsonrpc": "2.0", "id": id,
+                "jsonrpc": "2.0", "id": id.jsonValue,
                 "error": ["code": -32601, "message": "method not supported: \(method)"],
             ]
         }

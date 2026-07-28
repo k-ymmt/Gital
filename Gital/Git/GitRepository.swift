@@ -103,7 +103,7 @@ final class GitRepository: @unchecked Sendable {
     // MARK: - Log
 
     func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
-        async let remoteOutput = executor.run(["remote"])
+        async let remotes = remoteNames()
         // NUL field separators: none of these fields can ever contain a NUL,
         // unlike 0x1E/0x1F which a hostile subject could carry.
         let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%s%x00%D"
@@ -119,15 +119,29 @@ final class GitRepository: @unchecked Sendable {
         var output: String
         do {
             output = try await executor.run(args)
-        } catch let error as GitError where error.stderr.contains("ambiguous argument 'HEAD'") {
+        } catch let error as GitError {
             // Unborn HEAD (fresh repo / orphan branch): the positional HEAD
             // doesn't resolve; list reachable refs only, which may be empty.
+            // Probed with rev-parse instead of matching stderr wording, which
+            // varies across git versions and locales.
+            guard await !headExists() else { throw error }
             var retryArgs = args
             retryArgs.removeAll { $0 == "HEAD" }
             output = try await executor.run(retryArgs)
         }
-        let remotes = Set(((try? await remoteOutput) ?? "").split(separator: "\n").map(String.init))
-        return Self.parseLog(output, remotes: remotes)
+        return Self.parseLog(output, remotes: await remotes)
+    }
+
+    /// Whether HEAD resolves to a commit — false on an unborn branch.
+    private func headExists() async -> Bool {
+        (try? await executor.run(["rev-parse", "--verify", "--quiet", "HEAD"])) != nil
+    }
+
+    /// Names of configured remotes. Failure degrades to an empty set — refs
+    /// then classify as local branches — because log/detail loading must not
+    /// fail outright over a broken `git remote`.
+    private func remoteNames() async -> Set<String> {
+        Set(((try? await executor.run(["remote"])) ?? "").split(separator: "\n").map(String.init))
     }
 
     static func parseLog(_ output: String, remotes: Set<String> = []) -> [Commit] {
@@ -169,7 +183,7 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func commitDetail(_ hash: String) async throws -> CommitDetail? {
-        async let remoteOutput = executor.run(["remote"])
+        async let remotes = remoteNames()
         // NUL separators as in `log`; %B goes last so the multi-line message
         // can't split the record even though it contains newlines.
         let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%D%x00%B"
@@ -178,8 +192,7 @@ final class GitRepository: @unchecked Sendable {
             "--date=format-local:%Y-%m-%d %H:%M:%S",
             "--pretty=format:\(format)", hash,
         ])
-        let remotes = Set(((try? await remoteOutput) ?? "").split(separator: "\n").map(String.init))
-        return Self.parseCommitDetail(output, remotes: remotes)
+        return Self.parseCommitDetail(output, remotes: await remotes)
     }
 
     static func parseCommitDetail(_ output: String, remotes: Set<String> = []) -> CommitDetail? {
@@ -378,12 +391,23 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func push() async throws {
-        do {
+        // Probe upstream existence instead of matching "--set-upstream" in
+        // stderr, whose wording is unowned API surface across git versions.
+        let hasUpstream = (try? await executor.run(
+            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]
+        )) != nil
+        if hasUpstream {
             try await executor.run(["push"])
-        } catch let error as GitError where error.stderr.contains("--set-upstream") {
-            let branch = try await currentBranch()
-            try await executor.run(["push", "--set-upstream", "origin", branch])
+            return
         }
+        let branch = try await currentBranch()
+        guard branch != "HEAD" else {
+            // Detached HEAD: plain push lets git report the real problem
+            // instead of creating a branch literally named "HEAD".
+            try await executor.run(["push"])
+            return
+        }
+        try await executor.run(["push", "--set-upstream", "origin", branch])
     }
 
     func currentBranch() async throws -> String {
@@ -448,7 +472,11 @@ final class GitRepository: @unchecked Sendable {
             "tag", "--sort=-creatordate",
             "--format=%(refname:short)\u{1f}%(objectname)\u{1f}%(*objectname)"
         ])
-        return output.split(separator: "\n").compactMap { line in
+        return Self.parseTags(output)
+    }
+
+    static func parseTags(_ output: String) -> [Tag] {
+        output.split(separator: "\n").compactMap { line in
             let fields = line.components(separatedBy: "\u{1f}")
             guard fields.count >= 3 else { return nil }
             // %(*objectname) is the peeled commit of an annotated tag; empty for lightweight tags.
@@ -456,9 +484,15 @@ final class GitRepository: @unchecked Sendable {
         }
     }
 
+    private static let stashListFormat = "%gd\u{1f}%H\u{1f}%gs"
+
     func stashes() async throws -> [Stash] {
-        let output = try await executor.run(["stash", "list", "--format=%gd\u{1f}%H\u{1f}%gs"])
-        return output.split(separator: "\n").enumerated().compactMap { index, line in
+        let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])
+        return Self.parseStashes(output)
+    }
+
+    static func parseStashes(_ output: String) -> [Stash] {
+        output.split(separator: "\n").enumerated().compactMap { index, line in
             let fields = line.components(separatedBy: "\u{1f}")
             guard fields.count >= 3 else { return nil }
             return Stash(index: index, reference: fields[0], commitHash: fields[1], message: fields[2])
@@ -518,11 +552,9 @@ final class GitRepository: @unchecked Sendable {
     /// list changes (another drop, a `git stash push` in a terminal), and a
     /// positional drop against a stale list destroys the wrong stash.
     private func resolveStashRef(_ stash: Stash) async throws -> String {
-        let output = try await executor.run(["stash", "list", "--format=%gd\u{1f}%H"])
-        for line in output.split(separator: "\n") {
-            let fields = line.components(separatedBy: "\u{1f}")
-            guard fields.count >= 2 else { continue }
-            if fields[1] == stash.commitHash { return fields[0] }
+        let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])
+        if let match = Self.parseStashes(output).first(where: { $0.commitHash == stash.commitHash }) {
+            return match.reference
         }
         throw GitError(
             command: "stash",

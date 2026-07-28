@@ -106,7 +106,10 @@ struct GitHubService {
             "pr", "list", "--state", "all", "--limit", "30",
             "--json", "number,title,author,state,isDraft,headRefName,reviewRequests",
         ])
+        return try Self.parsePullRequestList(data)
+    }
 
+    static func parsePullRequestList(_ data: Data) throws -> [PullRequestSummary] {
         struct Row: Decodable {
             struct Author: Decodable { let login: String; let name: String? }
             struct ReviewRequest: Decodable { let login: String? }
@@ -145,7 +148,10 @@ struct GitHubService {
             "pr", "view", String(number),
             "--json", "number,title,author,state,isDraft,baseRefName,headRefName,createdAt,body,additions,deletions,changedFiles,mergeable,labels,latestReviews,reviewRequests,commits,files",
         ])
+        return try Self.parsePullRequestDetail(data)
+    }
 
+    static func parsePullRequestDetail(_ data: Data) throws -> PullRequestDetail {
         struct Row: Decodable {
             struct Author: Decodable { let login: String; let name: String? }
             struct Label: Decodable { let name: String; let color: String }

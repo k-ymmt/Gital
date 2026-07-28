@@ -358,6 +358,108 @@ let detachedBranches = GitRepository.parseBranches(detachedOutput)
 expect(detachedBranches.count == 1 && detachedBranches[0].name == "main", "detached HEAD placeholder is not a branch")
 expect(!detachedBranches.contains { $0.isCurrent }, "detached HEAD has no current branch")
 
+// MARK: - Tag / stash list parsing
+
+let tagOutput = [
+    ["v1.1.0", "tagobj111", "peeled111"].joined(separator: "\u{1f}"),   // annotated
+    ["v1.0.0", "commit000", ""].joined(separator: "\u{1f}"),            // lightweight
+].joined(separator: "\n")
+let parsedTags = GitRepository.parseTags(tagOutput)
+expect(parsedTags.count == 2, "tag list parses two tags")
+expect(parsedTags[0].tipHash == "peeled111", "annotated tag uses peeled commit hash")
+expect(parsedTags[1].tipHash == "commit000", "lightweight tag uses object hash directly")
+
+let stashOutput = [
+    ["stash@{0}", "aaa111", "WIP on main: something"].joined(separator: "\u{1f}"),
+    ["stash@{1}", "bbb222", "On feature: other"].joined(separator: "\u{1f}"),
+].joined(separator: "\n")
+let parsedStashes = GitRepository.parseStashes(stashOutput)
+expect(parsedStashes.count == 2, "stash list parses two stashes")
+expect(parsedStashes[0].reference == "stash@{0}" && parsedStashes[0].index == 0, "stash reference and index")
+expect(parsedStashes[1].commitHash == "bbb222" && parsedStashes[1].message == "On feature: other", "stash hash and message")
+
+// MARK: - gh pull request response parsing
+
+let prListJSON = Data("""
+[
+  {"number": 12, "title": "Add feature", "author": {"login": "alice", "name": "Alice A"},
+   "state": "OPEN", "isDraft": false, "headRefName": "feature/x",
+   "reviewRequests": [{"login": "bob"}, {}]},
+  {"number": 11, "title": "Old fix", "author": {"login": "carol", "name": ""},
+   "state": "MERGED", "isDraft": false, "headRefName": "fix/y", "reviewRequests": null}
+]
+""".utf8)
+do {
+    let prs = try GitHubService.parsePullRequestList(prListJSON)
+    expect(prs.count == 2, "pr list parses two rows")
+    expect(prs[0].author == "Alice A", "pr author prefers display name")
+    expect(prs[0].reviewRequestLogins == ["bob"], "team review requests without login are dropped")
+    expect(prs[1].author == "carol", "empty display name falls back to login")
+} catch {
+    expect(false, "pr list fixture decodes")
+}
+expect((try? GitHubService.parsePullRequestList(Data("not json".utf8))) == nil, "garbage pr list throws instead of decoding")
+
+let prDetailJSON = Data("""
+{"number": 12, "title": "Add feature", "author": {"login": "alice", "name": "Alice A"},
+ "state": "OPEN", "isDraft": false, "baseRefName": "main", "headRefName": "feature/x",
+ "createdAt": "2026-07-01T00:00:00Z", "body": "Hello", "additions": 10, "deletions": 2,
+ "changedFiles": 1, "mergeable": "MERGEABLE", "labels": [{"name": "bug", "color": "ff0000"}],
+ "latestReviews": [{"author": {"login": "bob", "name": null}, "state": "APPROVED"}],
+ "reviewRequests": [{"login": "bob"}, {"login": "dave"}],
+ "commits": [{"oid": "abcdef0123456789", "messageHeadline": "First", "authors": [{"name": "Alice A", "login": "alice"}]}],
+ "files": [{"path": "a.swift", "additions": 10, "deletions": 2}]}
+""".utf8)
+do {
+    let detail = try GitHubService.parsePullRequestDetail(prDetailJSON)
+    expect(detail.reviewers.count == 2, "reviewed reviewer is not duplicated by a pending request")
+    expect(detail.reviewers.contains { $0.name == "dave" && $0.state == "PENDING" }, "requested reviewer appears as pending")
+    expect(detail.commits.first?.hash == "abcdef0", "pr commit hash is truncated to 7 chars")
+    expect(detail.labels.first?.name == "bug", "pr labels decode")
+} catch {
+    expect(false, "pr detail fixture decodes")
+}
+
+// MARK: - Codex protocol parsing
+
+var lineBuffer = NewlineBuffer()
+let chunk1 = Data("{\"a\":1}\n{\"b\"".utf8)
+let chunk2 = Data(":2}\n\n".utf8)
+let lines1 = lineBuffer.append(chunk1)
+expect(lines1.count == 1 && String(decoding: lines1[0], as: UTF8.self) == "{\"a\":1}", "newline buffer yields complete line, holds partial")
+let lines2 = lineBuffer.append(chunk2)
+expect(lines2.count == 1 && String(decoding: lines2[0], as: UTF8.self) == "{\"b\":2}", "newline buffer completes split line, skips empty")
+
+func codexParse(_ json: String) -> CodexServerMessage? {
+    CodexServerMessage.parse(Data(json.utf8))
+}
+if case .response(let id, let result, let errorMessage)? = codexParse(#"{"jsonrpc":"2.0","id":10,"result":{"ok":true}}"#) {
+    expect(id == 10 && errorMessage == nil && result["ok"] as? Bool == true, "codex response parses")
+} else { expect(false, "codex response parses") }
+if case .response(_, _, let errorMessage)? = codexParse(#"{"jsonrpc":"2.0","id":11,"error":{"message":"boom"}}"#) {
+    expect(errorMessage == "boom", "codex error response carries message")
+} else { expect(false, "codex error response parses") }
+if case .serverRequest(let id, let method)? = codexParse(#"{"jsonrpc":"2.0","id":"srv-1","method":"execCommandApproval","params":{}}"#) {
+    expect(id == .string("srv-1") && method == "execCommandApproval", "codex server request keeps string id")
+} else { expect(false, "codex server request parses") }
+if case .notification(.agentMessageDelta(let threadID, let delta))? = codexParse(#"{"method":"item/agentMessage/delta","params":{"threadId":"t1","delta":"Hi"}}"#) {
+    expect(threadID == "t1" && delta == "Hi", "codex delta notification parses")
+} else { expect(false, "codex delta notification parses") }
+if case .notification(.itemStarted(_, .commandExecution(let command)))? = codexParse(#"{"method":"item/started","params":{"threadId":"t1","item":{"type":"commandExecution","command":"ls"}}}"#) {
+    expect(command == "ls", "codex commandExecution item parses")
+} else { expect(false, "codex commandExecution item parses") }
+if case .notification(.agentMessageCompleted(_, let text))? = codexParse(#"{"method":"item/completed","params":{"threadId":"t1","item":{"type":"agentMessage","text":"Done"}}}"#) {
+    expect(text == "Done", "codex agentMessage completion parses")
+} else { expect(false, "codex agentMessage completion parses") }
+if case .notification(.turnFailed(_, let message))? = codexParse(#"{"method":"turn/failed","params":{"threadId":"t1","error":{"message":"bad"}}}"#) {
+    expect(message == "bad", "codex turn/failed carries reason")
+} else { expect(false, "codex turn/failed parses") }
+if case .notification(.unknown(let method, _))? = codexParse(#"{"method":"thread/tokenCount","params":{"threadId":"t1"}}"#) {
+    expect(method == "thread/tokenCount", "unhandled codex notification classified as unknown")
+} else { expect(false, "unknown codex notification parses") }
+expect(codexParse("not json") == nil, "garbage codex line yields nil")
+expect(codexParse(#"{"jsonrpc":"2.0"}"#) == nil, "empty codex object yields nil")
+
 // MARK: - Commit detail parsing
 
 let detailOutput = [

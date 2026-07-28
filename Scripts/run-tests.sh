@@ -17,6 +17,9 @@ swiftc \
   Gital/Git/RepoWatcher.swift \
   Gital/GitHub/GitHubAvatars.swift \
   Gital/GitHub/PRViewedState.swift \
+  Gital/GitHub/GitHubService.swift \
+  Gital/Support/ExecutableLocator.swift \
+  Gital/Agent/CodexProtocol.swift \
   Tests/main.swift \
   -o "$BUILD_DIR/gital-tests"
 
