@@ -125,8 +125,27 @@ struct RefOverflowBadge: View {
 struct AvatarView: View {
     let name: String
     var size: CGFloat = 30
+    /// Real avatar image (github.com); nil falls back to colored initials.
+    var url: URL? = nil
 
     var body: some View {
+        ZStack {
+            initials
+            // Initials stay visible through the transparent placeholder and
+            // whenever the load fails; a successful image covers them.
+            if let url {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.clear
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+    }
+
+    private var initials: some View {
         Text(DesignStyle.initials(for: name))
             .font(.system(size: size * 0.37, weight: .bold))
             .foregroundStyle(.white)

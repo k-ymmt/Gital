@@ -25,6 +25,7 @@ struct PullRequestDetail: Hashable {
 
     struct Reviewer: Hashable, Identifiable {
         let name: String
+        let login: String?
         let state: String    // APPROVED / PENDING / CHANGES_REQUESTED / COMMENTED
         var id: String { name }
     }
@@ -46,6 +47,7 @@ struct PullRequestDetail: Hashable {
     let number: Int
     let title: String
     let author: String
+    let authorLogin: String?
     let state: String
     let isDraft: Bool
     let base: String
@@ -156,11 +158,11 @@ struct GitHubService {
         }
 
         var reviewers: [PullRequestDetail.Reviewer] = (row.latestReviews ?? []).map {
-            PullRequestDetail.Reviewer(name: displayName($0.author), state: $0.state)
+            PullRequestDetail.Reviewer(name: displayName($0.author), login: $0.author?.login, state: $0.state)
         }
         for request in row.reviewRequests ?? [] {
             if let login = request.login, !reviewers.contains(where: { $0.name == login }) {
-                reviewers.append(PullRequestDetail.Reviewer(name: login, state: "PENDING"))
+                reviewers.append(PullRequestDetail.Reviewer(name: login, login: login, state: "PENDING"))
             }
         }
 
@@ -168,6 +170,7 @@ struct GitHubService {
             number: row.number,
             title: row.title,
             author: displayName(row.author),
+            authorLogin: row.author?.login,
             state: row.state,
             isDraft: row.isDraft,
             base: row.baseRefName,

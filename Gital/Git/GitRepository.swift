@@ -409,6 +409,16 @@ final class GitRepository: @unchecked Sendable {
         }
     }
 
+    /// URL of the default remote — "origin" when present, else the first
+    /// listed remote — or nil when the repository has none.
+    func defaultRemoteURL() async throws -> String? {
+        let names = try await executor.run(["remote"]).split(separator: "\n").map(String.init)
+        guard let name = names.first(where: { $0 == "origin" }) ?? names.first else { return nil }
+        let url = try await executor.run(["remote", "get-url", name])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return url.isEmpty ? nil : url
+    }
+
     func remotes() async throws -> [RemoteInfo] {
         async let remoteNames = executor.run(["remote"])
         async let remoteBranches = executor.run(["branch", "-r", "--format=%(refname:short)"])

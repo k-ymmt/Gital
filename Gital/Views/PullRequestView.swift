@@ -197,7 +197,7 @@ struct PullRequestDetailView: View {
 
     private var metaRow: some View {
         HStack(spacing: 12) {
-            AvatarView(name: detail.author, size: 26)
+            AvatarView(name: detail.author, size: 26, url: model.avatarURL(login: detail.authorLogin, size: 26))
             Text("\(detail.author) opened \(detail.createdAt)")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
@@ -231,7 +231,7 @@ struct PullRequestDetailView: View {
     private var descriptionCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                AvatarView(name: detail.author, size: 20)
+                AvatarView(name: detail.author, size: 20, url: model.avatarURL(login: detail.authorLogin, size: 20))
                 Text("\(detail.author) commented · \(detail.createdAt)")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -278,7 +278,7 @@ struct PullRequestDetailView: View {
             }
             ForEach(detail.reviewers) { reviewer in
                 HStack(spacing: 10) {
-                    AvatarView(name: reviewer.name, size: 24)
+                    AvatarView(name: reviewer.name, size: 24, url: model.avatarURL(login: reviewer.login, size: 24))
                     Text(reviewer.name)
                         .font(.system(size: 12.5))
                     Spacer()

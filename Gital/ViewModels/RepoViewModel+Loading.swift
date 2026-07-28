@@ -71,10 +71,13 @@ extension RepoViewModel {
             async let remotesTask = repository.remotes()
             async let tagsTask = repository.tags()
             async let stashesTask = repository.stashes()
+            async let remoteURLTask = repository.defaultRemoteURL()
             branches = try await branchesTask
             remotes = try await remotesTask
             tags = try await tagsTask
             stashes = try await stashesTask
+            isGitHubRemote = ((try? await remoteURLTask) ?? nil)
+                .map(GitHubAvatars.isGitHub(remoteURL:)) ?? false
         } catch {
             report(error)
         }

@@ -620,6 +620,43 @@ if executorTestsDone.wait(timeout: .now() + 60) == .timedOut {
     print("✗ executor tests timed out — process waiting hangs again")
 }
 
+// MARK: - GitHubAvatars
+
+expect(GitHubAvatars.isGitHub(remoteURL: "https://github.com/k-ymmt/Gital.git"),
+       "avatars: https github remote detected")
+expect(GitHubAvatars.isGitHub(remoteURL: "git@github.com:k-ymmt/Gital.git"),
+       "avatars: scp-like github remote detected")
+expect(GitHubAvatars.isGitHub(remoteURL: "ssh://git@github.com/k-ymmt/Gital.git"),
+       "avatars: ssh github remote detected")
+expect(GitHubAvatars.isGitHub(remoteURL: "  https://GitHub.com/foo/bar.git\n"),
+       "avatars: host match is case-insensitive and trims whitespace")
+expect(!GitHubAvatars.isGitHub(remoteURL: "https://gitlab.com/foo/bar.git"),
+       "avatars: non-github remote rejected")
+expect(!GitHubAvatars.isGitHub(remoteURL: "git@gist.github.com:abc.git"),
+       "avatars: github.com subdomain rejected")
+expect(!GitHubAvatars.isGitHub(remoteURL: "/Users/me/repos/local"),
+       "avatars: local path remote rejected")
+
+expect(GitHubAvatars.url(login: "octocat", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/octocat?s=64",
+       "avatars: login URL")
+expect(GitHubAvatars.url(login: "", pixelSize: 64) == nil,
+       "avatars: empty login yields no URL")
+expect(GitHubAvatars.url(email: "12345+octocat@users.noreply.github.com", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/u/12345?s=64",
+       "avatars: noreply email resolves by embedded user id")
+expect(GitHubAvatars.url(email: "octocat@users.noreply.github.com", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/octocat?s=64",
+       "avatars: legacy noreply email resolves by login")
+expect(GitHubAvatars.url(email: "dev@example.com", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/u/e?email=dev@example.com&s=64",
+       "avatars: plain email goes through the email endpoint")
+expect(GitHubAvatars.url(email: "dev+tag@example.com", pixelSize: 64)?.absoluteString
+        == "https://avatars.githubusercontent.com/u/e?email=dev%2Btag@example.com&s=64",
+       "avatars: plus in email is percent-encoded")
+expect(GitHubAvatars.url(email: "", pixelSize: 64) == nil,
+       "avatars: empty email yields no URL")
+
 // MARK: - Result
 
 print(failures == 0 ? "\nAll tests passed." : "\n\(failures) test(s) FAILED.")

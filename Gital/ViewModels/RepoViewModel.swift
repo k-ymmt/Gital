@@ -65,6 +65,9 @@ final class RepoViewModel {
     var isLoadingMoreCommits = false
     var branches: [Branch] = []
     var remotes: [RemoteInfo] = []
+    /// True when the default remote is hosted on github.com; switches avatars
+    /// from colored initials to real github.com account icons.
+    var isGitHubRemote = false
     var tags: [Tag] = []
     var stashes: [Stash] = []
 
@@ -306,6 +309,22 @@ final class RepoViewModel {
                 || $0.author.lowercased().contains(needle)
                 || $0.hash.hasPrefix(needle)
         }
+    }
+
+    // MARK: - Avatars
+
+    /// github.com avatar for a commit author email, or nil when the default
+    /// remote is not GitHub (the view then shows colored initials). `size` is
+    /// the view's point size; the request doubles it for Retina.
+    func avatarURL(email: String, size: CGFloat) -> URL? {
+        guard isGitHubRemote else { return nil }
+        return GitHubAvatars.url(email: email, pixelSize: Int(size) * 2)
+    }
+
+    /// github.com avatar for a GitHub login (PR authors, reviewers).
+    func avatarURL(login: String?, size: CGFloat) -> URL? {
+        guard isGitHubRemote, let login else { return nil }
+        return GitHubAvatars.url(login: login, pixelSize: Int(size) * 2)
     }
 
     // MARK: - Operation plumbing

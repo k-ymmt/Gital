@@ -351,7 +351,7 @@ struct CommitDetailView: View {
 
     private func detailHeader(_ commit: Commit) -> some View {
         HStack(alignment: .top, spacing: 11) {
-            AvatarView(name: commit.author)
+            AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
             VStack(alignment: .leading, spacing: 3) {
                 Text(commit.subject)
                     .font(.system(size: 13.5, weight: .semibold))
