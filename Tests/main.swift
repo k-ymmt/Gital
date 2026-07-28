@@ -714,7 +714,7 @@ do {
 do {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("gital-viewed-test-\(UUID().uuidString)")
-    let file = dir.appendingPathComponent("pr-viewed.json")
+    let file = dir.appendingPathComponent("pr-viewed.sqlite")
     defer { try? FileManager.default.removeItem(at: dir) }
 
     let repoA = URL(fileURLWithPath: "/repos/a")
@@ -723,23 +723,32 @@ do {
     var stateA = PRViewedState()
     stateA.setCommitViewed(true, hash: "abc1234")
     stateA.toggleFile("a.swift")
-    PRViewedStore(repoRoot: repoA, fileURL: file).save([7: stateA, 8: PRViewedState()])
+    stateA.toggleCommitFile(commit: "0badf00", path: "p.swift", allPaths: ["p.swift", "q.swift"])
+    PRViewedStore(repoRoot: repoA, databaseURL: file).save(stateA, for: 7)
 
     var stateB = PRViewedState()
     stateB.toggleCommitFile(commit: "def5678", path: "x.swift", allPaths: ["x.swift", "y.swift"])
-    PRViewedStore(repoRoot: repoB, fileURL: file).save([3: stateB])
+    PRViewedStore(repoRoot: repoB, databaseURL: file).save(stateB, for: 3)
+    // Same PR number as repo A's — must stay separate per repository.
+    PRViewedStore(repoRoot: repoB, databaseURL: file).save(stateB, for: 7)
 
-    let loadedA = PRViewedStore(repoRoot: repoA, fileURL: file).load()
+    let loadedA = PRViewedStore(repoRoot: repoA, databaseURL: file).load()
     expect(loadedA[7] == stateA, "store: state round-trips through disk")
-    expect(loadedA[8] == nil, "store: empty states are pruned on save")
-    expect(PRViewedStore(repoRoot: repoB, fileURL: file).load()[3] == stateB,
+    expect(loadedA.count == 1, "store: only own-repo rows load")
+    expect(PRViewedStore(repoRoot: repoB, databaseURL: file).load()[3] == stateB,
            "store: repositories do not clobber each other")
 
-    PRViewedStore(repoRoot: repoA, fileURL: file).save([:])
-    expect(PRViewedStore(repoRoot: repoA, fileURL: file).load().isEmpty,
-           "store: clearing a repo removes its entry")
-    expect(PRViewedStore(repoRoot: repoB, fileURL: file).load()[3] == stateB,
-           "store: clearing one repo keeps the others")
+    // Saving replaces the PR's previous rows instead of accumulating.
+    stateA.toggleFile("a.swift")
+    stateA.toggleFile("b.swift")
+    let storeA = PRViewedStore(repoRoot: repoA, databaseURL: file)
+    storeA.save(stateA, for: 7)
+    expect(storeA.load()[7] == stateA, "store: re-saving a PR replaces its rows")
+
+    storeA.save(PRViewedState(), for: 7)
+    expect(storeA.load().isEmpty, "store: saving an empty state deletes the PR's rows")
+    expect(PRViewedStore(repoRoot: repoB, databaseURL: file).load()[7] == stateB,
+           "store: clearing one repo's PR keeps the other repo's same-numbered PR")
 }
 
 // MARK: - Result

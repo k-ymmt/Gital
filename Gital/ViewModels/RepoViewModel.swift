@@ -305,7 +305,7 @@ final class RepoViewModel {
         var state = prViewedStates[number] ?? PRViewedState()
         mutate(&state)
         prViewedStates[number] = state.isEmpty ? nil : state
-        prViewedStore?.save(prViewedStates)
+        prViewedStore?.save(state, for: number)
     }
 
     func loadPRViewedStates() {
