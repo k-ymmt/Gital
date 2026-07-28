@@ -69,8 +69,11 @@ struct SidebarView: View {
                     appModel.pickRepository()
                 }
                 ForEach(appModel.recentRepositories, id: \.path) { url in
-                    Button(url.lastPathComponent) {
+                    Button {
                         appModel.openRepository(at: url)
+                    } label: {
+                        Text(url.lastPathComponent)
+                        Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
                     }
                 }
             } label: {
