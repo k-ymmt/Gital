@@ -163,7 +163,7 @@ struct PullRequestDetailView: View {
     @Bindable var model: RepoViewModel
     let detail: PullRequestDetail
 
-    @State private var isMerging = false
+    private var isMerging: Bool { model.mergingPRNumber == detail.number }
 
     var body: some View {
         ScrollView {
@@ -420,7 +420,7 @@ struct PullRequestDetailView: View {
             }
             Spacer()
             Button {
-                merge()
+                model.mergePullRequest(detail.number)
             } label: {
                 if isMerging {
                     ProgressView().controlSize(.small)
@@ -455,24 +455,6 @@ struct PullRequestDetailView: View {
         default:
             if detail.isDraft { return "Mark as ready for review before merging." }
             return "Merging will create a merge commit on \(detail.base)."
-        }
-    }
-
-    private func merge() {
-        isMerging = true
-        Task {
-            defer { isMerging = false }
-            do {
-                try await model.github.merge(number: detail.number)
-                // Reload the detail directly — flipping selectedPRNumber
-                // nil→back spawned two loads that both hit gh.
-                model.prDetailsCache[detail.number] = nil
-                model.prDiffsCache[detail.number] = nil
-                await model.loadPRDetail()
-                await model.refreshPullRequests()
-            } catch {
-                model.prLoadError = error.localizedDescription
-            }
         }
     }
 }

@@ -266,6 +266,29 @@ final class RepoViewModel {
         selectedPRItem = item
     }
 
+    /// PR number currently being merged, or nil; drives the merge button's
+    /// spinner and guards against double-submission.
+    var mergingPRNumber: Int?
+
+    func mergePullRequest(_ number: Int) {
+        guard mergingPRNumber == nil else { return }
+        mergingPRNumber = number
+        Task {
+            defer { mergingPRNumber = nil }
+            do {
+                try await github.merge(number: number)
+                // Reload the detail directly — flipping selectedPRNumber
+                // nil→back spawned two loads that both hit gh.
+                prDetailsCache[number] = nil
+                prDiffsCache[number] = nil
+                await loadPRDetail()
+                await refreshPullRequests()
+            } catch {
+                prLoadError = error.localizedDescription
+            }
+        }
+    }
+
     // MARK: Pull request "Viewed" flags
 
     /// Review-progress flags per PR number, persisted across launches.

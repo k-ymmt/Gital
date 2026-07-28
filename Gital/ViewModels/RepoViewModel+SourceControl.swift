@@ -69,6 +69,12 @@ extension RepoViewModel {
         perform(refresh: .all) { try await self.repository.checkout(branch: branch.name) }
     }
 
+    func checkoutRemote(branch: String, remote: String) {
+        runSync("Checking out…") {
+            try await self.repository.checkoutRemote(branch: branch, remote: remote)
+        }
+    }
+
     func createBranch(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }

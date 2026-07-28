@@ -73,11 +73,26 @@ struct PullRequestDetail: Hashable {
 }
 
 enum GitHubError: LocalizedError {
-    case unavailable(String)
+    /// The `gh` executable could not be found on this machine.
+    case notInstalled
+    /// The `gh` process could not be launched at all.
+    case launchFailed(String)
+    /// `gh` ran but exited non-zero.
+    case commandFailed(command: String, status: Int32, stderr: String)
+    /// `gh` succeeded but its output did not decode as expected — the JSON
+    /// shape changed or the output was not JSON at all.
+    case unexpectedOutput(command: String, underlying: Error)
 
     var errorDescription: String? {
         switch self {
-        case .unavailable(let message): message
+        case .notInstalled:
+            "gh CLI not found. Install it with `brew install gh`."
+        case .launchFailed(let message):
+            "Failed to launch gh: \(message)"
+        case .commandFailed(let command, let status, let stderr):
+            stderr.isEmpty ? "`\(command)` exited with status \(status)" : stderr
+        case .unexpectedOutput(let command, let underlying):
+            "`\(command)` returned unexpected output: \(underlying.localizedDescription)"
         }
     }
 }
@@ -104,7 +119,7 @@ struct GitHubService {
             let reviewRequests: [ReviewRequest]?
         }
 
-        let rows = try JSONDecoder().decode([Row].self, from: data)
+        let rows = try Self.decode([Row].self, from: data, command: "gh pr list")
         return rows.map { row in
             PullRequestSummary(
                 number: row.number,
@@ -164,7 +179,7 @@ struct GitHubService {
             let files: [FileRow]?
         }
 
-        let row = try JSONDecoder().decode(Row.self, from: data)
+        let row = try Self.decode(Row.self, from: data, command: "gh pr view")
         func displayName(_ author: Row.Author?) -> String {
             guard let author else { return "unknown" }
             return author.name?.isEmpty == false ? author.name! : author.login
@@ -220,6 +235,17 @@ struct GitHubService {
         _ = try await runGH(["pr", "merge", String(number), "--merge"])
     }
 
+    /// Decodes gh JSON output, wrapping decode failures with the subcommand
+    /// that produced the data — a raw `DecodingError` in the UI gives the
+    /// user no clue which gh call broke.
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data, command: String) throws -> T {
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            throw GitHubError.unexpectedOutput(command: command, underlying: error)
+        }
+    }
+
     private static func relativeDate(from iso: String) -> String {
         let formatter = ISO8601DateFormatter()
         guard let date = formatter.date(from: iso) else { return iso }
@@ -235,7 +261,7 @@ struct GitHubService {
         // and the shell indirection also made the "gh not installed" branch
         // unreachable (zsh itself always launches).
         guard let ghURL = ExecutableLocator.shared.find("gh") else {
-            throw GitHubError.unavailable("gh CLI not found. Install it with `brew install gh`.")
+            throw GitHubError.notInstalled
         }
         return try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -304,7 +330,7 @@ struct GitHubService {
                     }
                     process.terminationHandler = nil
                     done.leave()
-                    continuation.resume(throwing: GitHubError.unavailable("Failed to launch gh: \(error.localizedDescription)"))
+                    continuation.resume(throwing: GitHubError.launchFailed(error.localizedDescription))
                     return
                 }
 
@@ -314,8 +340,10 @@ struct GitHubService {
                     } else {
                         let message = String(decoding: stderrBuffer.value, as: UTF8.self)
                             .trimmingCharacters(in: .whitespacesAndNewlines)
-                        continuation.resume(throwing: GitHubError.unavailable(
-                            message.isEmpty ? "gh exited with status \(process.terminationStatus)" : message
+                        continuation.resume(throwing: GitHubError.commandFailed(
+                            command: "gh " + arguments.prefix(2).joined(separator: " "),
+                            status: process.terminationStatus,
+                            stderr: message
                         ))
                     }
                 }

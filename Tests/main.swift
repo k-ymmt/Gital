@@ -337,6 +337,27 @@ let hostileLog = ["eee555", "", "Mallory", "m@x", "now", "subject with \u{1e} an
 let hostileCommits = GitRepository.parseLog(hostileLog)
 expect(hostileCommits.count == 1 && hostileCommits[0].subject == "subject with \u{1e} and \u{1f} bytes", "hostile subject bytes survive log parsing")
 
+// MARK: - Branch list parsing
+
+let branchOutput = [
+    ["main", "*", "origin/main", "aaa111"].joined(separator: "\u{1f}"),
+    ["feature/login", "", "", "bbb222"].joined(separator: "\u{1f}"),
+].joined(separator: "\n")
+let parsedBranches = GitRepository.parseBranches(branchOutput)
+expect(parsedBranches.count == 2, "branch list parses two branches")
+expect(parsedBranches[0].isCurrent && parsedBranches[0].upstream == "origin/main", "current branch with upstream")
+expect(parsedBranches[1].upstream == nil, "branch without upstream has nil upstream")
+
+// Detached HEAD: `git branch` emits a "(HEAD detached at abc1234)" placeholder
+// entry that must not surface as a branch.
+let detachedOutput = [
+    ["(HEAD detached at aaa1111)", "*", "", "aaa111"].joined(separator: "\u{1f}"),
+    ["main", "", "origin/main", "bbb222"].joined(separator: "\u{1f}"),
+].joined(separator: "\n")
+let detachedBranches = GitRepository.parseBranches(detachedOutput)
+expect(detachedBranches.count == 1 && detachedBranches[0].name == "main", "detached HEAD placeholder is not a branch")
+expect(!detachedBranches.contains { $0.isCurrent }, "detached HEAD has no current branch")
+
 // MARK: - Commit detail parsing
 
 let detailOutput = [

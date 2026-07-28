@@ -418,10 +418,7 @@ struct SidebarView: View {
             .contentShape(Rectangle())
             .contextMenu {
                 Button("Checkout Tracking Branch") {
-                    Task {
-                        try? await model.repository.checkoutRemote(branch: branch, remote: remote)
-                        await model.refreshAll()
-                    }
+                    model.checkoutRemote(branch: branch, remote: remote)
                 }
             }
     }

@@ -397,9 +397,17 @@ final class GitRepository: @unchecked Sendable {
         let output = try await executor.run([
             "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)\u{1f}%(objectname)",
         ])
-        return output.split(separator: "\n").compactMap { line in
+        return Self.parseBranches(output)
+    }
+
+    static func parseBranches(_ output: String) -> [Branch] {
+        output.split(separator: "\n").compactMap { line in
             let fields = line.components(separatedBy: "\u{1f}")
             guard fields.count >= 4, !fields[0].isEmpty else { return nil }
+            // On a detached HEAD, `git branch` emits a placeholder entry like
+            // "(HEAD detached at abc1234)" — a parenthesized non-ref, never a
+            // real branch name (git forbids names starting with "(").
+            guard !fields[0].hasPrefix("(") else { return nil }
             return Branch(
                 name: fields[0],
                 isCurrent: fields[1] == "*",
