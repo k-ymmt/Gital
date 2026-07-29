@@ -153,7 +153,7 @@ struct FileHistorySheet: View {
             }
             ScrollView([.vertical, .horizontal]) {
                 if let diff = model.diffs.first {
-                    FileDiffContentView(diff: diff, mode: diffMode)
+                    FileDiffContentView(diff: diff, mode: diffMode, imageContext: entryImageContext)
                         .frame(minWidth: 600, alignment: .leading)
                 } else {
                     // `git show` legitimately returns nothing here for a
@@ -164,6 +164,18 @@ struct FileHistorySheet: View {
                         .padding(40)
                 }
             }
+        }
+    }
+
+    /// Entry diffs are taken against the commit's first parent (`^`); a root
+    /// commit's old side fails to resolve and renders as empty.
+    private var entryImageContext: ImageDiffContext? {
+        model.selectedEntry.map { entry in
+            ImageDiffContext(
+                repository: model.repository,
+                oldRevision: .commit("\(entry.hash)^"),
+                newRevision: .commit(entry.hash)
+            )
         }
     }
 }

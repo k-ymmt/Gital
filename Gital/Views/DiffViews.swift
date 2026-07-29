@@ -118,14 +118,13 @@ struct SplitDiffRowView: View {
 struct FileDiffContentView: View {
     let diff: FileDiff
     let mode: DiffMode
+    /// Blob sources for image previews of binary files; nil keeps the plain
+    /// "Binary file not shown" placeholder.
+    var imageContext: ImageDiffContext? = nil
 
     var body: some View {
         if diff.isBinary {
-            Text("Binary file not shown")
-                .font(.system(size: 12.5))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
-                .padding(40)
+            BinaryFileContentView(diff: diff, imageContext: imageContext)
         } else if diff.hunks.isEmpty {
             Text("No textual changes")
                 .font(.system(size: 12.5))

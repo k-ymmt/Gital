@@ -261,6 +261,34 @@ final class GitRepository: @unchecked Sendable {
         return DiffParser.parse(output, strictUTF8: valid)
     }
 
+    // MARK: - File contents
+
+    /// Raw bytes of one file at one revision, for image previews of binary
+    /// diffs. A side that does not exist there (an added file's parent, a
+    /// deleted file's commit, an unborn HEAD) throws, and the caller renders
+    /// that side as empty.
+    func fileContents(path: String, at revision: BlobRevision) async throws -> Data {
+        guard let spec = Self.blobSpec(path: path, revision: revision) else {
+            // Worktree bytes come straight from disk — git has no command
+            // that prints the working-tree version of a file.
+            let url = root.appendingPathComponent(path)
+            return try await Task.detached { try Data(contentsOf: url) }.value
+        }
+        return try await executor.runData(["show", spec])
+    }
+
+    /// `git show` object spec for a revision, or nil when the bytes live on
+    /// disk instead. The index spec pins stage 0 explicitly (`:0:path`), so
+    /// a conflicted path — which has only stages 1–3 — fails instead of
+    /// resolving to an arbitrary side.
+    static func blobSpec(path: String, revision: BlobRevision) -> String? {
+        switch revision {
+        case .worktree: nil
+        case .index: ":0:\(path)"
+        case .commit(let rev): "\(rev):\(path)"
+        }
+    }
+
     func commitFileStats(_ hash: String) async throws -> [CommitFileStat] {
         // -z output: rename entries carry two NUL-separated paths, which the
         // line-based form mangles into "old => new" pseudo-paths.

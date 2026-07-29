@@ -321,6 +321,36 @@ struct FileDiff: Hashable, Identifiable {
     }
 }
 
+extension FileDiff {
+    /// Extensions AppKit can decode into a preview; the binary-diff pane
+    /// upgrades to side-by-side image previews only for these. SVG is
+    /// deliberately absent — it is text and diffs normally.
+    static let imageExtensions: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "tif", "tiff", "bmp",
+        "heic", "heif", "webp", "icns", "ico",
+    ]
+
+    static func isImagePath(_ path: String) -> Bool {
+        imageExtensions.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// True when either side of the change names an image file, so a rename
+    /// to or from an image extension still gets a preview.
+    var isImage: Bool {
+        Self.isImagePath(path) || (oldPath.map(Self.isImagePath) ?? false)
+    }
+}
+
+/// Which version of a file's bytes to read. Each side of a binary diff maps
+/// to one revision; the pairing depends on the comparison the diff came from
+/// (worktree vs index, index vs HEAD, commit vs its first parent).
+enum BlobRevision: Hashable, Sendable {
+    case worktree
+    case index
+    /// Anything git resolves in `<rev>:<path>` form — a hash, `HEAD`, `abc^`.
+    case commit(String)
+}
+
 // MARK: - File history / blame
 
 /// One commit in a single file's history (`git log --follow`), carrying the

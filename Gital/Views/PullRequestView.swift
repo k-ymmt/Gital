@@ -94,6 +94,9 @@ struct PullRequestItemDiffView: View {
                                 if let number = model.prs.selectedNumber, !diff.isBinary, !diff.hunks.isEmpty {
                                     reviewableContent(diff, number: number, canComment: isOpenPR)
                                 } else {
+                                    // No imageContext: PR diffs come from
+                                    // `gh pr diff` and neither side's blob is
+                                    // guaranteed to exist locally.
                                     FileDiffContentView(diff: diff, mode: model.diffMode)
                                 }
                             } header: {

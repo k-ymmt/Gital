@@ -570,10 +570,23 @@ struct CommitDetailView: View {
 
             ScrollView([.vertical, .horizontal]) {
                 if let diff = model.selectedCommitDiff {
-                    FileDiffContentView(diff: diff, mode: model.diffMode)
+                    FileDiffContentView(diff: diff, mode: model.diffMode, imageContext: commitImageContext)
                         .frame(minWidth: 600, alignment: .leading)
                 }
             }
+        }
+    }
+
+    /// Commit diffs are first-parent diffs (`--diff-merges=first-parent`),
+    /// and `^` is exactly the first parent; on a root commit the old side
+    /// fails to resolve and renders as empty.
+    private var commitImageContext: ImageDiffContext? {
+        model.selectedCommitHash.map {
+            ImageDiffContext(
+                repository: model.repository,
+                oldRevision: .commit("\($0)^"),
+                newRevision: .commit($0)
+            )
         }
     }
 }

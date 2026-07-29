@@ -29,7 +29,18 @@ struct StashDetailView: View {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
                         ForEach(model.stashDiffs) { diff in
                             Section {
-                                FileDiffContentView(diff: diff, mode: model.diffMode)
+                                // A stash commit's first parent is the commit
+                                // the stash was taken on — the same base
+                                // `git stash show` diffs against.
+                                FileDiffContentView(
+                                    diff: diff,
+                                    mode: model.diffMode,
+                                    imageContext: ImageDiffContext(
+                                        repository: model.repository,
+                                        oldRevision: .commit("\(stash.commitHash)^"),
+                                        newRevision: .commit(stash.commitHash)
+                                    )
+                                )
                             } header: {
                                 FileSectionHeader(diff: diff)
                             }
