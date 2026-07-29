@@ -168,9 +168,12 @@ struct KeyCombo: Hashable {
                 var deadKeyState: UInt32 = 0
                 var length = 0
                 var utf16 = [UniChar](repeating: 0, count: 4)
+                // The *mask*, not the bit number (which is 0 — no flags):
+                // without dead-key suppression, layouts whose base layer has
+                // dead keys (U.S. International ' " ~ ^ `) return length 0.
                 let status = UCKeyTranslate(
                     layout, keyCode, UInt16(kUCKeyActionDisplay), 0,
-                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                    UInt32(LMGetKbdType()), OptionBits(kUCKeyTranslateNoDeadKeysMask),
                     &deadKeyState, utf16.count, &length, &utf16
                 )
                 guard status == noErr, length > 0 else { return nil }
@@ -205,10 +208,11 @@ struct KeyCombo: Hashable {
     static let reservedByFixedMenuItems: Set<KeyCombo> = [
         KeyCombo("q", .command),                       // Quit
         KeyCombo("w", .command),                       // Close
-        KeyCombo("w", [.command, .shift]),             // Close All
+        KeyCombo("w", [.command, .option]),            // Close All (File-menu alternate)
         KeyCombo("h", .command),                       // Hide
         KeyCombo("h", [.command, .option]),            // Hide Others
         KeyCombo("m", .command),                       // Minimize
+        KeyCombo("m", [.command, .option]),            // Minimize All (Window-menu alternate)
         KeyCombo("n", .command),                       // New Window
         KeyCombo(",", .command),                       // Settings…
         KeyCombo("c", .command),                       // Copy
@@ -362,11 +366,19 @@ final class ShortcutStore {
     static let defaultsKey = "customKeyboardShortcuts"
 
     private var overrides: [String: Override]
+
+    /// Actions whose *default* combo was demoted to unbound at load time
+    /// because a stored override owns the same combo (see `load`). The
+    /// demotion itself is deliberate, but it strips a shortcut the user
+    /// never touched (e.g. ⌘O) without a word — Settings reads this to say
+    /// why the action shows "None".
+    private(set) var conflictDemotedActions: Set<ShortcutAction>
+
     @ObservationIgnored private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        overrides = Self.load(from: defaults)
+        (overrides, conflictDemotedActions) = Self.load(from: defaults)
     }
 
     /// Decodes and sanitizes stored overrides: an entry whose combo would be
@@ -374,10 +386,12 @@ final class ShortcutStore {
     /// bare "f" that would hijack typing app-wide) is kept but demoted to
     /// unbound rather than dropped, so it can't resurrect a default that now
     /// belongs to another action.
-    private static func load(from defaults: UserDefaults) -> [String: Override] {
+    private static func load(
+        from defaults: UserDefaults
+    ) -> (overrides: [String: Override], demoted: Set<ShortcutAction>) {
         guard let data = defaults.data(forKey: defaultsKey),
               let decoded = try? JSONDecoder().decode([String: Override].self, from: data)
-        else { return [:] }
+        else { return ([:], []) }
         var sanitized = decoded
             .filter { ShortcutAction(rawValue: $0.key) != nil }
             .mapValues { override in
@@ -392,12 +406,14 @@ final class ShortcutStore {
         // the first, silently killing the newer action. Demote the colliding
         // default to unbound (the user can still record it in Settings);
         // `setCombo` only deduplicates on explicit rebinds, never here.
+        var demoted: Set<ShortcutAction> = []
         for action in ShortcutAction.allCases where sanitized[action.rawValue] == nil {
             if sanitized.contains(where: { $0.value.combo == action.defaultCombo }) {
                 sanitized[action.rawValue] = Override(combo: nil)
+                demoted.insert(action)
             }
         }
-        return sanitized
+        return (sanitized, demoted)
     }
 
     /// The effective combo: the user's override if present, else the default.
@@ -410,16 +426,21 @@ final class ShortcutStore {
         overrides[action.rawValue] != nil
     }
 
+    func isConflictDemoted(_ action: ShortcutAction) -> Bool {
+        conflictDemotedActions.contains(action)
+    }
+
     /// Assigns a combo (or nil to unbind). A combo triggers exactly one
     /// action, so any other action currently holding it is unbound.
     func setCombo(_ combo: KeyCombo?, for action: ShortcutAction) {
         // Re-read before mutating so a rebind in one running instance doesn't
         // clobber what another instance saved since this one launched.
-        overrides = Self.load(from: defaults)
+        (overrides, conflictDemotedActions) = Self.load(from: defaults)
         if let combo {
             for other in ShortcutAction.allCases
             where other != action && self.combo(for: other) == combo {
                 overrides[other.rawValue] = Override(combo: nil)
+                conflictDemotedActions.remove(other)
             }
         }
         if combo == action.defaultCombo {
@@ -427,6 +448,8 @@ final class ShortcutStore {
         } else {
             overrides[action.rawValue] = Override(combo: combo)
         }
+        // Whatever this action's state is now, the user chose it explicitly.
+        conflictDemotedActions.remove(action)
         persist()
     }
 
@@ -438,6 +461,7 @@ final class ShortcutStore {
 
     func resetAll() {
         overrides = [:]
+        conflictDemotedActions = []
         persist()
     }
 

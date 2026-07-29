@@ -1,4 +1,48 @@
+import AppKit
 import SwiftUI
+
+// MARK: - Shared commit context-menu items
+
+/// Context-menu items shared verbatim by the history list and the reflog
+/// sheet. One implementation so labels, roles, and the `isBlocked` gating
+/// (a stopped merge/rebase — git would refuse, and a hard reset would blow
+/// away its state) cannot drift between the two menus.
+struct CopyCommitSHAButton: View {
+    let hash: String
+
+    var body: some View {
+        Button("Copy SHA") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(hash, forType: .string)
+        }
+    }
+}
+
+struct DetachedCheckoutButton: View {
+    let shortHash: String
+    let isBlocked: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button("Checkout \(shortHash) (Detached HEAD)…", action: action)
+            .disabled(isBlocked)
+    }
+}
+
+struct ResetToCommitMenu: View {
+    let branch: String?
+    let isBlocked: Bool
+    let onReset: (GitRepository.ResetMode) -> Void
+
+    var body: some View {
+        Menu("Reset “\(branch ?? "HEAD")” to Here") {
+            Button("Soft — keep changes staged") { onReset(.soft) }
+            Button("Mixed — keep changes unstaged") { onReset(.mixed) }
+            Button("Hard — discard all changes…", role: .destructive) { onReset(.hard) }
+        }
+        .disabled(isBlocked)
+    }
+}
 
 extension Set where Element == String {
     /// Inserts the key when absent, removes it when present — the collapse

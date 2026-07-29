@@ -77,6 +77,10 @@ private func keyDown(
     @Test func fixedMenuItemShortcutsAreNotRecordable() {
         #expect(!KeyCombo("q", .command).isRecordable)      // Quit
         #expect(!KeyCombo("w", .command).isRecordable)      // Close
+        // The fixed alternates macOS shows while holding ⌥ — recording one
+        // would close/minimize every window instead of firing the action.
+        #expect(!KeyCombo("w", [.command, .option]).isRecordable)  // Close All
+        #expect(!KeyCombo("m", [.command, .option]).isRecordable)  // Minimize All
         #expect(!KeyCombo("c", .command).isRecordable)      // Copy
         #expect(!KeyCombo(",", .command).isRecordable)      // Settings…
         #expect(!KeyCombo("f", [.command, .control]).isRecordable)  // Full Screen
@@ -214,6 +218,28 @@ private func keyDown(
             reloaded.setCombo(stolen, for: .showReflog)
             #expect(reloaded.combo(for: .showReflog) == stolen, "explicit rebind reclaims the combo")
             #expect(reloaded.combo(for: .fetch) == nil, "the previous holder is unbound")
+        }
+    }
+
+    // The demotion above strips a default the user never touched, without a
+    // word — the store must report it so Settings can explain why the action
+    // shows "None". Written as raw JSON: only an override persisted by an
+    // older app version (with no entry for the colliding action) takes the
+    // load-time demotion path — `setCombo` unbinds the other action itself.
+    @Test func conflictDemotionIsSurfacedAndClearedByExplicitRebind() {
+        withDefaults { defaults in
+            // fetch holds showReflog's default (⇧⌘G).
+            let json = """
+            {"fetch":{"combo":{"key":"g","modifiers":["shift","command"]}}}
+            """
+            defaults.set(Data(json.utf8), forKey: ShortcutStore.defaultsKey)
+
+            let store = ShortcutStore(defaults: defaults)
+            #expect(store.combo(for: .showReflog) == nil, "the colliding default is unbound")
+            #expect(store.isConflictDemoted(.showReflog))
+            #expect(!store.isConflictDemoted(.fetch), "the override holder is not demoted")
+            store.setCombo(KeyCombo("j", [.command, .control]), for: .showReflog)
+            #expect(!store.isConflictDemoted(.showReflog), "an explicit rebind clears the flag")
         }
     }
 

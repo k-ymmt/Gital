@@ -154,7 +154,7 @@ struct InteractiveRebaseTests {
         #expect(execMessage(lines[1]) == "New title\n\nNew body")
         // The amend must be guarded by the target's identity so a skipped
         // pick can never leak the rewrite onto another commit.
-        #expect(lines[1].contains("if test \"$(git log -1 --format=%at,%ae,%s 2>/dev/null)\" = '1700000000,a@b.c,subject'"))
+        #expect(lines[1].contains("if test \"$(git log -1 --no-show-signature --format=%at,%ae,%s 2>/dev/null)\" = '1700000000,a@b.c,subject'"))
         #expect(lines[2] == "pick bbb next")
     }
 
@@ -297,6 +297,9 @@ struct InteractiveRebaseTests {
         // The guard must fail soft (echo, not amend) — never amend without it.
         #expect(line.contains("else echo"))
         #expect(line.hasPrefix("exec if test "))
+        // Without this pin, log.showSignature=true pollutes the command
+        // substitution with the signature block and the guard always fails.
+        #expect(line.contains("--no-show-signature"))
     }
 
     @Test func shellQuoteHandlesSpacesAndQuotes() {

@@ -65,20 +65,21 @@ struct AppCommands: Commands {
 
             Button("New Branch…") { presentPopover { $0.isCreatingBranch = true } }
                 .keyboardShortcut(shortcuts.combo(for: .newBranch)?.keyboardShortcut)
-                .disabled(repo == nil)
+                .disabled(repo?.isWindowHosted != true)
 
             Button("Stash Changes…") { presentPopover { $0.isStashing = true } }
                 .keyboardShortcut(shortcuts.combo(for: .stashChanges)?.keyboardShortcut)
-                .disabled(repo == nil)
+                .disabled(repo?.isWindowHosted != true)
 
             Divider()
 
-            // Also gated on other sheets: this is the one sheet a global
-            // shortcut can raise, and setting it under a presented sheet
-            // queues it invisibly until that sheet closes.
+            // Also gated on other sheets and on a window being open: this is
+            // the one sheet a global shortcut can raise, and setting it under
+            // a presented sheet (or with no window) queues it invisibly until
+            // something can show it.
             Button("Show Reflog") { repo?.requestReflog() }
                 .keyboardShortcut(shortcuts.combo(for: .showReflog)?.keyboardShortcut)
-                .disabled(repo == nil || repo?.isPresentingSheet == true)
+                .disabled(repo?.isWindowHosted != true || repo?.isPresentingSheet == true)
 
             Button("Refresh") {
                 guard let repo else { return }
@@ -108,11 +109,13 @@ struct AppCommands: Commands {
     }
 
     /// The branch/stash popovers anchor to toolbar buttons in the repo
-    /// window. Firing the flag while that window is miniaturized would leave
-    /// it wedged `true` with nothing presented (and the toolbar button dead
-    /// until something resets it), so restore the window first.
+    /// window. Firing the flag with no window hosting them — closed, or
+    /// miniaturized and not restorable — would leave it wedged `true` with
+    /// nothing presented (and the toolbar button dead until something resets
+    /// it), so restore a miniaturized window first and bail when the window
+    /// is gone entirely (the menu item disables, but a shortcut can race).
     private func presentPopover(_ present: (RepoViewModel) -> Void) {
-        guard let repo else { return }
+        guard let repo, repo.isWindowHosted else { return }
         for window in NSApp.windows where window.isMiniaturized {
             window.deminiaturize(nil)
         }

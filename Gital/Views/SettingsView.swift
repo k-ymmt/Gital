@@ -47,6 +47,14 @@ private struct ShortcutRow: View {
         HStack {
             Text(action.title)
             Spacer()
+            // A default silently unbound at launch because another action's
+            // recorded shortcut owns the combo — without this, the shortcut
+            // just vanishes with no explanation anywhere.
+            if shortcuts.isConflictDemoted(action) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+                    .help("The default shortcut (\(action.defaultCombo.displayString)) is assigned to another action, so this one is unbound. Click to record a new shortcut.")
+            }
             if shortcuts.isCustomized(action) {
                 Button {
                     shortcuts.reset(action)

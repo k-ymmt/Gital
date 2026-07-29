@@ -95,6 +95,8 @@ struct ContentView: View {
                 await model.refreshAll()
             }
         }
+        .onAppear { model.isWindowHosted = true }
+        .onDisappear { model.isWindowHosted = false }
     }
 
     /// Detached HEAD shows where HEAD actually is — a bare "detached HEAD"

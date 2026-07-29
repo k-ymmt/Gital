@@ -91,13 +91,16 @@ extension RepoViewModel {
     /// here (the menu item disables, but the shortcut can race it) and after
     /// the load — a file-history sheet can open while the load is queued.
     func requestReflog() {
-        guard !isPresentingSheet else { return }
+        guard isWindowHosted, !isPresentingSheet else { return }
         runSync("Loading reflog…") {
+            // The load fetches one entry past the display limit so a reflog
+            // of exactly `limit` entries doesn't read as truncated.
             let entries = try await self.repository.reflog()
             guard !self.isPresentingSheet else { return }
+            let limit = GitRepository.reflogDisplayLimit
             self.reflogSnapshot = ReflogSnapshot(
-                entries: entries,
-                isTruncated: entries.count >= GitRepository.reflogDisplayLimit
+                entries: Array(entries.prefix(limit)),
+                isTruncated: entries.count > limit
             )
         }
     }
@@ -155,8 +158,11 @@ extension RepoViewModel {
     /// output because the cache is stale whenever the file watcher is down.
     /// `runSync` drives the busy indicator: prep queues behind whatever the
     /// serialized executor is doing, and an invisible pending prep would pop
-    /// the sheet "out of nowhere" much later.
+    /// the sheet "out of nowhere" much later. Checked against other sheets
+    /// both up front and after the load, same as `requestReflog` — another
+    /// sheet can open while the prep is queued.
     func requestInteractiveRebase(from commit: Commit) {
+        guard !isPresentingSheet else { return }
         let blockingChanges = status.staged.count
             + status.unstaged.filter { $0.status != .untracked }.count
         guard blockingChanges == 0 else {
@@ -164,7 +170,9 @@ extension RepoViewModel {
             return
         }
         runSync("Preparing rebase…") {
-            self.interactiveRebasePrep = try await self.repository.prepareInteractiveRebase(from: commit.hash)
+            let prep = try await self.repository.prepareInteractiveRebase(from: commit.hash)
+            guard !self.isPresentingSheet else { return }
+            self.interactiveRebasePrep = prep
         }
     }
 

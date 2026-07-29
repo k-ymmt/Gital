@@ -135,13 +135,27 @@ final class RepoViewModel {
     /// hash, so the list going stale underneath is harmless.
     var reflogSnapshot: ReflogSnapshot?
 
+    /// Commits anchoring the "Create Branch Here…" / "Create Tag Here…"
+    /// sheets (non-nil while one is up). Owned here rather than as
+    /// `HistoryView` local `@State` so `isPresentingSheet` sees them.
+    var branchSheetAnchor: Commit?
+    var tagSheetAnchor: Commit?
+
     /// True while any window-modal sheet is up. Actions that raise a sheet
     /// from a global shortcut (Show Reflog) must check this: a sheet set
     /// while another one is presented cannot appear, silently waits, and
     /// then pops "out of nowhere" when the first sheet closes.
     var isPresentingSheet: Bool {
         fileHistory != nil || interactiveRebasePrep != nil || reflogSnapshot != nil
+            || branchSheetAnchor != nil || tagSheetAnchor != nil
     }
+
+    /// True while a window hosts this repository's `ContentView` (maintained
+    /// by its appear/disappear). Menu commands that present popovers or
+    /// sheets must check this: with the window closed the presentation flag
+    /// would wedge `true` with nothing to present from — or the sheet would
+    /// queue invisibly and pop whenever a window reopens.
+    var isWindowHosted = false
 
     // MARK: Stash selection
 

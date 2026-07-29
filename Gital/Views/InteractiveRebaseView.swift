@@ -42,6 +42,11 @@ struct InteractiveRebaseSheet: View {
     }
 
     var body: some View {
+        // Computed once per body evaluation: generating the todo script is
+        // O(steps × message bytes) and body reads the result twice — going
+        // through the property both times would rebuild the script twice per
+        // keystroke in a message field.
+        let planError = validationError
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 3) {
                 Text("Interactive Rebase")
@@ -68,7 +73,7 @@ struct InteractiveRebaseSheet: View {
             Divider()
 
             HStack(spacing: 12) {
-                if let error = validationError {
+                if let error = planError {
                     Text(error)
                         .font(.system(size: 11.5))
                         .foregroundStyle(DesignStyle.deletion)
@@ -86,7 +91,7 @@ struct InteractiveRebaseSheet: View {
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(validationError != nil)
+                .disabled(planError != nil)
             }
             .padding(16)
         }

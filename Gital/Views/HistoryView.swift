@@ -4,9 +4,6 @@ import SwiftUI
 struct HistoryView: View {
     @Bindable var model: RepoViewModel
 
-    @State private var branchAnchor: Commit?
-    @State private var tagAnchor: Commit?
-
     var body: some View {
         VSplitView {
             commitList
@@ -14,7 +11,10 @@ struct HistoryView: View {
             CommitDetailView(model: model)
                 .frame(minHeight: 240, idealHeight: 360)
         }
-        .sheet(item: $branchAnchor) { commit in
+        // Anchors live on the model, not local @State: `isPresentingSheet`
+        // must know these sheets are up so a shortcut-raised sheet (reflog)
+        // can't queue invisibly beneath them.
+        .sheet(item: $model.branchSheetAnchor) { commit in
             RefCreationSheet(
                 title: "New Branch at \(commit.shortHash)",
                 placeholder: "Branch name",
@@ -23,7 +23,7 @@ struct HistoryView: View {
                 model.createBranch(name: name, at: commit, checkout: checkout)
             }
         }
-        .sheet(item: $tagAnchor) { commit in
+        .sheet(item: $model.tagSheetAnchor) { commit in
             RefCreationSheet(
                 title: "New Tag at \(commit.shortHash)",
                 placeholder: "Tag name",
@@ -80,34 +80,25 @@ struct HistoryView: View {
 
     @ViewBuilder
     private func commitMenu(_ commit: Commit) -> some View {
-        Button("Copy SHA") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(commit.hash, forType: .string)
-        }
+        CopyCommitSHAButton(hash: commit.hash)
         Divider()
-        Button("Create Branch Here…") { branchAnchor = commit }
-        Button("Create Tag Here…") { tagAnchor = commit }
+        Button("Create Branch Here…") { model.branchSheetAnchor = commit }
+        Button("Create Tag Here…") { model.tagSheetAnchor = commit }
         Divider()
         // Disabled while a merge/rebase/… is stopped on conflicts, matching
         // the branch menu's merge/rebase items — git would refuse anyway.
-        Button("Checkout \(commit.shortHash) (Detached HEAD)…") {
+        DetachedCheckoutButton(shortHash: commit.shortHash, isBlocked: model.pendingOperation != nil) {
             model.requestCheckoutDetached(hash: commit.hash, subject: commit.subject)
         }
-        .disabled(model.pendingOperation != nil)
         Button("Cherry-pick \(commit.shortHash)") { model.cherryPick(commit) }
             .disabled(model.pendingOperation != nil)
         Button("Revert \(commit.shortHash)") { model.revertCommit(commit) }
             .disabled(model.pendingOperation != nil)
         Button("Interactive Rebase from \(commit.shortHash)…") { model.requestInteractiveRebase(from: commit) }
             .disabled(model.pendingOperation != nil)
-        // Gated like its reflog-sheet twin: mixed/hard would silently blow
-        // away an in-progress merge/rebase state.
-        Menu("Reset “\(model.status.branch ?? "HEAD")” to Here") {
-            Button("Soft — keep changes staged") { model.requestReset(toHash: commit.hash, mode: .soft) }
-            Button("Mixed — keep changes unstaged") { model.requestReset(toHash: commit.hash, mode: .mixed) }
-            Button("Hard — discard all changes…", role: .destructive) { model.requestReset(toHash: commit.hash, mode: .hard) }
+        ResetToCommitMenu(branch: model.status.branch, isBlocked: model.pendingOperation != nil) { mode in
+            model.requestReset(toHash: commit.hash, mode: mode)
         }
-        .disabled(model.pendingOperation != nil)
     }
 
     private var loadMoreRow: some View {

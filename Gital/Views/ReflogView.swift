@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 /// The HEAD-reflog sheet: every place HEAD has been, newest first, with the
@@ -70,21 +69,14 @@ struct ReflogSheet: View {
 
     @ViewBuilder
     private func entryMenu(_ entry: ReflogEntry) -> some View {
-        Button("Copy SHA") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(entry.hash, forType: .string)
-        }
+        CopyCommitSHAButton(hash: entry.hash)
         Divider()
-        // Same gating as the history context menu: while a merge/rebase/…
-        // is stopped on conflicts, git would refuse anyway.
-        Button("Checkout \(entry.shortHash) (Detached HEAD)…") { model.reflogCheckout(entry) }
-            .disabled(model.pendingOperation != nil)
-        Menu("Reset “\(model.status.branch ?? "HEAD")” to Here") {
-            Button("Soft — keep changes staged") { model.reflogReset(entry, mode: .soft) }
-            Button("Mixed — keep changes unstaged") { model.reflogReset(entry, mode: .mixed) }
-            Button("Hard — discard all changes…", role: .destructive) { model.reflogReset(entry, mode: .hard) }
+        DetachedCheckoutButton(shortHash: entry.shortHash, isBlocked: model.pendingOperation != nil) {
+            model.reflogCheckout(entry)
         }
-        .disabled(model.pendingOperation != nil)
+        ResetToCommitMenu(branch: model.status.branch, isBlocked: model.pendingOperation != nil) { mode in
+            model.reflogReset(entry, mode: mode)
+        }
     }
 }
 

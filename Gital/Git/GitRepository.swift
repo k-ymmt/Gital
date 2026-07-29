@@ -793,22 +793,24 @@ final class GitRepository: @unchecked Sendable {
 
     private static let reflogFormat = "%H\u{1f}%gd\u{1f}%gs"
 
-    /// How many entries the reflog sheet loads. A full result (count ==
-    /// limit) means the list is truncated and the UI must say so.
-    /// `nonisolated` so the default-argument position can read it without a
-    /// main-actor hop warning.
+    /// How many entries the reflog sheet shows. `nonisolated` so the
+    /// default-argument position can read it without a main-actor hop
+    /// warning.
     nonisolated static let reflogDisplayLimit = 200
 
     /// The HEAD reflog — every place HEAD has been, newest first. Positions
     /// map 1:1 to git's HEAD@{N} numbering because `git reflog` lists entries
     /// in exactly that order. `--date=relative` makes %gd carry the entry's
     /// own timestamp ("HEAD@{5 minutes ago}") instead of a positional index.
+    /// Returns up to `limit + 1` entries: a count above `limit` is the
+    /// caller's proof of truncation — a reflog of exactly `limit` entries
+    /// must not read as truncated.
     func reflog(limit: Int = GitRepository.reflogDisplayLimit) async throws -> [ReflogEntry] {
         // An unborn branch has no reflog and `git reflog` fatals on it —
         // that's the empty state, not an error to alert about.
         guard await headExists() else { return [] }
         let output = try await executor.run([
-            "reflog", "--date=relative", "--format=\(Self.reflogFormat)", "-n", String(limit),
+            "reflog", "--date=relative", "--format=\(Self.reflogFormat)", "-n", String(limit + 1),
         ])
         return Self.parseReflog(output)
     }
@@ -1328,7 +1330,10 @@ final class GitRepository: @unchecked Sendable {
     /// hashes are useless here because picking rewrites them.
     private static func identityGuard(_ commit: RebaseCommit, skip: Int = 0) -> String {
         let skipArg = skip > 0 ? " --skip=\(skip)" : ""
-        return "test \"$(git log -1\(skipArg) --format=%at,%ae,%s 2>/dev/null)\" = \(shellQuote(commit.identity))"
+        // --no-show-signature: with log.showSignature=true the signature block
+        // would join the format line on stdout and the comparison could never
+        // match — every rewrite would silently degrade into its warning branch.
+        return "test \"$(git log -1\(skipArg) --no-show-signature --format=%at,%ae,%s 2>/dev/null)\" = \(shellQuote(commit.identity))"
     }
 
     /// A todo `exec` line that rewrites HEAD's message — guarded so that if
