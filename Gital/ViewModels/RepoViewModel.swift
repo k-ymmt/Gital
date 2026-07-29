@@ -135,6 +135,14 @@ final class RepoViewModel {
     /// hash, so the list going stale underneath is harmless.
     var reflogSnapshot: ReflogSnapshot?
 
+    /// True while any window-modal sheet is up. Actions that raise a sheet
+    /// from a global shortcut (Show Reflog) must check this: a sheet set
+    /// while another one is presented cannot appear, silently waits, and
+    /// then pops "out of nowhere" when the first sheet closes.
+    var isPresentingSheet: Bool {
+        fileHistory != nil || interactiveRebasePrep != nil || reflogSnapshot != nil
+    }
+
     // MARK: Stash selection
 
     var selectedStashRef: String? {

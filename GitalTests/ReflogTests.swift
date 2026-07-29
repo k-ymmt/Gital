@@ -33,6 +33,18 @@ struct ReflogTests {
         #expect(entries[0].subject == "commit: weird\u{1f}subject", "separator inside the subject is stitched back")
     }
 
+    // `git update-ref HEAD HEAD` writes an entry with an empty message —
+    // the trailing empty field must parse as an entry with subject "", not
+    // be dropped (components(separatedBy:) keeps it; a refactor to
+    // split(separator:) would silently start dropping these lines).
+    @Test func emptySubjectParsesAsEntry() {
+        let output = line(hash: "aaa111", selector: "HEAD@{0 seconds ago}", subject: "")
+        let entries = GitRepository.parseReflog(output)
+        #expect(entries.count == 1, "empty-subject entry is kept")
+        #expect(entries.first?.subject == "", "subject stays empty")
+        #expect(entries.first?.recordedDate == "0 seconds ago", "date still extracted")
+    }
+
     @Test func malformedLinesAreSkipped() {
         let output = [
             "not-a-reflog-line",

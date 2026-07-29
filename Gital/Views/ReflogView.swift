@@ -16,7 +16,7 @@ struct ReflogSheet: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("HEAD Reflog")
                     .font(.headline)
-                Text("Every position HEAD has had, newest first — commits lost to a reset or rebase can be recovered from here. Right-click an entry to check it out or reset to it.")
+                Text("Where HEAD has been, newest first — commits lost to a reset or rebase can be recovered from here. Right-click an entry to check it out or reset to it.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -41,6 +41,16 @@ struct ReflogSheet: View {
                             ReflogRow(entry: entry)
                                 .contentShape(Rectangle())
                                 .contextMenu { entryMenu(entry) }
+                        }
+                        // Without this, a commit sitting just past the cutoff
+                        // reads as unrecoverable.
+                        if snapshot.isTruncated {
+                            Text("Only the newest \(snapshot.entries.count) entries are shown — older ones exist but are not listed.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 8)
+                                .padding(.horizontal, 16)
                         }
                     }
                 }

@@ -793,11 +793,17 @@ final class GitRepository: @unchecked Sendable {
 
     private static let reflogFormat = "%H\u{1f}%gd\u{1f}%gs"
 
+    /// How many entries the reflog sheet loads. A full result (count ==
+    /// limit) means the list is truncated and the UI must say so.
+    /// `nonisolated` so the default-argument position can read it without a
+    /// main-actor hop warning.
+    nonisolated static let reflogDisplayLimit = 200
+
     /// The HEAD reflog — every place HEAD has been, newest first. Positions
     /// map 1:1 to git's HEAD@{N} numbering because `git reflog` lists entries
     /// in exactly that order. `--date=relative` makes %gd carry the entry's
     /// own timestamp ("HEAD@{5 minutes ago}") instead of a positional index.
-    func reflog(limit: Int = 200) async throws -> [ReflogEntry] {
+    func reflog(limit: Int = GitRepository.reflogDisplayLimit) async throws -> [ReflogEntry] {
         // An unborn branch has no reflog and `git reflog` fatals on it —
         // that's the empty state, not an error to alert about.
         guard await headExists() else { return [] }

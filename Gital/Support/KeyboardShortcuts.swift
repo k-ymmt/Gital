@@ -378,7 +378,7 @@ final class ShortcutStore {
         guard let data = defaults.data(forKey: defaultsKey),
               let decoded = try? JSONDecoder().decode([String: Override].self, from: data)
         else { return [:] }
-        return decoded
+        var sanitized = decoded
             .filter { ShortcutAction(rawValue: $0.key) != nil }
             .mapValues { override in
                 if let combo = override.combo, !combo.isRecordable {
@@ -386,6 +386,18 @@ final class ShortcutStore {
                 }
                 return override
             }
+        // A default introduced by an app update can equal a combo the user
+        // recorded for another action before that update — two live menu
+        // items would then share one key equivalent, and AppKit fires only
+        // the first, silently killing the newer action. Demote the colliding
+        // default to unbound (the user can still record it in Settings);
+        // `setCombo` only deduplicates on explicit rebinds, never here.
+        for action in ShortcutAction.allCases where sanitized[action.rawValue] == nil {
+            if sanitized.contains(where: { $0.value.combo == action.defaultCombo }) {
+                sanitized[action.rawValue] = Override(combo: nil)
+            }
+        }
+        return sanitized
     }
 
     /// The effective combo: the user's override if present, else the default.

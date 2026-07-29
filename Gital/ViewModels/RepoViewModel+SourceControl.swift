@@ -64,6 +64,9 @@ extension RepoViewModel {
     /// The reflog list backing the sheet; `Identifiable` for `.sheet(item:)`.
     struct ReflogSnapshot: Identifiable {
         let entries: [ReflogEntry]
+        /// True when the list hit the load limit — the sheet must say so, or
+        /// a commit sitting just past the cutoff reads as unrecoverable.
+        let isTruncated: Bool
         let id = UUID()
     }
 
@@ -84,10 +87,18 @@ extension RepoViewModel {
     /// Loads the HEAD reflog and raises the sheet. `runSync` for the same
     /// reason as `requestInteractiveRebase`: the load queues behind the
     /// serialized executor, and an invisible pending load would pop the
-    /// sheet "out of nowhere" much later.
+    /// sheet "out of nowhere" much later. Checked against other sheets both
+    /// here (the menu item disables, but the shortcut can race it) and after
+    /// the load — a file-history sheet can open while the load is queued.
     func requestReflog() {
+        guard !isPresentingSheet else { return }
         runSync("Loading reflog…") {
-            self.reflogSnapshot = ReflogSnapshot(entries: try await self.repository.reflog())
+            let entries = try await self.repository.reflog()
+            guard !self.isPresentingSheet else { return }
+            self.reflogSnapshot = ReflogSnapshot(
+                entries: entries,
+                isTruncated: entries.count >= GitRepository.reflogDisplayLimit
+            )
         }
     }
 

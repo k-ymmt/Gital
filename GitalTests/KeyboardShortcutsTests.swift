@@ -196,6 +196,27 @@ private func keyDown(
         }
     }
 
+    // An app update can introduce a default equal to a combo the user
+    // recorded earlier for another action. Both would render as live menu
+    // items with one key equivalent, and AppKit fires only the first — the
+    // load path must demote the colliding default to unbound instead.
+    @Test func newDefaultCollidingWithStoredOverrideIsDemoted() {
+        withDefaults { defaults in
+            // Simulate the pre-update state: the user recorded showReflog's
+            // default combo for fetch before showReflog existed.
+            let stolen = ShortcutAction.showReflog.defaultCombo
+            ShortcutStore(defaults: defaults).setCombo(stolen, for: .fetch)
+
+            let reloaded = ShortcutStore(defaults: defaults)
+            #expect(reloaded.combo(for: .fetch) == stolen, "the user's override wins")
+            #expect(reloaded.combo(for: .showReflog) == nil, "the colliding default is unbound")
+            // Recording the combo for its own action explicitly reclaims it.
+            reloaded.setCombo(stolen, for: .showReflog)
+            #expect(reloaded.combo(for: .showReflog) == stolen, "explicit rebind reclaims the combo")
+            #expect(reloaded.combo(for: .fetch) == nil, "the previous holder is unbound")
+        }
+    }
+
     @Test func settingDefaultComboClearsCustomization() {
         withDefaults { defaults in
             let store = ShortcutStore(defaults: defaults)

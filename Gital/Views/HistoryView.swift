@@ -100,11 +100,14 @@ struct HistoryView: View {
             .disabled(model.pendingOperation != nil)
         Button("Interactive Rebase from \(commit.shortHash)…") { model.requestInteractiveRebase(from: commit) }
             .disabled(model.pendingOperation != nil)
+        // Gated like its reflog-sheet twin: mixed/hard would silently blow
+        // away an in-progress merge/rebase state.
         Menu("Reset “\(model.status.branch ?? "HEAD")” to Here") {
             Button("Soft — keep changes staged") { model.requestReset(toHash: commit.hash, mode: .soft) }
             Button("Mixed — keep changes unstaged") { model.requestReset(toHash: commit.hash, mode: .mixed) }
             Button("Hard — discard all changes…", role: .destructive) { model.requestReset(toHash: commit.hash, mode: .hard) }
         }
+        .disabled(model.pendingOperation != nil)
     }
 
     private var loadMoreRow: some View {

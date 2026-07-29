@@ -73,9 +73,12 @@ struct AppCommands: Commands {
 
             Divider()
 
+            // Also gated on other sheets: this is the one sheet a global
+            // shortcut can raise, and setting it under a presented sheet
+            // queues it invisibly until that sheet closes.
             Button("Show Reflog") { repo?.requestReflog() }
                 .keyboardShortcut(shortcuts.combo(for: .showReflog)?.keyboardShortcut)
-                .disabled(repo == nil)
+                .disabled(repo == nil || repo?.isPresentingSheet == true)
 
             Button("Refresh") {
                 guard let repo else { return }
