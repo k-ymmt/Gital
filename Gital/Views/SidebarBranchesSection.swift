@@ -104,8 +104,14 @@ struct SidebarBranchesSection: View {
             Divider()
             mergeRebaseMenuItems(target: branch.name, disabled: branch.isCurrent)
             Divider()
-            Button(branch.upstream == nil ? "Publish to Origin" : "Push") {
-                model.pushBranch(branch)
+            // A branch tracking a local branch has nothing to push; publishing
+            // needs a remote actually named "origin" or the push just errors.
+            if branch.upstream == nil {
+                Button("Publish to Origin") { model.pushBranch(branch) }
+                    .disabled(!model.remotes.contains { $0.name == "origin" })
+            } else {
+                Button("Push") { model.pushBranch(branch) }
+                    .disabled(branch.tracksLocalBranch)
             }
             Divider()
             Button("Rename…") { model.renamingBranch = branch }

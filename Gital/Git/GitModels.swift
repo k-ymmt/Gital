@@ -139,8 +139,15 @@ struct Branch: Hashable, Identifiable {
     let isCurrent: Bool
     let upstream: String?
     let tipHash: String
+    /// Remote the upstream lives on (`%(upstream:remotename)`): "." for a
+    /// branch tracking a local branch, nil when there is no upstream.
+    let upstreamRemote: String?
 
     var id: String { name }
+
+    /// True when the upstream is another local branch — there is nothing to
+    /// push, and the sidebar's Push item disables itself on it.
+    var tracksLocalBranch: Bool { upstreamRemote == "." }
 }
 
 struct RemoteInfo: Hashable, Identifiable {

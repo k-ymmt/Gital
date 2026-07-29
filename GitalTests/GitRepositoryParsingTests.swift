@@ -84,13 +84,16 @@ struct GitRepositoryParsingTests {
 
     @Test func branchListParsing() {
         let branchOutput = [
-            ["main", "*", "origin/main", "aaa111"].joined(separator: "\u{1f}"),
-            ["feature/login", "", "", "bbb222"].joined(separator: "\u{1f}"),
+            ["main", "*", "origin/main", "aaa111", "origin"].joined(separator: "\u{1f}"),
+            ["feature/login", "", "", "bbb222", ""].joined(separator: "\u{1f}"),
+            ["localtrack", "", "main", "ccc333", "."].joined(separator: "\u{1f}"),
         ].joined(separator: "\n")
         let parsedBranches = GitRepository.parseBranches(branchOutput)
-        #expect(parsedBranches.count == 2, "branch list parses two branches")
+        #expect(parsedBranches.count == 3, "branch list parses three branches")
         #expect(parsedBranches[0].isCurrent && parsedBranches[0].upstream == "origin/main", "current branch with upstream")
-        #expect(parsedBranches[1].upstream == nil, "branch without upstream has nil upstream")
+        #expect(parsedBranches[0].upstreamRemote == "origin" && !parsedBranches[0].tracksLocalBranch, "remote upstream carries its remote name")
+        #expect(parsedBranches[1].upstream == nil && parsedBranches[1].upstreamRemote == nil, "branch without upstream has nil upstream")
+        #expect(parsedBranches[2].tracksLocalBranch, "'.' remotename marks a local-tracking branch")
     }
 
     // Detached HEAD: `git branch` emits a "(HEAD detached at abc1234)"

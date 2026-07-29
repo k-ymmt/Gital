@@ -170,9 +170,16 @@ extension RepoViewModel {
 
     struct PendingBranchDelete {
         let branch: Branch
-        /// Commits on the branch not reachable from HEAD — what a delete
-        /// would lose. Drives the wording of the confirmation.
-        let unmergedCount: Int
+        /// Commits on the branch not reachable from HEAD; nil when it could
+        /// not be determined (unborn HEAD, odd repo state) — the alert then
+        /// warns conservatively instead of blocking the delete. Never
+        /// defaulted to 0: that would select the reassuring wording exactly
+        /// when nothing is known.
+        let unmergedCount: Int?
+        /// Current branch when the confirmation was raised. The alert
+        /// auto-dismisses if HEAD moves elsewhere — the count is relative
+        /// to HEAD and would silently describe a different comparison.
+        let head: String?
     }
 
     struct RemoteBranchRef {
@@ -181,13 +188,21 @@ extension RepoViewModel {
     }
 
     /// Computes what the delete would lose, then raises the confirmation.
+    /// A failed count (unborn HEAD, exotic repo state) raises the alert with
+    /// an "unknown" warning rather than blocking the delete entirely.
     func requestDeleteBranch(_ branch: Branch) {
         guard !branch.isCurrent else { return }
         Task {
-            do {
-                let count = try await repository.unmergedCommitCount(branch: branch.name)
-                pendingBranchDelete = PendingBranchDelete(branch: branch, unmergedCount: count)
-            } catch { report(error) }
+            let count = try? await repository.unmergedCommitCount(branch: branch.name)
+            // The count may have queued behind a long fetch/pull on the
+            // serialized executor. Only raise the confirmation if the branch
+            // still is what the user clicked on.
+            guard self.branches.first(where: { $0.name == branch.name })?.tipHash == branch.tipHash else { return }
+            pendingBranchDelete = PendingBranchDelete(
+                branch: branch,
+                unmergedCount: count,
+                head: self.branches.first(where: \.isCurrent)?.name
+            )
         }
     }
 
@@ -197,12 +212,23 @@ extension RepoViewModel {
             if self.selectedBranchName == branch.name {
                 self.selectedBranchName = nil
             }
+            // The branch tip may exist nowhere else; keeping it selected
+            // would pin the detail pane to a commit absent from the graph.
+            if self.selectedCommitHash == branch.tipHash {
+                self.selectedCommitHash = nil
+            }
         }
     }
 
     func renameBranch(_ branch: Branch, to newName: String) {
         let trimmed = newName.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, trimmed != branch.name else { return }
+        // Alert buttons always dismiss; a silent no-op here would look like
+        // a successful rename.
+        guard !trimmed.isEmpty else {
+            errorMessage = "Branch name cannot be empty."
+            return
+        }
+        guard trimmed != branch.name else { return }
         perform(refresh: .all) {
             try await self.repository.renameBranch(from: branch.name, to: trimmed)
             if self.selectedBranchName == branch.name {
@@ -226,7 +252,12 @@ extension RepoViewModel {
     func addRemote(name: String, url: String) {
         let trimmedName = name.trimmingCharacters(in: .whitespaces)
         let trimmedURL = url.trimmingCharacters(in: .whitespaces)
-        guard !trimmedName.isEmpty, !trimmedURL.isEmpty else { return }
+        // Alert buttons always dismiss; a silent no-op would discard the
+        // typed input without a trace.
+        guard !trimmedName.isEmpty, !trimmedURL.isEmpty else {
+            errorMessage = "Remote name and URL are both required."
+            return
+        }
         perform(refresh: .refs) {
             try await self.repository.addRemote(name: trimmedName, url: trimmedURL)
         }

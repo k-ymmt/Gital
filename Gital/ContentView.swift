@@ -268,7 +268,29 @@ private struct BranchManagementAlerts: ViewModifier {
                 Button("Force Push", role: .destructive) { model.push(force: true) }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("“\(model.status.branch ?? "HEAD")” will overwrite its upstream with --force-with-lease. Commits that exist only on the remote will be discarded, and anyone tracking the branch will have to recover.")
+                if let upstream = model.status.upstream {
+                    Text("“\(model.status.branch ?? "HEAD")” will overwrite “\(upstream)” with --force-with-lease. Commits that exist only on the remote will be discarded, and anyone tracking the branch will have to recover.")
+                } else {
+                    Text("“\(model.status.branch ?? "HEAD")” has no upstream yet — it will be published to origin. Nothing is overwritten.")
+                }
+            }
+            // The confirmation's target is "the current branch", resolved at
+            // execution time — if HEAD moves (terminal checkout) while the
+            // alert is open, confirming would force-push a branch the alert
+            // never named. Same for the delete confirmation: its unmerged
+            // count is a snapshot relative to the branch tip and HEAD at
+            // request time; commits arriving on the branch or a HEAD switch
+            // would let the user confirm against a stale "safe" message.
+            .onChange(of: model.status.branch) {
+                model.pendingForcePush = false
+            }
+            .onChange(of: model.branches) {
+                guard let pending = model.pendingBranchDelete else { return }
+                let live = model.branches.first { $0.name == pending.branch.name }
+                if live?.tipHash != pending.branch.tipHash
+                    || model.branches.first(where: \.isCurrent)?.name != pending.head {
+                    model.pendingBranchDelete = nil
+                }
             }
             .alert(
                 "Delete Branch?",
@@ -281,10 +303,13 @@ private struct BranchManagementAlerts: ViewModifier {
                 Button("Delete", role: .destructive) { model.deleteBranch(pending.branch) }
                 Button("Cancel", role: .cancel) {}
             } message: { pending in
-                if pending.unmergedCount > 0 {
-                    Text("“\(pending.branch.name)” has \(pending.unmergedCount) commit(s) not reachable from the current branch. Deleting it will lose them. This cannot be undone.")
-                } else {
-                    Text("“\(pending.branch.name)” will be deleted. Its commits are all reachable from the current branch.")
+                switch pending.unmergedCount {
+                case nil:
+                    Text("“\(pending.branch.name)” will be deleted. Whether its commits are reachable elsewhere could not be determined — they may be lost. This cannot be undone.")
+                case 0:
+                    Text("“\(pending.branch.name)” will be deleted. Its commits are all reachable from “\(pending.head ?? "HEAD")”.")
+                case let count?:
+                    Text("“\(pending.branch.name)” has \(count) commit(s) not on “\(pending.head ?? "HEAD")”. Unless another branch or tag points at them, deleting the branch loses them. This cannot be undone.")
                 }
             }
             .alert(

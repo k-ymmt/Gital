@@ -1,5 +1,14 @@
 import Foundation
 
+/// Branch/remote operation refused before reaching git — the configuration
+/// is ambiguous and guessing would do the wrong thing silently.
+struct BranchOperationError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+
+    init(_ message: String) { self.message = message }
+}
+
 /// High-level git operations backed by the git CLI.
 final class GitRepository: @unchecked Sendable {
     let root: URL
@@ -391,55 +400,91 @@ final class GitRepository: @unchecked Sendable {
     }
 
     func push(force: Bool = false) async throws {
-        // Probe upstream existence instead of matching "--set-upstream" in
-        // stderr, whose wording is unowned API surface across git versions.
-        let hasUpstream = (try? await executor.run(
-            ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]
-        )) != nil
-        let branch = hasUpstream ? nil : try await currentBranch()
-        try await executor.run(Self.pushArguments(hasUpstream: hasUpstream, currentBranch: branch, force: force))
+        let branch = try await currentBranch()
+        var remote: String?
+        var merge: String?
+        if branch != "HEAD" {
+            remote = try await configValue("branch.\(branch).remote")
+            merge = try await configValue("branch.\(branch).merge")
+        }
+        try await executor.run(Self.pushArguments(
+            currentBranch: branch, upstreamRemote: remote, upstreamMerge: merge, force: force
+        ))
     }
 
     /// Builds the `git push` invocation for the current branch. `force` uses
     /// `--force-with-lease`, never bare `--force`: it refuses to overwrite
-    /// remote commits that were never fetched locally.
-    static func pushArguments(hasUpstream: Bool, currentBranch: String?, force: Bool) -> [String] {
+    /// remote commits that were never fetched locally. A forced push always
+    /// carries an explicit refspec — a bare `push --force-with-lease` obeys
+    /// `push.default`, and under "matching" that force-pushes every matching
+    /// branch, not just the one the user confirmed.
+    static func pushArguments(currentBranch: String?, upstreamRemote: String?, upstreamMerge: String?, force: Bool) -> [String] {
         var args = ["push"]
         if force { args.append("--force-with-lease") }
         // Detached HEAD ("HEAD" pseudo-branch): plain push lets git report
         // the real problem instead of creating a branch literally named "HEAD".
-        if !hasUpstream, let branch = currentBranch, branch != "HEAD" {
+        guard let branch = currentBranch, branch != "HEAD" else { return args }
+        guard let remote = upstreamRemote, let merge = upstreamMerge else {
             args += ["--set-upstream", "origin", branch]
+            return args
         }
+        if force { args += [remote, "\(branch):\(merge)"] }
         return args
     }
 
-    /// Pushes a specific local branch without checking it out. An existing
-    /// upstream is pushed to by name; a branch without one is published to
-    /// "origin" and its upstream recorded.
+    /// Pushes a specific local branch without checking it out. A triangular
+    /// push destination (`branch.<name>.pushRemote` / `remote.pushDefault`)
+    /// wins; otherwise the branch goes to its configured upstream, and a
+    /// branch with no upstream at all is published to "origin". Ambiguous
+    /// upstream configuration throws instead of guessing — a wrong guess
+    /// would silently rewrite the branch's tracking setup.
     func push(branch: Branch) async throws {
-        // `config branch.<name>.remote` exits 1 when unset — try? maps that
-        // to the publish-to-origin path.
-        let remote = try? await executor.run(["config", "--get", "branch.\(branch.name).remote"])
+        let name = branch.name
+        var pushRemote = try await configValue("branch.\(name).pushRemote")
+        if pushRemote == nil { pushRemote = try await configValue("remote.pushDefault") }
+        let fetchRemote = try await configValue("branch.\(name).remote")
+        let merge = try await configValue("branch.\(name).merge")
         try await executor.run(Self.pushBranchArguments(
-            branch: branch.name,
-            upstream: branch.upstream,
-            configuredRemote: remote?.trimmingCharacters(in: .whitespacesAndNewlines)
+            branch: name, pushRemote: pushRemote, fetchRemote: fetchRemote, upstreamMerge: merge
         ))
     }
 
-    /// Builds the `git push` invocation for a non-checked-out branch. The
-    /// upstream may be named differently from the local branch, so the
-    /// refspec always spells out both sides. A missing, empty, or local
-    /// (".") remote — or an upstream that doesn't belong to the configured
-    /// remote — falls back to publishing on "origin".
-    static func pushBranchArguments(branch: String, upstream: String?, configuredRemote: String?) -> [String] {
-        guard let remote = configuredRemote, !remote.isEmpty, remote != ".",
-              let upstream, upstream.hasPrefix(remote + "/") else {
+    /// Builds the `git push` invocation for a non-checked-out branch.
+    /// `upstreamMerge` is the full ref (`refs/heads/x`), so the refspec is
+    /// immune to short-name ambiguity. Only a branch with no upstream at all
+    /// may be published to "origin"; every partial configuration throws.
+    static func pushBranchArguments(branch: String, pushRemote: String?, fetchRemote: String?, upstreamMerge: String?) throws -> [String] {
+        if let pushRemote {
+            guard pushRemote != "." else {
+                throw BranchOperationError("“\(branch)” is configured to push to “.” (this repository) — there is no remote to push to.")
+            }
+            // Triangular workflow: the push destination gets the branch under
+            // its own name (push.default "simple"/"current" semantics).
+            return ["push", pushRemote, "\(branch):refs/heads/\(branch)"]
+        }
+        guard fetchRemote != nil || upstreamMerge != nil else {
             return ["push", "--set-upstream", "origin", branch]
         }
-        let remoteBranch = String(upstream.dropFirst(remote.count + 1))
-        return ["push", remote, "\(branch):\(remoteBranch)"]
+        guard let remote = fetchRemote, let merge = upstreamMerge else {
+            throw BranchOperationError("“\(branch)” has an incomplete upstream configuration (branch.\(branch).remote / .merge) — push it from a terminal.")
+        }
+        guard remote != "." else {
+            throw BranchOperationError("“\(branch)” tracks the local branch “\(merge)” — there is no remote to push to.")
+        }
+        return ["push", remote, "\(branch):\(merge)"]
+    }
+
+    /// Reads one config value. Unset (exit 1) and set-but-empty both map to
+    /// nil; any other failure is rethrown — collapsing a transient error into
+    /// "unset" would silently reroute pushes to the wrong remote.
+    private func configValue(_ key: String) async throws -> String? {
+        do {
+            let value = try await executor.run(["config", "--get", key])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        } catch let error as GitError where error.exitCode == 1 {
+            return nil
+        }
     }
 
     func currentBranch() async throws -> String {
@@ -451,7 +496,7 @@ final class GitRepository: @unchecked Sendable {
 
     func branches() async throws -> [Branch] {
         let output = try await executor.run([
-            "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)\u{1f}%(objectname)",
+            "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)\u{1f}%(objectname)\u{1f}%(upstream:remotename)",
         ])
         return Self.parseBranches(output)
     }
@@ -464,11 +509,15 @@ final class GitRepository: @unchecked Sendable {
             // "(HEAD detached at abc1234)" — a parenthesized non-ref, never a
             // real branch name (git forbids names starting with "(").
             guard !fields[0].hasPrefix("(") else { return nil }
+            // %(upstream:remotename) is "." for a branch tracking a local
+            // branch, empty when there is no upstream.
+            let remoteName = fields.count >= 5 ? fields[4] : ""
             return Branch(
                 name: fields[0],
                 isCurrent: fields[1] == "*",
                 upstream: fields[2].isEmpty ? nil : fields[2],
-                tipHash: fields[3]
+                tipHash: fields[3],
+                upstreamRemote: remoteName.isEmpty ? nil : remoteName
             )
         }
     }
@@ -552,28 +601,45 @@ final class GitRepository: @unchecked Sendable {
     /// 0 means deleting the branch loses no work. Computed up front (instead
     /// of relying on `branch -d` refusing) so the delete confirmation can
     /// state exactly what would be lost, without parsing localized stderr.
+    /// The `refs/heads/` qualification is load-bearing: a bare name resolves
+    /// through gitrevisions precedence, where a same-named TAG outranks the
+    /// branch and yields a bogus (reassuring) count, and a same-named file
+    /// makes the bare form fatal.
     func unmergedCommitCount(branch: String) async throws -> Int {
-        let output = try await executor.run(["rev-list", "--count", branch, "--not", "HEAD"])
-        return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        let output = try await executor.run(["rev-list", "--count", "refs/heads/\(branch)", "--not", "HEAD", "--"])
+        guard let count = Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            // Never default a parse failure to 0 — that selects the
+            // "safe to delete" wording precisely when nothing is known.
+            throw BranchOperationError("Unexpected rev-list output for “\(branch)”.")
+        }
+        return count
     }
 
     /// Always `-D`: the mergedness check and confirmation happened in the UI,
     /// and `-d`'s own refusal logic (against the upstream, not HEAD) would
     /// second-guess a delete the user already confirmed.
     func deleteBranch(name: String) async throws {
-        try await executor.run(["branch", "-D", name])
+        try await executor.run(["branch", "-D", "--", name])
     }
 
+    /// `--` is load-bearing here: `newName` is free text from the rename
+    /// prompt, and without the separator a value like "--force" is parsed as
+    /// an option — git then force-renames the CURRENT branch over an
+    /// existing one instead of erroring.
     func renameBranch(from oldName: String, to newName: String) async throws {
-        try await executor.run(["branch", "-m", oldName, newName])
+        try await executor.run(["branch", "-m", "--", oldName, newName])
     }
 
+    /// `refs/heads/` qualification: a same-named tag on the remote makes the
+    /// short form fail with "matches more than one" — the sidebar's remote
+    /// rows only ever list branches, so heads is always the intent.
     func deleteRemoteBranch(remote: String, branch: String) async throws {
-        try await executor.run(["push", remote, "--delete", branch])
+        try await executor.run(["push", remote, "--delete", "refs/heads/\(branch)"])
     }
 
+    /// `--` separator: name and URL are free text from the add-remote prompt.
     func addRemote(name: String, url: String) async throws {
-        try await executor.run(["remote", "add", name, url])
+        try await executor.run(["remote", "add", "--", name, url])
     }
 
     func removeRemote(name: String) async throws {
