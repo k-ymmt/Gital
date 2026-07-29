@@ -73,6 +73,39 @@ extension RepoViewModel {
         runConflictAware("Rebasing…") { try await self.repository.rebase(onto: target) }
     }
 
+    // MARK: - Interactive rebase
+
+    /// Loads the span `commit..HEAD` and raises the interactive-rebase
+    /// sheet. A dirty working copy is rejected up front — git would refuse
+    /// after the user already arranged the whole plan, which is the worst
+    /// moment to find out.
+    func requestInteractiveRebase(from commit: Commit) {
+        let blockingChanges = status.staged.count
+            + status.unstaged.filter { $0.status != .untracked }.count
+        guard blockingChanges == 0 else {
+            errorMessage = "Interactive rebase needs a clean working copy — commit or stash your changes first."
+            return
+        }
+        Task {
+            do {
+                interactiveRebasePrep = try await repository.prepareInteractiveRebase(from: commit.hash)
+            } catch { report(error) }
+        }
+    }
+
+    /// Runs the plan the sheet produced. Steps arrive newest first (display
+    /// order); the todo wants oldest first. Todo generation happens before
+    /// the git command so a plan error surfaces immediately, without a sync
+    /// spinner flash.
+    func startInteractiveRebase(baseHash: String?, stepsNewestFirst: [RebaseStep]) {
+        do {
+            let todo = try GitRepository.rebaseTodoScript(stepsOldestFirst: stepsNewestFirst.reversed())
+            runConflictAware("Rebasing…") {
+                try await self.repository.interactiveRebase(baseHash: baseHash, todo: todo)
+            }
+        } catch { report(error) }
+    }
+
     func continuePendingOperation() {
         guard let operation = pendingOperation else { return }
         runConflictAware("Continuing…") { try await self.repository.continueOperation(operation) }

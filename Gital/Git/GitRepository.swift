@@ -1015,6 +1015,187 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["reset", "--\(mode.rawValue)", hash])
     }
 
+    // MARK: - Interactive rebase
+
+    /// The prepared span for an interactive rebase: the commits it would
+    /// rewrite (newest first) and the base to replay them onto.
+    struct InteractiveRebasePrep: Identifiable {
+        let commits: [RebaseCommit]
+        /// First parent of the oldest commit in the span; nil means the span
+        /// reaches the root commit and the rebase must use `--root`.
+        let baseHash: String?
+
+        var id: String { "\(commits.first?.hash ?? "")→\(baseHash ?? "root")" }
+    }
+
+    /// Loads the commits `<from>..HEAD` (inclusive of `from`) that an
+    /// interactive rebase started at `from` would rewrite. Throws when the
+    /// commit is not an ancestor of HEAD or the span contains merge commits —
+    /// a flattening rebase would silently discard one side of each merge.
+    func prepareInteractiveRebase(from hash: String) async throws -> InteractiveRebasePrep {
+        do {
+            try await executor.run(["merge-base", "--is-ancestor", hash, "HEAD"])
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw GitError(
+                command: "rebase",
+                exitCode: 1,
+                stderr: "This commit is not an ancestor of HEAD — interactive rebase can only rewrite the current branch's own history."
+            )
+        }
+        let parentsLine = try await executor.run(["rev-list", "--max-count=1", "--parents", hash])
+        let baseHash = Self.parseFirstParent(parentsLine)
+        let range = baseHash.map { "\($0)..HEAD" } ?? "HEAD"
+        let output = try await executor.run(
+            ["log", "--format=%H%x00%P%x00%an%x00%s%x00%B%x1e", range]
+        )
+        let commits = Self.parseRebaseCommits(output)
+        guard !commits.isEmpty else {
+            throw GitError(command: "rebase", exitCode: 1, stderr: "No commits to rebase.")
+        }
+        guard !commits.contains(where: \.isMerge) else {
+            throw GitError(
+                command: "rebase",
+                exitCode: 1,
+                stderr: "The selected range contains merge commits. Interactive rebase would flatten them, so it is not offered here."
+            )
+        }
+        return InteractiveRebasePrep(commits: commits, baseHash: baseHash)
+    }
+
+    /// First parent hash from one `rev-list --parents` line
+    /// (`<hash> <parent>…`); nil for a root commit.
+    static func parseFirstParent(_ output: String) -> String? {
+        let tokens = output.split(separator: "\n").first?
+            .split(separator: " ", omittingEmptySubsequences: true) ?? []
+        return tokens.count >= 2 ? String(tokens[1]) : nil
+    }
+
+    /// Parses `log --format=%H%x00%P%x00%an%x00%s%x00%B%x1e` records.
+    static func parseRebaseCommits(_ output: String) -> [RebaseCommit] {
+        output.split(separator: "\u{1e}", omittingEmptySubsequences: true).compactMap { record in
+            let fields = record.split(separator: "\u{0}", omittingEmptySubsequences: false)
+            guard fields.count >= 5 else { return nil }
+            let hash = fields[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !hash.isEmpty else { return nil }
+            let parents = fields[1].split(separator: " ", omittingEmptySubsequences: true)
+            return RebaseCommit(
+                hash: hash,
+                subject: String(fields[3]),
+                message: fields[4].trimmingCharacters(in: .whitespacesAndNewlines),
+                author: String(fields[2]),
+                isMerge: parents.count > 1
+            )
+        }
+    }
+
+    /// Builds the todo file an interactive rebase should run, oldest step
+    /// first (git applies the todo top to bottom, oldest commit first).
+    ///
+    /// Message rewrites never rely on an editor: a reworded pick and a squash
+    /// group get their final message from an appended `exec … git commit
+    /// --amend` line (see `amendExecLine`), and squash followers are emitted
+    /// as `fixup` so git itself never composes a combined message. `drop`
+    /// lines are explicit — silently omitting a commit trips
+    /// `rebase.missingCommitsCheck` for users who enable it.
+    static func rebaseTodoScript(stepsOldestFirst: [RebaseStep]) throws -> String {
+        var lines: [String] = []
+        // The exec amending the open group's message; emitted after the
+        // group's last follower, right before the next `pick` (or the end).
+        var pendingExec: String?
+        var groupMessage: String?
+
+        func flushGroup() {
+            if let exec = pendingExec {
+                lines.append(exec)
+            }
+            pendingExec = nil
+            groupMessage = nil
+        }
+        func requireMessage(_ step: RebaseStep) throws -> String {
+            let message = step.message.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !message.isEmpty else {
+                throw GitError(
+                    command: "rebase",
+                    exitCode: 1,
+                    stderr: "The message for \(step.commit.shortHash) is empty — a rewritten commit needs a message."
+                )
+            }
+            return message
+        }
+
+        for step in stepsOldestFirst {
+            switch step.action {
+            case .drop:
+                lines.append("drop \(step.commit.hash)")
+            case .pick, .reword:
+                flushGroup()
+                lines.append("pick \(step.commit.hash) \(step.commit.subject)")
+                if step.action == .reword {
+                    let message = try requireMessage(step)
+                    groupMessage = message
+                    pendingExec = amendExecLine(message: message)
+                } else {
+                    groupMessage = step.commit.message
+                }
+            case .squash, .fixup:
+                guard let base = groupMessage else {
+                    throw GitError(
+                        command: "rebase",
+                        exitCode: 1,
+                        stderr: "\(step.action.label) on \(step.commit.shortHash) has no commit to combine into — it must come after a picked commit."
+                    )
+                }
+                lines.append("fixup \(step.commit.hash)")
+                if step.action == .squash {
+                    let combined = base + "\n\n" + (try requireMessage(step))
+                    groupMessage = combined
+                    pendingExec = amendExecLine(message: combined)
+                }
+            }
+        }
+        flushGroup()
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// A todo `exec` line that rewrites the previous commit's message. The
+    /// message travels base64-encoded — todo lines cannot contain newlines,
+    /// and base64 needs no shell quoting at all. `--no-verify` keeps
+    /// content hooks out of a message-only amend; `--allow-empty` keeps the
+    /// amend working on a commit that was empty to begin with.
+    static func amendExecLine(message: String) -> String {
+        let encoded = Data(message.utf8).base64EncodedString()
+        return "exec printf %s \(encoded) | base64 -d | git commit --amend --no-verify --allow-empty -F -"
+    }
+
+    /// Single-quotes a string for POSIX `sh` (sequence.editor runs through
+    /// the shell).
+    static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Starts an interactive rebase driven by a pre-built todo. The todo is
+    /// injected by pointing `sequence.editor` at a `cp` that overwrites
+    /// git's generated file — the app has no terminal to host an editor.
+    /// `core.editor=true` is pinned defensively; the todo itself carries any
+    /// message rewrites, so no step should open an editor. A conflict stop
+    /// surfaces through the ordinary pending-rebase detection.
+    func interactiveRebase(baseHash: String?, todo: String) async throws {
+        let todoFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gital-rebase-todo-\(UUID().uuidString).txt")
+        try todo.write(to: todoFile, atomically: true, encoding: .utf8)
+        // The sequence editor consumes the file while `rebase -i` starts up,
+        // so it is safe to delete as soon as the command returns — even on a
+        // conflict stop.
+        defer { try? FileManager.default.removeItem(at: todoFile) }
+        try await executor.run([
+            "-c", "sequence.editor=/bin/cp -f \(Self.shellQuote(todoFile.path))",
+            "-c", "core.editor=true",
+            "rebase", "--interactive", baseHash ?? "--root",
+        ])
+    }
+
     func stashPush(message: String?) async throws {
         var args = ["stash", "push", "--include-untracked"]
         if let message, !message.isEmpty {

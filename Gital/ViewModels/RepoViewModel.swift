@@ -120,6 +120,14 @@ final class RepoViewModel {
         didSet { if oldValue !== fileHistory { oldValue?.close() } }
     }
 
+    // MARK: Interactive rebase
+
+    /// Non-nil while the interactive-rebase sheet is up: the prepared span
+    /// of commits (newest first) and the base they would be replayed onto.
+    /// The sheet edits its own local copy of the plan; this only carries the
+    /// prepared input.
+    var interactiveRebasePrep: GitRepository.InteractiveRebasePrep?
+
     // MARK: Stash selection
 
     var selectedStashRef: String? {

@@ -23,6 +23,11 @@ struct HistoryView: View {
                 model.createBranch(name: name, at: commit, checkout: checkout)
             }
         }
+        .sheet(item: $model.interactiveRebasePrep) { prep in
+            InteractiveRebaseSheet(prep: prep) { steps in
+                model.startInteractiveRebase(baseHash: prep.baseHash, stepsNewestFirst: steps)
+            }
+        }
         .sheet(item: $tagAnchor) { commit in
             RefCreationSheet(
                 title: "New Tag at \(commit.shortHash)",
@@ -93,6 +98,8 @@ struct HistoryView: View {
         Button("Cherry-pick \(commit.shortHash)") { model.cherryPick(commit) }
             .disabled(model.pendingOperation != nil)
         Button("Revert \(commit.shortHash)") { model.revertCommit(commit) }
+            .disabled(model.pendingOperation != nil)
+        Button("Interactive Rebase from \(commit.shortHash)…") { model.requestInteractiveRebase(from: commit) }
             .disabled(model.pendingOperation != nil)
         Menu("Reset “\(model.status.branch ?? "HEAD")” to Here") {
             Button("Soft — keep changes staged") { model.requestReset(to: commit, mode: .soft) }

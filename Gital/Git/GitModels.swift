@@ -132,6 +132,51 @@ enum ConflictSide: String {
     case ours, theirs
 }
 
+// MARK: - Interactive rebase
+
+/// One commit in the span an interactive rebase would rewrite.
+struct RebaseCommit: Hashable, Identifiable {
+    let hash: String
+    let subject: String
+    /// Full message (subject + body) — prefills the reword editor and feeds
+    /// squash-combined messages.
+    let message: String
+    let author: String
+    let isMerge: Bool
+
+    var id: String { hash }
+    var shortHash: String { String(hash.prefix(7)) }
+}
+
+/// What to do with one commit in an interactive rebase plan.
+enum RebaseAction: String, CaseIterable, Identifiable {
+    case pick, reword, squash, fixup, drop
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .pick: "Pick"
+        case .reword: "Reword"
+        case .squash: "Squash"
+        case .fixup: "Fixup"
+        case .drop: "Drop"
+        }
+    }
+}
+
+/// One row of an interactive rebase plan: a commit, the chosen action, and a
+/// message draft. The draft is prefilled with the original message; it is
+/// consulted for reword (the rewritten message) and squash (appended to the
+/// target commit's message), and ignored otherwise.
+struct RebaseStep: Hashable, Identifiable {
+    let commit: RebaseCommit
+    var action: RebaseAction = .pick
+    var message: String
+
+    var id: String { commit.id }
+}
+
 // MARK: - Branches / tags / stashes
 
 struct Branch: Hashable, Identifiable {
