@@ -3,6 +3,7 @@
 //  Gital
 //
 
+import AppKit
 import SwiftUI
 
 /// Menu-bar commands. Every shortcut is read from the `ShortcutStore` so the
@@ -42,7 +43,10 @@ struct AppCommands: Commands {
 
             Divider()
 
-            Button("Commit") { repo?.commit() }
+            // The title mirrors the amend checkbox: ⌘↩ works from any tab,
+            // where the checkbox is out of sight — "Commit" silently running
+            // `--amend` would rewrite HEAD without warning.
+            Button(repo?.amend == true ? "Amend Last Commit" : "Commit") { repo?.commit() }
                 .keyboardShortcut(shortcuts.combo(for: .commit)?.keyboardShortcut)
                 .disabled({
                     guard let repo else { return true }
@@ -59,11 +63,11 @@ struct AppCommands: Commands {
 
             Divider()
 
-            Button("New Branch…") { repo?.isCreatingBranch = true }
+            Button("New Branch…") { presentPopover { $0.isCreatingBranch = true } }
                 .keyboardShortcut(shortcuts.combo(for: .newBranch)?.keyboardShortcut)
                 .disabled(repo == nil)
 
-            Button("Stash Changes…") { repo?.isStashing = true }
+            Button("Stash Changes…") { presentPopover { $0.isStashing = true } }
                 .keyboardShortcut(shortcuts.combo(for: .stashChanges)?.keyboardShortcut)
                 .disabled(repo == nil)
 
@@ -94,6 +98,18 @@ struct AppCommands: Commands {
             .keyboardShortcut(shortcuts.combo(for: .toggleDiffLayout)?.keyboardShortcut)
             .disabled(repo == nil)
         }
+    }
+
+    /// The branch/stash popovers anchor to toolbar buttons in the repo
+    /// window. Firing the flag while that window is miniaturized would leave
+    /// it wedged `true` with nothing presented (and the toolbar button dead
+    /// until something resets it), so restore the window first.
+    private func presentPopover(_ present: (RepoViewModel) -> Void) {
+        guard let repo else { return }
+        for window in NSApp.windows where window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        present(repo)
     }
 
     private func navButton(_ title: String, _ action: ShortcutAction, tab: NavTab) -> some View {
