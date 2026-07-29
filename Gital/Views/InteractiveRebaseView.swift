@@ -23,7 +23,10 @@ struct InteractiveRebaseSheet: View {
     /// sheet can never green-light a plan the git layer would reject.
     private var validationError: String? {
         do {
-            _ = try GitRepository.rebaseTodoScript(stepsOldestFirst: steps.reversed())
+            _ = try GitRepository.rebaseTodoScript(
+                stepsOldestFirst: steps.reversed(),
+                requireSurvivor: prep.baseHash == nil
+            )
             return nil
         } catch {
             return error.localizedDescription

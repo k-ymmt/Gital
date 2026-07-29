@@ -76,9 +76,14 @@ extension RepoViewModel {
     // MARK: - Interactive rebase
 
     /// Loads the span `commit..HEAD` and raises the interactive-rebase
-    /// sheet. A dirty working copy is rejected up front — git would refuse
-    /// after the user already arranged the whole plan, which is the worst
-    /// moment to find out.
+    /// sheet. A dirty working copy is rejected before anything else — git
+    /// would refuse after the user already arranged the whole plan, which is
+    /// the worst moment to find out. The cached-status check here is only a
+    /// fast path; `prepareInteractiveRebase` re-checks with fresh `status`
+    /// output because the cache is stale whenever the file watcher is down.
+    /// `runSync` drives the busy indicator: prep queues behind whatever the
+    /// serialized executor is doing, and an invisible pending prep would pop
+    /// the sheet "out of nowhere" much later.
     func requestInteractiveRebase(from commit: Commit) {
         let blockingChanges = status.staged.count
             + status.unstaged.filter { $0.status != .untracked }.count
@@ -86,22 +91,34 @@ extension RepoViewModel {
             errorMessage = "Interactive rebase needs a clean working copy — commit or stash your changes first."
             return
         }
-        Task {
-            do {
-                interactiveRebasePrep = try await repository.prepareInteractiveRebase(from: commit.hash)
-            } catch { report(error) }
+        runSync("Preparing rebase…") {
+            self.interactiveRebasePrep = try await self.repository.prepareInteractiveRebase(from: commit.hash)
         }
     }
 
     /// Runs the plan the sheet produced. Steps arrive newest first (display
     /// order); the todo wants oldest first. Todo generation happens before
     /// the git command so a plan error surfaces immediately, without a sync
-    /// spinner flash.
-    func startInteractiveRebase(baseHash: String?, stepsNewestFirst: [RebaseStep]) {
+    /// spinner flash. The prep's newest commit is HEAD as of planning time;
+    /// `interactiveRebase` refuses to run if HEAD has moved since.
+    func startInteractiveRebase(prep: GitRepository.InteractiveRebasePrep, stepsNewestFirst: [RebaseStep]) {
+        guard let expectedHead = prep.commits.first?.hash else { return }
         do {
-            let todo = try GitRepository.rebaseTodoScript(stepsOldestFirst: stepsNewestFirst.reversed())
+            let todo = try GitRepository.rebaseTodoScript(
+                stepsOldestFirst: stepsNewestFirst.reversed(),
+                requireSurvivor: prep.baseHash == nil
+            )
             runConflictAware("Rebasing…") {
-                try await self.repository.interactiveRebase(baseHash: baseHash, todo: todo)
+                try await self.repository.interactiveRebase(
+                    baseHash: prep.baseHash,
+                    expectedHead: expectedHead,
+                    todo: todo
+                )
+                // Every hash in the span was rewritten (HEAD included, which
+                // is also the default selection). Clearing the selection lets
+                // the follow-up refresh re-seed it at the new HEAD instead of
+                // leaving the detail pane pinned to a vanished commit.
+                self.selectedCommitHash = nil
             }
         } catch { report(error) }
     }

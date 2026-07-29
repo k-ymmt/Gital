@@ -392,15 +392,25 @@ struct MainView: View {
     @Bindable var model: RepoViewModel
 
     var body: some View {
-        switch model.navTab {
-        case .changes:
-            ChangesView(model: model)
-        case .branches:
-            HistoryView(model: model)
-        case .pullRequests:
-            PullRequestView(model: model)
-        case .stashes:
-            StashDetailView(model: model)
+        Group {
+            switch model.navTab {
+            case .changes:
+                ChangesView(model: model)
+            case .branches:
+                HistoryView(model: model)
+            case .pullRequests:
+                PullRequestView(model: model)
+            case .stashes:
+                StashDetailView(model: model)
+            }
+        }
+        // Hosted here, not on HistoryView: prep completes asynchronously,
+        // and a sheet whose host only exists on one tab would silently wait
+        // for a tab switch and then pop out of nowhere.
+        .sheet(item: $model.interactiveRebasePrep) { prep in
+            InteractiveRebaseSheet(prep: prep) { steps in
+                model.startInteractiveRebase(prep: prep, stepsNewestFirst: steps)
+            }
         }
     }
 }

@@ -77,6 +77,12 @@ actor GitExecutor {
         var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["LC_ALL"] = "en_US.UTF-8"
+        // Editor env vars outrank `-c` config, so an inherited value (the
+        // app launched from a shell) would silently defeat the pins the app
+        // relies on — most critically the sequence.editor that injects the
+        // interactive-rebase todo. The app never wants any editor.
+        environment["GIT_SEQUENCE_EDITOR"] = nil
+        environment["GIT_EDITOR"] = nil
 
         let result = try await Subprocess.run(
             executable: URL(fileURLWithPath: "/usr/bin/env"),

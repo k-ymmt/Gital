@@ -23,11 +23,6 @@ struct HistoryView: View {
                 model.createBranch(name: name, at: commit, checkout: checkout)
             }
         }
-        .sheet(item: $model.interactiveRebasePrep) { prep in
-            InteractiveRebaseSheet(prep: prep) { steps in
-                model.startInteractiveRebase(baseHash: prep.baseHash, stepsNewestFirst: steps)
-            }
-        }
         .sheet(item: $tagAnchor) { commit in
             RefCreationSheet(
                 title: "New Tag at \(commit.shortHash)",

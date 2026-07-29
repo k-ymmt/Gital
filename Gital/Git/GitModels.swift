@@ -142,6 +142,12 @@ struct RebaseCommit: Hashable, Identifiable {
     /// squash-combined messages.
     let message: String
     let author: String
+    /// `%at,%ae,%s` — a fingerprint that survives being picked (author,
+    /// authored date, and subject are all preserved by pick and by
+    /// `--amend --no-edit`, while the hash is not). Todo `exec` lines
+    /// compare it against HEAD before amending, so a rewrite can never land
+    /// on a commit it was not meant for.
+    let identity: String
     let isMerge: Bool
 
     var id: String { hash }
