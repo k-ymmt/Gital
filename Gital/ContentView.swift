@@ -85,6 +85,9 @@ struct ContentView: View {
         }
         // Alert chains live in separate ViewModifiers: inlining them all here
         // blows past the type checker's budget for one body expression.
+        .sheet(item: $model.fileHistory) { history in
+            FileHistorySheet(model: history)
+        }
         .modifier(WorkingCopyConfirmationAlerts(model: model))
         .modifier(ConflictFlowAlerts(model: model))
         .modifier(BranchManagementAlerts(model: model))

@@ -319,6 +319,196 @@ final class GitRepository: @unchecked Sendable {
         return stats
     }
 
+    // MARK: - File history
+
+    /// Commits touching one file, following renames. `startHash` scopes the
+    /// walk (nil = HEAD); `path` must be the file's name as of that revision.
+    func fileHistory(path: String, startHash: String?, limit: Int) async throws -> [FileHistoryEntry] {
+        // Leading NUL marks each record start, so splitting the whole output
+        // on NUL yields clean 5-field groups even though the name-status
+        // block trails the subject inside the last field. None of the fields
+        // can contain a NUL; the subject *can* contain any other byte.
+        let format = "%x00%H%x00%an%x00%ae%x00%ad%x00%s"
+        var args = [
+            "log", "--follow", "--name-status", "--date=relative",
+            "-n", String(limit), "--pretty=format:\(format)",
+        ]
+        if let startHash { args.append(startHash) }
+        args.append(contentsOf: ["--", path])
+        let output = try await executor.run(args)
+        return Self.parseFileHistory(output, queryPath: path)
+    }
+
+    static func parseFileHistory(_ output: String, queryPath: String) -> [FileHistoryEntry] {
+        let fields = output.components(separatedBy: "\u{0}")
+        var entries: [FileHistoryEntry] = []
+        // The name the file goes by in commits older than the ones parsed so
+        // far; each rename record rewires it.
+        var trackedPath = queryPath
+        var index = 1  // fields[0] is the empty prefix before the first record's NUL
+        while index + 4 < fields.count {
+            let hash = fields[index]
+            let author = fields[index + 1]
+            let email = fields[index + 2]
+            let date = fields[index + 3]
+            let tail = fields[index + 4]
+            index += 5
+            guard !hash.isEmpty else { continue }
+
+            var tailLines = tail.split(separator: "\n", omittingEmptySubsequences: false)
+            let subject = tailLines.isEmpty ? "" : String(tailLines.removeFirst())
+
+            // At most one name-status entry follows (single pathspec); merge
+            // commits list none and keep the tracked name.
+            var status: FileChange.Status = .modified
+            var entryPath = trackedPath
+            var previousPath: String?
+            for line in tailLines {
+                let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+                guard parts.count >= 2, let statusChar = parts[0].first else { continue }
+                status = changeStatus(statusChar)
+                if (statusChar == "R" || statusChar == "C"), parts.count >= 3 {
+                    previousPath = unquotePath(String(parts[1]))
+                    entryPath = unquotePath(String(parts[2]))
+                } else {
+                    entryPath = unquotePath(String(parts[1]))
+                }
+                break
+            }
+
+            entries.append(FileHistoryEntry(
+                hash: hash,
+                author: author,
+                authorEmail: email,
+                relativeDate: date,
+                subject: subject,
+                path: entryPath,
+                previousPath: previousPath,
+                status: status
+            ))
+            trackedPath = previousPath ?? entryPath
+        }
+        return entries
+    }
+
+    /// Reverses git's C-style path quoting (`"a\tb.txt"`). quotepath=false
+    /// keeps non-ASCII raw, but tabs, quotes, and control bytes in a path are
+    /// still escaped — and a tab inside an unquoted path would break the
+    /// name-status field split.
+    static func unquotePath(_ raw: String) -> String {
+        guard raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") else { return raw }
+        let escaped = Array(raw.dropFirst().dropLast().utf8)
+        var bytes: [UInt8] = []
+        var i = 0
+        while i < escaped.count {
+            let byte = escaped[i]
+            guard byte == UInt8(ascii: "\\"), i + 1 < escaped.count else {
+                bytes.append(byte)
+                i += 1
+                continue
+            }
+            i += 1
+            let code = escaped[i]
+            switch code {
+            case UInt8(ascii: "a"): bytes.append(7)
+            case UInt8(ascii: "b"): bytes.append(8)
+            case UInt8(ascii: "t"): bytes.append(9)
+            case UInt8(ascii: "n"): bytes.append(10)
+            case UInt8(ascii: "v"): bytes.append(11)
+            case UInt8(ascii: "f"): bytes.append(12)
+            case UInt8(ascii: "r"): bytes.append(13)
+            case UInt8(ascii: "0")...UInt8(ascii: "7"):
+                var value = 0
+                var digits = 0
+                while i < escaped.count, digits < 3,
+                      (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(escaped[i]) {
+                    value = value * 8 + Int(escaped[i] - UInt8(ascii: "0"))
+                    i += 1
+                    digits += 1
+                }
+                bytes.append(UInt8(truncatingIfNeeded: value))
+                continue
+            default: bytes.append(code)  // \" and \\ fall through here
+            }
+            i += 1
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    // MARK: - Blame
+
+    /// Blames the file as of `hash`, or the working tree when nil (which is
+    /// what surfaces not-yet-committed lines). Blame follows whole-file
+    /// renames on its own, so `path` is simply the name valid at `hash`.
+    func blame(path: String, at hash: String?) async throws -> BlameFile {
+        var args = ["blame", "--porcelain"]
+        if let hash { args.append(hash) }
+        args.append(contentsOf: ["--", path])
+        let output = try await executor.run(args)
+        return Self.parseBlame(output)
+    }
+
+    static func parseBlame(_ output: String) -> BlameFile {
+        var lines: [BlameLine] = []
+        var metadata: [String: [String: String]] = [:]
+        var currentHash: String?
+        var currentLineNumber = 0
+        var currentIsGroupStart = false
+
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+            if rawLine.hasPrefix("\t") {
+                guard let hash = currentHash else { continue }
+                lines.append(BlameLine(
+                    number: currentLineNumber,
+                    hash: hash,
+                    isGroupStart: currentIsGroupStart,
+                    text: String(rawLine.dropFirst())
+                ))
+                currentHash = nil
+                continue
+            }
+            let parts = rawLine.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: false)
+            // Header: <full-hex> <orig-line> <final-line> [<group-length>].
+            // The group-length field appears exactly on each group's first
+            // line. Metadata keys ("author", …) can never parse as one.
+            if parts.count >= 3,
+               parts[0].count >= 40, parts[0].allSatisfy(\.isHexDigit),
+               Int(parts[1]) != nil, let finalLine = Int(parts[2]) {
+                currentHash = String(parts[0])
+                currentLineNumber = finalLine
+                currentIsGroupStart = parts.count >= 4 && !parts[3].isEmpty
+            } else if let hash = currentHash, let key = parts.first, !key.isEmpty {
+                let value = rawLine.dropFirst(key.count + 1)
+                metadata[hash, default: [:]][String(key)] = String(value)
+            }
+        }
+
+        var annotations: [String: BlameAnnotation] = [:]
+        for (hash, info) in metadata {
+            annotations[hash] = BlameAnnotation(
+                author: info["author"] ?? "",
+                date: blameDate(epoch: info["author-time"], timeZone: info["author-tz"]),
+                summary: info["summary"] ?? ""
+            )
+        }
+        return BlameFile(lines: lines, annotations: annotations)
+    }
+
+    /// Formats porcelain's epoch + "+0900"-style offset as a short local-to-
+    /// the-author date.
+    static func blameDate(epoch: String?, timeZone: String?) -> String {
+        guard let epoch, let seconds = TimeInterval(epoch) else { return "" }
+        var offsetSeconds = 0
+        if let timeZone, timeZone.count == 5, let value = Int(timeZone) {
+            offsetSeconds = (abs(value) / 100 * 3600 + abs(value) % 100 * 60) * (value < 0 ? -1 : 1)
+        }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.timeZone = TimeZone(secondsFromGMT: offsetSeconds) ?? .current
+        return formatter.string(from: Date(timeIntervalSince1970: seconds))
+    }
+
     // MARK: - Staging / committing
 
     func stage(_ paths: [String]) async throws {

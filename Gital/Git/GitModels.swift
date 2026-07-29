@@ -248,6 +248,53 @@ struct FileDiff: Hashable, Identifiable {
     }
 }
 
+// MARK: - File history / blame
+
+/// One commit in a single file's history (`git log --follow`), carrying the
+/// path the file had *at that commit* — pathspecs against older commits must
+/// use the pre-rename name or the diff comes back empty.
+struct FileHistoryEntry: Hashable, Identifiable {
+    let hash: String
+    let author: String
+    let authorEmail: String
+    let relativeDate: String
+    let subject: String
+    let path: String
+    /// Pre-rename path when this commit renamed (or copied) the file.
+    let previousPath: String?
+    let status: FileChange.Status
+
+    var id: String { hash }
+    var shortHash: String { String(hash.prefix(7)) }
+}
+
+struct BlameLine: Hashable, Identifiable {
+    /// Line number in the blamed revision of the file.
+    let number: Int
+    let hash: String
+    /// First line of a contiguous group from the same commit; annotation
+    /// columns render only here.
+    let isGroupStart: Bool
+    let text: String
+
+    var id: Int { number }
+    /// All-zero hash: the line is not committed yet (working-tree blame).
+    var isUncommitted: Bool { hash.allSatisfy { $0 == "0" } }
+}
+
+struct BlameAnnotation: Hashable {
+    let author: String
+    let date: String
+    let summary: String
+}
+
+struct BlameFile: Hashable {
+    let lines: [BlameLine]
+    /// Commit metadata keyed by hash; porcelain output emits it once per
+    /// commit, not per line.
+    let annotations: [String: BlameAnnotation]
+}
+
 struct CommitFileStat: Hashable, Identifiable {
     let path: String
     /// Pre-rename path when status is `.renamed`; needed as a pathspec so the

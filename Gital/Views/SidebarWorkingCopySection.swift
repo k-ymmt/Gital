@@ -100,6 +100,17 @@ struct SidebarWorkingCopySection: View {
                     model.requestDiscard(.file(change))
                 }
             }
+            if change.status != .untracked {
+                Divider()
+                // A staged rename's new name has no commits yet; its history
+                // lives under the original name.
+                Button("File History") {
+                    model.showFileHistory(path: change.originalPath ?? change.path)
+                }
+                Button("Blame") {
+                    model.showFileHistory(path: change.originalPath ?? change.path, tab: .blame)
+                }
+            }
         }
     }
 }

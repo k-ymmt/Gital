@@ -544,6 +544,14 @@ struct CommitDetailView: View {
         .onTapGesture {
             model.selectedCommitFilePath = file.path
         }
+        .contextMenu {
+            Button("File History") {
+                model.showFileHistory(path: file.path, at: model.selectedCommitHash)
+            }
+            Button("Blame") {
+                model.showFileHistory(path: file.path, at: model.selectedCommitHash, tab: .blame)
+            }
+        }
     }
 
     private var diffPane: some View {

@@ -106,6 +106,12 @@ final class RepoViewModel {
     var selectedDiffLineIDs: Set<String> = []
     @ObservationIgnored var lineSelectionAnchor: (path: String, id: String)?
 
+    // MARK: File history
+
+    /// Non-nil while the file-history/blame sheet is up; owns that sheet's
+    /// whole state so dismissing drops it wholesale.
+    var fileHistory: FileHistoryModel?
+
     // MARK: Stash selection
 
     var selectedStashRef: String? {

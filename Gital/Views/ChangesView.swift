@@ -26,6 +26,18 @@ struct ChangesView: View {
                                 FileSectionHeader(diff: diff) {
                                     lineSelectionActions(diff)
                                 }
+                                .contextMenu {
+                                    // An untracked file has no commits yet —
+                                    // the sheet could only come up empty.
+                                    if diff.scope != .untracked {
+                                        Button("File History") {
+                                            model.showFileHistory(path: diff.path)
+                                        }
+                                        Button("Blame") {
+                                            model.showFileHistory(path: diff.path, tab: .blame)
+                                        }
+                                    }
+                                }
                             }
                         }
                         // Threads whose anchor line no longer exists (the
