@@ -28,6 +28,9 @@ struct SidebarBranchesSection: View {
         }
 
         SidebarCollapsibleHeader(title: "Remotes", key: "remotes", expandedSections: $expandedSections)
+            .contextMenu {
+                Button("Add Remote…") { model.isAddingRemote = true }
+            }
         if expandedSections.contains("remotes") {
             ForEach(model.remotes) { remote in
                 let remoteKey = "remote:\(remote.name)"
@@ -39,6 +42,12 @@ struct SidebarBranchesSection: View {
                         .foregroundStyle(.secondary)
                     Text(remote.name)
                         .font(.system(size: 12.5))
+                }
+                .contextMenu {
+                    Button("Add Remote…") { model.isAddingRemote = true }
+                    Button("Remove Remote…", role: .destructive) {
+                        model.requestRemoveRemote(remote)
+                    }
                 }
 
                 if !collapsedBranchFolders.contains(remoteKey) {
@@ -94,6 +103,14 @@ struct SidebarBranchesSection: View {
                 .disabled(branch.isCurrent)
             Divider()
             mergeRebaseMenuItems(target: branch.name, disabled: branch.isCurrent)
+            Divider()
+            Button(branch.upstream == nil ? "Publish to Origin" : "Push") {
+                model.pushBranch(branch)
+            }
+            Divider()
+            Button("Rename…") { model.renamingBranch = branch }
+            Button("Delete…", role: .destructive) { model.requestDeleteBranch(branch) }
+                .disabled(branch.isCurrent)
         }
         .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
     }
@@ -114,6 +131,10 @@ struct SidebarBranchesSection: View {
                 }
                 Divider()
                 mergeRebaseMenuItems(target: "\(remote)/\(branch)", disabled: false)
+                Divider()
+                Button("Delete on Remote…", role: .destructive) {
+                    model.requestDeleteRemoteBranch(remote: remote, branch: branch)
+                }
             }
     }
 

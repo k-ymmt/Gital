@@ -390,24 +390,56 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run(["pull", "--ff-only"])
     }
 
-    func push() async throws {
+    func push(force: Bool = false) async throws {
         // Probe upstream existence instead of matching "--set-upstream" in
         // stderr, whose wording is unowned API surface across git versions.
         let hasUpstream = (try? await executor.run(
             ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]
         )) != nil
-        if hasUpstream {
-            try await executor.run(["push"])
-            return
+        let branch = hasUpstream ? nil : try await currentBranch()
+        try await executor.run(Self.pushArguments(hasUpstream: hasUpstream, currentBranch: branch, force: force))
+    }
+
+    /// Builds the `git push` invocation for the current branch. `force` uses
+    /// `--force-with-lease`, never bare `--force`: it refuses to overwrite
+    /// remote commits that were never fetched locally.
+    static func pushArguments(hasUpstream: Bool, currentBranch: String?, force: Bool) -> [String] {
+        var args = ["push"]
+        if force { args.append("--force-with-lease") }
+        // Detached HEAD ("HEAD" pseudo-branch): plain push lets git report
+        // the real problem instead of creating a branch literally named "HEAD".
+        if !hasUpstream, let branch = currentBranch, branch != "HEAD" {
+            args += ["--set-upstream", "origin", branch]
         }
-        let branch = try await currentBranch()
-        guard branch != "HEAD" else {
-            // Detached HEAD: plain push lets git report the real problem
-            // instead of creating a branch literally named "HEAD".
-            try await executor.run(["push"])
-            return
+        return args
+    }
+
+    /// Pushes a specific local branch without checking it out. An existing
+    /// upstream is pushed to by name; a branch without one is published to
+    /// "origin" and its upstream recorded.
+    func push(branch: Branch) async throws {
+        // `config branch.<name>.remote` exits 1 when unset — try? maps that
+        // to the publish-to-origin path.
+        let remote = try? await executor.run(["config", "--get", "branch.\(branch.name).remote"])
+        try await executor.run(Self.pushBranchArguments(
+            branch: branch.name,
+            upstream: branch.upstream,
+            configuredRemote: remote?.trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+    }
+
+    /// Builds the `git push` invocation for a non-checked-out branch. The
+    /// upstream may be named differently from the local branch, so the
+    /// refspec always spells out both sides. A missing, empty, or local
+    /// (".") remote — or an upstream that doesn't belong to the configured
+    /// remote — falls back to publishing on "origin".
+    static func pushBranchArguments(branch: String, upstream: String?, configuredRemote: String?) -> [String] {
+        guard let remote = configuredRemote, !remote.isEmpty, remote != ".",
+              let upstream, upstream.hasPrefix(remote + "/") else {
+            return ["push", "--set-upstream", "origin", branch]
         }
-        try await executor.run(["push", "--set-upstream", "origin", branch])
+        let remoteBranch = String(upstream.dropFirst(remote.count + 1))
+        return ["push", remote, "\(branch):\(remoteBranch)"]
     }
 
     func currentBranch() async throws -> String {
@@ -514,6 +546,38 @@ final class GitRepository: @unchecked Sendable {
         } else {
             try await executor.run(["branch", name] + start)
         }
+    }
+
+    /// Number of commits on `branch` that are not reachable from HEAD —
+    /// 0 means deleting the branch loses no work. Computed up front (instead
+    /// of relying on `branch -d` refusing) so the delete confirmation can
+    /// state exactly what would be lost, without parsing localized stderr.
+    func unmergedCommitCount(branch: String) async throws -> Int {
+        let output = try await executor.run(["rev-list", "--count", branch, "--not", "HEAD"])
+        return Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+
+    /// Always `-D`: the mergedness check and confirmation happened in the UI,
+    /// and `-d`'s own refusal logic (against the upstream, not HEAD) would
+    /// second-guess a delete the user already confirmed.
+    func deleteBranch(name: String) async throws {
+        try await executor.run(["branch", "-D", name])
+    }
+
+    func renameBranch(from oldName: String, to newName: String) async throws {
+        try await executor.run(["branch", "-m", oldName, newName])
+    }
+
+    func deleteRemoteBranch(remote: String, branch: String) async throws {
+        try await executor.run(["push", remote, "--delete", branch])
+    }
+
+    func addRemote(name: String, url: String) async throws {
+        try await executor.run(["remote", "add", name, url])
+    }
+
+    func removeRemote(name: String) async throws {
+        try await executor.run(["remote", "remove", name])
     }
 
     func createTag(name: String, at hash: String) async throws {

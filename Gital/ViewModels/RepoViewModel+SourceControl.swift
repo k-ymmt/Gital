@@ -5,7 +5,16 @@ import Foundation
 extension RepoViewModel {
     func fetch() { runSync("Fetching…") { try await self.repository.fetch() } }
     func pull() { runSync("Pulling…") { try await self.repository.pull() } }
-    func push() { runSync("Pushing…") { try await self.repository.push() } }
+
+    func push(force: Bool = false) {
+        runSync(force ? "Force pushing…" : "Pushing…") {
+            try await self.repository.push(force: force)
+        }
+    }
+
+    func pushBranch(_ branch: Branch) {
+        runSync("Pushing…") { try await self.repository.push(branch: branch) }
+    }
 
     // MARK: - Commit operations
 
@@ -154,6 +163,84 @@ extension RepoViewModel {
         guard !trimmed.isEmpty else { return }
         perform(refresh: .all) {
             try await self.repository.createBranch(name: trimmed, checkout: true)
+        }
+    }
+
+    // MARK: - Branch management
+
+    struct PendingBranchDelete {
+        let branch: Branch
+        /// Commits on the branch not reachable from HEAD — what a delete
+        /// would lose. Drives the wording of the confirmation.
+        let unmergedCount: Int
+    }
+
+    struct RemoteBranchRef {
+        let remote: String
+        let branch: String
+    }
+
+    /// Computes what the delete would lose, then raises the confirmation.
+    func requestDeleteBranch(_ branch: Branch) {
+        guard !branch.isCurrent else { return }
+        Task {
+            do {
+                let count = try await repository.unmergedCommitCount(branch: branch.name)
+                pendingBranchDelete = PendingBranchDelete(branch: branch, unmergedCount: count)
+            } catch { report(error) }
+        }
+    }
+
+    func deleteBranch(_ branch: Branch) {
+        perform(refresh: .all) {
+            try await self.repository.deleteBranch(name: branch.name)
+            if self.selectedBranchName == branch.name {
+                self.selectedBranchName = nil
+            }
+        }
+    }
+
+    func renameBranch(_ branch: Branch, to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != branch.name else { return }
+        perform(refresh: .all) {
+            try await self.repository.renameBranch(from: branch.name, to: trimmed)
+            if self.selectedBranchName == branch.name {
+                self.selectedBranchName = trimmed
+            }
+        }
+    }
+
+    func requestDeleteRemoteBranch(remote: String, branch: String) {
+        pendingRemoteBranchDelete = RemoteBranchRef(remote: remote, branch: branch)
+    }
+
+    func deleteRemoteBranch(_ ref: RemoteBranchRef) {
+        runSync("Deleting remote branch…") {
+            try await self.repository.deleteRemoteBranch(remote: ref.remote, branch: ref.branch)
+        }
+    }
+
+    // MARK: - Remote management
+
+    func addRemote(name: String, url: String) {
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        let trimmedURL = url.trimmingCharacters(in: .whitespaces)
+        guard !trimmedName.isEmpty, !trimmedURL.isEmpty else { return }
+        perform(refresh: .refs) {
+            try await self.repository.addRemote(name: trimmedName, url: trimmedURL)
+        }
+    }
+
+    func requestRemoveRemote(_ remote: RemoteInfo) {
+        pendingRemoteRemoval = remote
+    }
+
+    /// Refreshes everything, not just refs: removing a remote drops its
+    /// remote-tracking refs, which decorate the history graph.
+    func removeRemote(_ remote: RemoteInfo) {
+        perform(refresh: .all) {
+            try await self.repository.removeRemote(name: remote.name)
         }
     }
 

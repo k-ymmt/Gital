@@ -133,6 +133,16 @@ final class RepoViewModel {
     /// the working-tree copy still contains conflict markers — staging it
     /// as-is would let the markers be committed.
     var pendingMarkResolved: FileChange?
+    /// True while the force-push confirmation is up — rewriting remote
+    /// history affects everyone tracking the branch.
+    var pendingForcePush = false
+    var pendingBranchDelete: PendingBranchDelete?
+    /// Branch whose rename prompt is up; the draft name lives in the alert.
+    var renamingBranch: Branch?
+    var pendingRemoteBranchDelete: RemoteBranchRef?
+    var pendingRemoteRemoval: RemoteInfo?
+    /// True while the add-remote prompt (name + URL) is up.
+    var isAddingRemote = false
 
     // MARK: Busy / errors
 

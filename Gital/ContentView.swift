@@ -42,10 +42,14 @@ struct ContentView: View {
                 .help("Pull (behind \(model.status.behind))")
                 .disabled(model.isSyncing)
 
-                Button {
-                    model.push()
+                Menu {
+                    Button("Force Push (with Lease)…") {
+                        model.pendingForcePush = true
+                    }
                 } label: {
                     Label("Push", systemImage: "arrow.up.to.line")
+                } primaryAction: {
+                    model.push()
                 }
                 .badge(model.status.ahead)
                 .help("Push (ahead \(model.status.ahead))")
@@ -79,10 +83,12 @@ struct ContentView: View {
                 }
             }
         }
-        // Alert chains live in two ViewModifiers: inlining all six here blows
-        // past the type checker's budget for one body expression.
+        // Alert chains live in separate ViewModifiers: inlining them all here
+        // blows past the type checker's budget for one body expression.
         .modifier(WorkingCopyConfirmationAlerts(model: model))
         .modifier(ConflictFlowAlerts(model: model))
+        .modifier(BranchManagementAlerts(model: model))
+        .modifier(RemoteManagementAlerts(model: model))
         .task {
             if model.commits.isEmpty {
                 await model.refreshAll()
@@ -243,6 +249,114 @@ private struct ConflictFlowAlerts: ViewModifier {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(model.errorMessage ?? "")
+            }
+    }
+}
+
+/// Alerts for branch management: force push, branch delete (with an
+/// unmerged-commits warning computed up front), and rename.
+private struct BranchManagementAlerts: ViewModifier {
+    @Bindable var model: RepoViewModel
+    @State private var renameDraft = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Force Push?",
+                isPresented: $model.pendingForcePush
+            ) {
+                Button("Force Push", role: .destructive) { model.push(force: true) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("“\(model.status.branch ?? "HEAD")” will overwrite its upstream with --force-with-lease. Commits that exist only on the remote will be discarded, and anyone tracking the branch will have to recover.")
+            }
+            .alert(
+                "Delete Branch?",
+                isPresented: Binding(
+                    get: { model.pendingBranchDelete != nil },
+                    set: { if !$0 { model.pendingBranchDelete = nil } }
+                ),
+                presenting: model.pendingBranchDelete
+            ) { pending in
+                Button("Delete", role: .destructive) { model.deleteBranch(pending.branch) }
+                Button("Cancel", role: .cancel) {}
+            } message: { pending in
+                if pending.unmergedCount > 0 {
+                    Text("“\(pending.branch.name)” has \(pending.unmergedCount) commit(s) not reachable from the current branch. Deleting it will lose them. This cannot be undone.")
+                } else {
+                    Text("“\(pending.branch.name)” will be deleted. Its commits are all reachable from the current branch.")
+                }
+            }
+            .alert(
+                "Rename Branch",
+                isPresented: Binding(
+                    get: { model.renamingBranch != nil },
+                    set: { if !$0 { model.renamingBranch = nil } }
+                ),
+                presenting: model.renamingBranch
+            ) { branch in
+                TextField("Branch name", text: $renameDraft)
+                Button("Rename") { model.renameBranch(branch, to: renameDraft) }
+                Button("Cancel", role: .cancel) {}
+            } message: { branch in
+                Text("Enter a new name for “\(branch.name)”.")
+            }
+            .onChange(of: model.renamingBranch) {
+                if let branch = model.renamingBranch {
+                    renameDraft = branch.name
+                }
+            }
+    }
+}
+
+/// Alerts for remote management: add a remote, remove one, and delete a
+/// branch on the remote.
+private struct RemoteManagementAlerts: ViewModifier {
+    @Bindable var model: RepoViewModel
+    @State private var remoteNameDraft = ""
+    @State private var remoteURLDraft = ""
+
+    func body(content: Content) -> some View {
+        content
+            .alert("Add Remote", isPresented: $model.isAddingRemote) {
+                TextField("Name (e.g. origin)", text: $remoteNameDraft)
+                TextField("URL", text: $remoteURLDraft)
+                Button("Add") { model.addRemote(name: remoteNameDraft, url: remoteURLDraft) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The remote will be added to this repository's configuration.")
+            }
+            .onChange(of: model.isAddingRemote) {
+                if model.isAddingRemote {
+                    remoteNameDraft = model.remotes.isEmpty ? "origin" : ""
+                    remoteURLDraft = ""
+                }
+            }
+            .alert(
+                "Remove Remote?",
+                isPresented: Binding(
+                    get: { model.pendingRemoteRemoval != nil },
+                    set: { if !$0 { model.pendingRemoteRemoval = nil } }
+                ),
+                presenting: model.pendingRemoteRemoval
+            ) { remote in
+                Button("Remove", role: .destructive) { model.removeRemote(remote) }
+                Button("Cancel", role: .cancel) {}
+            } message: { remote in
+                Text("“\(remote.name)” and its remote-tracking branches will be removed from this repository. The remote repository itself is not touched.")
+            }
+            .alert(
+                "Delete Remote Branch?",
+                isPresented: Binding(
+                    get: { model.pendingRemoteBranchDelete != nil },
+                    set: { if !$0 { model.pendingRemoteBranchDelete = nil } }
+                ),
+                presenting: model.pendingRemoteBranchDelete
+            ) { ref in
+                Button("Delete on Remote", role: .destructive) { model.deleteRemoteBranch(ref) }
+                Button("Cancel", role: .cancel) {}
+            } message: { ref in
+                Text("“\(ref.branch)” will be deleted on “\(ref.remote)” for everyone using that remote. This cannot be undone from this app.")
             }
     }
 }
