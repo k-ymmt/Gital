@@ -18,6 +18,10 @@ final class RepoViewModel {
     var navTab: NavTab = .branches
     var diffMode: DiffMode = .unified
     var searchText = ""
+    /// Toolbar popovers, held here (not view-local) so menu shortcuts can
+    /// open them too.
+    var isCreatingBranch = false
+    var isStashing = false
 
     // MARK: Repository data
 

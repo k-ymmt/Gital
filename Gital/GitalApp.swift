@@ -8,6 +8,7 @@ import SwiftUI
 @main
 struct GitalApp: App {
     @State private var appModel = AppModel()
+    @State private var shortcuts = ShortcutStore()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -29,18 +30,11 @@ struct GitalApp: App {
         // for the same event, duplicating the repository window.
         .handlesExternalEvents(matching: [])
         .commands {
-            CommandGroup(after: .newItem) {
-                Button("Open Repository…") {
-                    appModel.pickRepository()
-                }
-                .keyboardShortcut("o", modifiers: .command)
+            AppCommands(appModel: appModel, shortcuts: shortcuts)
+        }
 
-                Divider()
-
-                Button("Install “gital” Command-Line Tool") {
-                    appModel.installCommandLineTool()
-                }
-            }
+        Settings {
+            SettingsView(shortcuts: shortcuts)
         }
     }
 }

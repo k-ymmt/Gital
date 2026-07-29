@@ -8,8 +8,6 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var model: RepoViewModel
 
-    @State private var showBranchPopover = false
-    @State private var showStashPopover = false
     @State private var newBranchName = ""
     @State private var stashMessage = ""
 
@@ -63,22 +61,22 @@ struct ContentView: View {
                 }
 
                 Button {
-                    showBranchPopover = true
+                    model.isCreatingBranch = true
                 } label: {
                     Label("Branch", systemImage: "arrow.triangle.branch")
                 }
                 .help("Create a new branch")
-                .popover(isPresented: $showBranchPopover, arrowEdge: .bottom) {
+                .popover(isPresented: $model.isCreatingBranch, arrowEdge: .bottom) {
                     branchPopover
                 }
 
                 Button {
-                    showStashPopover = true
+                    model.isStashing = true
                 } label: {
                     Label("Stash", systemImage: "archivebox")
                 }
                 .help("Stash working copy changes")
-                .popover(isPresented: $showStashPopover, arrowEdge: .bottom) {
+                .popover(isPresented: $model.isStashing, arrowEdge: .bottom) {
                     stashPopover
                 }
             }
@@ -109,7 +107,7 @@ struct ContentView: View {
                 .onSubmit(createBranch)
             HStack {
                 Spacer()
-                Button("Cancel") { showBranchPopover = false }
+                Button("Cancel") { model.isCreatingBranch = false }
                 Button("Create") { createBranch() }
                     .buttonStyle(.borderedProminent)
                     .disabled(newBranchName.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -128,7 +126,7 @@ struct ContentView: View {
                 .onSubmit(stashChanges)
             HStack {
                 Spacer()
-                Button("Cancel") { showStashPopover = false }
+                Button("Cancel") { model.isStashing = false }
                 Button("Stash") { stashChanges() }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.status.staged.isEmpty && model.status.unstaged.isEmpty)
@@ -140,13 +138,13 @@ struct ContentView: View {
     private func createBranch() {
         model.createBranch(name: newBranchName)
         newBranchName = ""
-        showBranchPopover = false
+        model.isCreatingBranch = false
     }
 
     private func stashChanges() {
         model.stashPush(message: stashMessage)
         stashMessage = ""
-        showStashPopover = false
+        model.isStashing = false
     }
 }
 
