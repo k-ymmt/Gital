@@ -523,10 +523,10 @@ final class GitRepository: @unchecked Sendable {
     // MARK: - Merge / rebase / conflicts
 
     /// Marker files (or directories) inside the git dir that identify a
-    /// stopped multi-step operation, in classification priority order: a
-    /// conflicted rebase also leaves CHERRY_PICK_HEAD behind (the merge
-    /// backend replays commits through the cherry-pick machinery), so the
-    /// rebase directories must win over the sequencer heads.
+    /// stopped multi-step operation, in classification priority order: the
+    /// rebase directories win over the sequencer heads defensively — older
+    /// gits left CHERRY_PICK_HEAD behind during a stopped rebase, and
+    /// `--rebase-merges` can leave MERGE_HEAD mid-rebase.
     static let operationProbes: [(marker: String, operation: RepoOperation)] = [
         ("rebase-merge", .rebase),
         ("rebase-apply", .rebase),
@@ -585,12 +585,78 @@ final class GitRepository: @unchecked Sendable {
         try await executor.run([operation.rawValue, "--abort"])
     }
 
+    /// Skips the commit a stopped sequencer/rebase operation is stuck on.
+    /// This is the only way forward when resolving made a cherry-pick or
+    /// revert empty — their `--continue` refuses an empty commit forever.
+    /// Merge has no skip; callers must not offer it there.
+    func skipOperation(_ operation: RepoOperation) async throws {
+        guard operation != .merge else {
+            throw GitError(command: "merge --skip", exitCode: 1, stderr: "A merge cannot be skipped — continue or abort it.")
+        }
+        try await executor.run([operation.rawValue, "--skip"])
+    }
+
+    /// One side of an unmerged index entry, from `ls-files -u`.
+    struct UnmergedEntry: Hashable {
+        let path: String
+        let stage: Int  // 1 = base, 2 = ours, 3 = theirs
+    }
+
+    static func parseUnmergedEntries(_ output: String) -> [UnmergedEntry] {
+        // "<mode> <object> <stage>\t<path>" per line (NUL-terminated with -z).
+        output.split(separator: "\u{0}", omittingEmptySubsequences: true).compactMap { record in
+            guard let tab = record.firstIndex(of: "\t") else { return nil }
+            let meta = record[..<tab].split(separator: " ")
+            guard meta.count >= 3, let stage = Int(meta[2]) else { return nil }
+            return UnmergedEntry(path: String(record[record.index(after: tab)...]), stage: stage)
+        }
+    }
+
     /// Resolves conflicted paths by taking one side wholesale, then stages
     /// them — `checkout --ours/--theirs` alone leaves the index conflicted.
+    /// Paths whose chosen side has no index entry (delete/modify conflicts)
+    /// are resolved by accepting the deletion via `git rm` instead:
+    /// `checkout` would fail with "does not have our/their version" and no
+    /// other in-app affordance can take the deleting side.
     func resolveConflicts(_ paths: [String], using side: ConflictSide) async throws {
         guard !paths.isEmpty else { return }
-        try await executor.run(["checkout", "--\(side.rawValue)", "--"] + paths)
-        try await executor.run(["add", "--"] + paths)
+        let stage = side == .ours ? 2 : 3
+        let unmerged = Self.parseUnmergedEntries(
+            try await executor.run(["ls-files", "-u", "-z", "--"] + paths)
+        )
+        let sideExists = Set(unmerged.filter { $0.stage == stage }.map(\.path))
+        let checkoutPaths = paths.filter { sideExists.contains($0) }
+        let deletePaths = paths.filter { !sideExists.contains($0) }
+        if !checkoutPaths.isEmpty {
+            try await executor.run(["checkout", "--\(side.rawValue)", "--"] + checkoutPaths)
+            try await executor.run(["add", "--"] + checkoutPaths)
+        }
+        if !deletePaths.isEmpty {
+            // -f: the worktree copy holds the other side's content, which git
+            // otherwise refuses to remove as "local modifications".
+            try await executor.run(["rm", "-f", "--"] + deletePaths)
+        }
+    }
+
+    /// Whether the working-tree file still contains unresolved conflict
+    /// markers. Used to warn before "Mark as Resolved" stages the file as is.
+    func containsConflictMarkers(path: String) -> Bool {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent(path), options: .mappedIfSafe) else {
+            return false
+        }
+        return Self.hasConflictMarkers(in: data)
+    }
+
+    static func hasConflictMarkers(in data: Data) -> Bool {
+        let text = String(decoding: data, as: UTF8.self)
+        var foundStart = false
+        var foundEnd = false
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.hasPrefix("<<<<<<<") { foundStart = true }
+            if line.hasPrefix(">>>>>>>") { foundEnd = true }
+            if foundStart && foundEnd { return true }
+        }
+        return false
     }
 
     // MARK: - History operations

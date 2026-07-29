@@ -129,6 +129,10 @@ final class RepoViewModel {
     /// Operation whose abort awaits user confirmation — aborting throws away
     /// every conflict resolution made so far.
     var pendingAbort: RepoOperation?
+    /// Conflicted file whose "Mark as Resolved" awaits confirmation because
+    /// the working-tree copy still contains conflict markers — staging it
+    /// as-is would let the markers be committed.
+    var pendingMarkResolved: FileChange?
 
     // MARK: Busy / errors
 

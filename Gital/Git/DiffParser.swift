@@ -12,6 +12,7 @@ enum DiffParser {
         var currentPath: String?
         var currentOldPath: String?
         var currentIsBinary = false
+        var currentIsCombined = false
         var currentHunks: [DiffHunk] = []
 
         var hunkHeader: String?
@@ -56,6 +57,7 @@ enum DiffParser {
                 currentPath = nil
                 currentOldPath = nil
                 currentIsBinary = false
+                currentIsCombined = false
                 currentHunks = []
                 // IDs restart per file so a change in one file never shifts
                 // another file's line IDs across a reload.
@@ -71,6 +73,7 @@ enum DiffParser {
                 oldPath: currentOldPath == path ? nil : currentOldPath,
                 isBinary: currentIsBinary,
                 containsInvalidUTF8: invalidUTF8,
+                isCombined: currentIsCombined,
                 hunks: currentHunks,
                 scope: scope
             ))
@@ -97,6 +100,7 @@ enum DiffParser {
                 let path = unquotePath(String(line.dropFirst(prefix.count)))
                 currentPath = path
                 currentOldPath = path
+                currentIsCombined = true
                 continue
             }
 
@@ -155,6 +159,9 @@ enum DiffParser {
                 guard let ranges = parseHunkHeader(String(line)) else { continue }
                 hunkHeader = String(line)
                 hunkParents = ranges.parents
+                // Bare `@@@` hunks reached without a "diff --cc" header (e.g.
+                // a single-file diff invocation) must still flag the file.
+                if ranges.parents > 1 { currentIsCombined = true }
                 hunkOldStart = ranges.oldStart
                 hunkNewStart = ranges.newStart
                 oldNumber = ranges.oldStart

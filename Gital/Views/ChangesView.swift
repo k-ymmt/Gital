@@ -159,6 +159,19 @@ struct ChangesView: View {
 
     @ViewBuilder
     private func hunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
+        // Combined (conflict) hunks: no patch can be built from them, and the
+        // whole-file fallback behind "Stage" would mark the conflict resolved
+        // with the markers still in the file. Resolution happens through the
+        // sidebar's resolve menu, never through hunk buttons.
+        if diff.isCombined {
+            EmptyView()
+        } else {
+            plainHunkStageButton(hunk, in: diff)
+        }
+    }
+
+    @ViewBuilder
+    private func plainHunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
         switch diff.scope {
         case .unstaged:
             HStack(spacing: 6) {
@@ -252,8 +265,16 @@ struct ConflictBannerView: View {
             Spacer()
             Button("Abort…") { model.requestAbort() }
                 .disabled(model.isSyncing)
+            if operation != .merge {
+                // Sequencer/rebase escape hatch: a cherry-pick or revert whose
+                // resolution matches HEAD becomes empty, and `--continue`
+                // refuses an empty commit forever — skip is the way forward.
+                Button("Skip Commit") { model.skipPendingOperation() }
+                    .disabled(model.isSyncing)
+                    .help("Skip the commit this \(operation.displayName.lowercased()) is stopped on")
+            }
             Button("Continue \(operation.displayName)") { model.continuePendingOperation() }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(!conflictsResolved || model.isSyncing)
         }
         .padding(.horizontal, 16)

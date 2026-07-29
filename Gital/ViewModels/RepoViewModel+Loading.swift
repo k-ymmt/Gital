@@ -21,8 +21,15 @@ extension RepoViewModel {
     }
 
     func refreshStatus() async {
+        // Independent do/catch blocks: a failing operation probe must not
+        // leave `status` unrefreshed, nor vice versa — a half-updated pair
+        // shows conflicted rows with a stale (or missing) banner.
         do {
             status = try await repository.status()
+        } catch {
+            report(error)
+        }
+        do {
             pendingOperation = try await repository.pendingOperation()
         } catch {
             report(error)

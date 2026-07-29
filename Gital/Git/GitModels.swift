@@ -219,6 +219,12 @@ struct FileDiff: Hashable, Identifiable {
     /// replacement characters — patches rebuilt from it would never apply, so
     /// hunk/line staging is disabled for such files.
     var containsInvalidUTF8: Bool = false
+    /// True for combined (`diff --cc`, `@@@`) output — a conflicted path
+    /// during a merge/rebase. Stage/discard affordances must not appear on
+    /// such diffs: partial patches can't be built from combined hunks, and
+    /// the whole-file fallback would mark the conflict resolved with the
+    /// markers still in the file.
+    var isCombined: Bool = false
     let hunks: [DiffHunk]
     var scope: DiffScope = .snapshot
 

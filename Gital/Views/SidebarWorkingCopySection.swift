@@ -47,14 +47,23 @@ struct SidebarWorkingCopySection: View {
     private func fileRow(_ change: FileChange, displayName: String, depth: Int, staged: Bool) -> some View {
         HStack(spacing: 8) {
             Button {
-                staged ? model.unstage(change) : model.stage(change)
+                if staged {
+                    model.unstage(change)
+                } else if change.status == .conflicted {
+                    // Staging a conflicted file marks it resolved as-is; route
+                    // through the confirmation so one misclick can't queue
+                    // conflict markers for the next commit.
+                    model.requestMarkResolved(change)
+                } else {
+                    model.stage(change)
+                }
             } label: {
                 Image(systemName: staged ? "minus.square.fill" : "plus.square")
                     .font(.system(size: 13))
                     .foregroundStyle(staged ? DesignStyle.addition : Color.secondary)
             }
             .buttonStyle(.plain)
-            .help(staged ? "Unstage" : "Stage")
+            .help(staged ? "Unstage" : (change.status == .conflicted ? "Mark as Resolved" : "Stage"))
 
             StatusBadge(status: change.status)
 
@@ -74,15 +83,17 @@ struct SidebarWorkingCopySection: View {
         }
         .contextMenu {
             if change.status == .conflicted {
+                // No pending operation (a stash-pop conflict leaves no marker
+                // file): plain Ours/Theirs, without a redundant parenthetical.
                 let operation = model.pendingOperation
-                Button("Resolve Using \(operation?.oursDescription ?? "Ours") (Ours)") {
+                Button(operation.map { "Resolve Using \($0.oursDescription) (Ours)" } ?? "Resolve Using Ours") {
                     model.resolveConflicts([change.path], using: .ours)
                 }
-                Button("Resolve Using \(operation?.theirsDescription ?? "Theirs") (Theirs)") {
+                Button(operation.map { "Resolve Using \($0.theirsDescription) (Theirs)" } ?? "Resolve Using Theirs") {
                     model.resolveConflicts([change.path], using: .theirs)
                 }
                 Button("Mark as Resolved") {
-                    model.stage(change)
+                    model.requestMarkResolved(change)
                 }
             } else if !staged {
                 Button(change.status == .untracked ? "Delete File…" : "Discard Changes…", role: .destructive) {

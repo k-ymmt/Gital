@@ -79,70 +79,10 @@ struct ContentView: View {
                 }
             }
         }
-        .alert(
-            model.pendingDiscard?.confirmationTitle ?? "",
-            isPresented: Binding(
-                get: { model.pendingDiscard != nil },
-                set: { if !$0 { model.pendingDiscard = nil } }
-            ),
-            presenting: model.pendingDiscard
-        ) { target in
-            Button("Discard", role: .destructive) { model.performDiscard(target) }
-            Button("Cancel", role: .cancel) {}
-        } message: { target in
-            Text(target.confirmationMessage)
-        }
-        .alert(
-            "Hard Reset?",
-            isPresented: Binding(
-                get: { model.pendingReset != nil },
-                set: { if !$0 { model.pendingReset = nil } }
-            ),
-            presenting: model.pendingReset
-        ) { pending in
-            Button("Reset", role: .destructive) {
-                model.performReset(to: pending.commit, mode: pending.mode)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { pending in
-            Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.commit.shortHash) and all working copy changes will be discarded. This cannot be undone.")
-        }
-        .alert(
-            "Drop Stash?",
-            isPresented: Binding(
-                get: { model.pendingStashDrop != nil },
-                set: { if !$0 { model.pendingStashDrop = nil } }
-            ),
-            presenting: model.pendingStashDrop
-        ) { stash in
-            Button("Drop", role: .destructive) { model.stashDrop(stash) }
-            Button("Cancel", role: .cancel) {}
-        } message: { stash in
-            Text("“\(stash.message)” will be permanently deleted. This cannot be undone.")
-        }
-        .alert(
-            "Abort \(model.pendingAbort?.displayName ?? "Operation")?",
-            isPresented: Binding(
-                get: { model.pendingAbort != nil },
-                set: { if !$0 { model.pendingAbort = nil } }
-            ),
-            presenting: model.pendingAbort
-        ) { operation in
-            Button("Abort \(operation.displayName)", role: .destructive) {
-                model.abortOperation(operation)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: { operation in
-            Text("The \(operation.displayName.lowercased()) will be aborted and the repository restored to its previous state. Conflict resolutions made so far will be lost.")
-        }
-        .alert("Git Error", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.errorMessage ?? "")
-        }
+        // Alert chains live in two ViewModifiers: inlining all six here blows
+        // past the type checker's budget for one body expression.
+        .modifier(WorkingCopyConfirmationAlerts(model: model))
+        .modifier(ConflictFlowAlerts(model: model))
         .task {
             if model.commits.isEmpty {
                 await model.refreshAll()
@@ -198,6 +138,112 @@ struct ContentView: View {
         model.stashPush(message: stashMessage)
         stashMessage = ""
         showStashPopover = false
+    }
+}
+
+/// Confirmation alerts for destructive working-copy actions (discard, hard
+/// reset, stash drop).
+private struct WorkingCopyConfirmationAlerts: ViewModifier {
+    @Bindable var model: RepoViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                model.pendingDiscard?.confirmationTitle ?? "",
+                isPresented: Binding(
+                    get: { model.pendingDiscard != nil },
+                    set: { if !$0 { model.pendingDiscard = nil } }
+                ),
+                presenting: model.pendingDiscard
+            ) { target in
+                Button("Discard", role: .destructive) { model.performDiscard(target) }
+                Button("Cancel", role: .cancel) {}
+            } message: { target in
+                Text(target.confirmationMessage)
+            }
+            .alert(
+                "Hard Reset?",
+                isPresented: Binding(
+                    get: { model.pendingReset != nil },
+                    set: { if !$0 { model.pendingReset = nil } }
+                ),
+                presenting: model.pendingReset
+            ) { pending in
+                Button("Reset", role: .destructive) {
+                    model.performReset(to: pending.commit, mode: pending.mode)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { pending in
+                Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.commit.shortHash) and all working copy changes will be discarded. This cannot be undone.")
+            }
+            .alert(
+                "Drop Stash?",
+                isPresented: Binding(
+                    get: { model.pendingStashDrop != nil },
+                    set: { if !$0 { model.pendingStashDrop = nil } }
+                ),
+                presenting: model.pendingStashDrop
+            ) { stash in
+                Button("Drop", role: .destructive) { model.stashDrop(stash) }
+                Button("Cancel", role: .cancel) {}
+            } message: { stash in
+                Text("“\(stash.message)” will be permanently deleted. This cannot be undone.")
+            }
+    }
+}
+
+/// Alerts for the merge/rebase conflict flow (abort confirmation, staging a
+/// file that still contains conflict markers) plus the generic git error.
+private struct ConflictFlowAlerts: ViewModifier {
+    @Bindable var model: RepoViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Abort \(model.pendingAbort?.displayName ?? "Operation")?",
+                isPresented: Binding(
+                    get: { model.pendingAbort != nil },
+                    set: { if !$0 { model.pendingAbort = nil } }
+                ),
+                presenting: model.pendingAbort
+            ) { operation in
+                Button("Abort \(operation.displayName)", role: .destructive) {
+                    model.abortOperation(operation)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { operation in
+                Text("The \(operation.displayName.lowercased()) will be aborted and the repository restored to its previous state. Conflict resolutions made so far will be lost.")
+            }
+            .alert(
+                "Conflict Markers Remain",
+                isPresented: Binding(
+                    get: { model.pendingMarkResolved != nil },
+                    set: { if !$0 { model.pendingMarkResolved = nil } }
+                ),
+                presenting: model.pendingMarkResolved
+            ) { change in
+                Button("Mark as Resolved Anyway") { model.stage(change) }
+                Button("Cancel", role: .cancel) {}
+            } message: { change in
+                Text("“\(change.path)” still contains “<<<<<<<” conflict markers. Marking it resolved will stage the file as is, and the markers can end up in the next commit.")
+            }
+            // The stopped operation can be concluded or aborted from a
+            // terminal while the abort confirmation sits open; confirming
+            // then would run a doomed `--abort`. Dismiss the alert when the
+            // operation disappears.
+            .onChange(of: model.pendingOperation) {
+                if model.pendingOperation == nil {
+                    model.pendingAbort = nil
+                }
+            }
+            .alert("Git Error", isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.errorMessage ?? "")
+            }
     }
 }
 

@@ -48,11 +48,13 @@ extension RepoViewModel {
     // MARK: - Line-level staging
 
     /// Line selection only makes sense where a partial patch can be applied:
-    /// untracked files have no index entry yet and renames/binaries fall back
-    /// to whole-file staging.
+    /// untracked files have no index entry yet, renames/binaries fall back
+    /// to whole-file staging, and combined (conflict) hunks can't be turned
+    /// into patches at all — PatchBuilder skips them, so selection would
+    /// only produce buttons that silently do nothing.
     func canSelectLines(in diff: FileDiff) -> Bool {
         (diff.scope == .unstaged || diff.scope == .staged) && !diff.isBinary
-            && !diff.containsInvalidUTF8 && diff.oldPath == nil
+            && !diff.containsInvalidUTF8 && diff.oldPath == nil && !diff.isCombined
     }
 
     func toggleLineSelection(_ line: DiffLine, in diff: FileDiff, extend: Bool) {
