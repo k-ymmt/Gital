@@ -168,13 +168,15 @@ struct FileHistorySheet: View {
     }
 
     /// Entry diffs are taken against the commit's first parent (`^`); a root
-    /// commit's old side fails to resolve and renders as empty.
+    /// commit's old side fails to resolve and renders as empty. Keyed off
+    /// the hash the diff was loaded for, not the selection — they diverge
+    /// while a new selection's diff load is in flight.
     private var entryImageContext: ImageDiffContext? {
-        model.selectedEntry.map { entry in
+        model.diffsHash.map { hash in
             ImageDiffContext(
                 repository: model.repository,
-                oldRevision: .commit("\(entry.hash)^"),
-                newRevision: .commit(entry.hash)
+                oldRevision: .commit("\(hash)^"),
+                newRevision: .commit(hash)
             )
         }
     }

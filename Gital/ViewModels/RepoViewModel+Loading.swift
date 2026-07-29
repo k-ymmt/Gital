@@ -96,6 +96,7 @@ extension RepoViewModel {
             commitDetail = nil
             commitFiles = []
             commitDiffs = []
+            commitDiffsHash = nil
             commitDetailLoader.invalidate()
             return
         }
@@ -110,6 +111,7 @@ extension RepoViewModel {
             commitDetail = detail
             commitFiles = files
             commitDiffs = diffs
+            commitDiffsHash = hash
             if let selected = selectedCommitFilePath,
                commitFiles.contains(where: { $0.path == selected }) == false {
                 selectedCommitFilePath = commitFiles.first?.path

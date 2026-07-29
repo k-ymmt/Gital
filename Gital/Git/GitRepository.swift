@@ -266,15 +266,43 @@ final class GitRepository: @unchecked Sendable {
     /// Raw bytes of one file at one revision, for image previews of binary
     /// diffs. A side that does not exist there (an added file's parent, a
     /// deleted file's commit, an unborn HEAD) throws, and the caller renders
-    /// that side as empty.
+    /// that side as empty. Callers must gate on `fileSize` first — the whole
+    /// blob is buffered in memory.
     func fileContents(path: String, at revision: BlobRevision) async throws -> Data {
         guard let spec = Self.blobSpec(path: path, revision: revision) else {
             // Worktree bytes come straight from disk — git has no command
-            // that prints the working-tree version of a file.
+            // that prints the working-tree version of a file. Data(contentsOf:)
+            // cannot be interrupted mid-read; the checks around it keep a
+            // cancelled preview from at least starting or delivering one, and
+            // the caller's size gate bounds how much an orphan can read.
             let url = root.appendingPathComponent(path)
-            return try await Task.detached { try Data(contentsOf: url) }.value
+            try Task.checkCancellation()
+            let data = try await Task.detached { try Data(contentsOf: url) }.value
+            try Task.checkCancellation()
+            return data
         }
-        return try await executor.runData(["show", spec])
+        // `--filters` (not `show`) so smudge filters run: an LFS-tracked
+        // image yields its real bytes when the object is local, instead of
+        // the pointer text — matching what the worktree side shows.
+        return try await executor.runData(["cat-file", "--filters", spec])
+    }
+
+    /// Byte size at a revision without reading the content, so previews can
+    /// refuse unbounded loads. For LFS-tracked paths this is the pointer
+    /// size, not the smudged size — `fileContents` callers re-check the
+    /// bytes they actually got.
+    func fileSize(path: String, at revision: BlobRevision) async throws -> Int {
+        guard let spec = Self.blobSpec(path: path, revision: revision) else {
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: root.appendingPathComponent(path).path
+            )
+            return (attributes[.size] as? Int) ?? 0
+        }
+        let output = try await executor.run(["cat-file", "-s", spec])
+        guard let size = Int(output.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            throw GitError(command: "cat-file -s", exitCode: 0, stderr: "unexpected size output: \(output)")
+        }
+        return size
     }
 
     /// `git show` object spec for a revision, or nil when the bytes live on

@@ -579,9 +579,11 @@ struct CommitDetailView: View {
 
     /// Commit diffs are first-parent diffs (`--diff-merges=first-parent`),
     /// and `^` is exactly the first parent; on a root commit the old side
-    /// fails to resolve and renders as empty.
+    /// fails to resolve and renders as empty. Keyed off the hash the diffs
+    /// were loaded for, not the selection — they diverge while a new
+    /// selection's diff load is in flight.
     private var commitImageContext: ImageDiffContext? {
-        model.selectedCommitHash.map {
+        model.commitDiffsHash.map {
             ImageDiffContext(
                 repository: model.repository,
                 oldRevision: .commit("\($0)^"),

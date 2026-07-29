@@ -31,14 +31,17 @@ struct StashDetailView: View {
                             Section {
                                 // A stash commit's first parent is the commit
                                 // the stash was taken on — the same base
-                                // `git stash show` diffs against.
+                                // `git stash show` diffs against. Untracked
+                                // files (`stash -u`) live only in the stash's
+                                // third parent, hence the fallback.
                                 FileDiffContentView(
                                     diff: diff,
                                     mode: model.diffMode,
                                     imageContext: ImageDiffContext(
                                         repository: model.repository,
                                         oldRevision: .commit("\(stash.commitHash)^"),
-                                        newRevision: .commit(stash.commitHash)
+                                        newRevision: .commit(stash.commitHash),
+                                        newFallbackRevision: .commit("\(stash.commitHash)^3")
                                     )
                                 )
                             } header: {

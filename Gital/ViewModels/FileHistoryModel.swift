@@ -36,6 +36,9 @@ final class FileHistoryModel: Identifiable {
         didSet { if oldValue != selectedHash { Task { await loadDiff() } } }
     }
     var diffs: [FileDiff] = []
+    /// The commit `diffs` was actually loaded for — image previews pair
+    /// their revisions with this instead of the (possibly newer) selection.
+    var diffsHash: String?
 
     var blame: BlameFile?
     var isLoadingBlame = false
@@ -133,6 +136,7 @@ final class FileHistoryModel: Identifiable {
     private func loadDiff() async {
         guard !isClosed, let entry = selectedEntry else {
             diffs = []
+            diffsHash = nil
             diffLoader.invalidate()
             return
         }
@@ -145,11 +149,13 @@ final class FileHistoryModel: Identifiable {
             // match an unrelated file recreated in the same commit — keep
             // only the entry's own diff, never "whatever came first".
             diffs = loaded.first { $0.path == entry.path }.map { [$0] } ?? loaded
+            diffsHash = entry.hash
         case .failure(let error):
             // Cleared, not kept: the pane header already names the new
             // selection, and stale hunks under it would masquerade as its
             // content.
             diffs = []
+            diffsHash = nil
             errorMessage = error.localizedDescription
         case nil:
             break

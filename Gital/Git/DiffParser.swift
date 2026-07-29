@@ -13,6 +13,8 @@ enum DiffParser {
         var currentOldPath: String?
         var currentIsBinary = false
         var currentIsCombined = false
+        var currentOldBlob: String?
+        var currentNewBlob: String?
         var currentHunks: [DiffHunk] = []
 
         var hunkHeader: String?
@@ -58,6 +60,8 @@ enum DiffParser {
                 currentOldPath = nil
                 currentIsBinary = false
                 currentIsCombined = false
+                currentOldBlob = nil
+                currentNewBlob = nil
                 currentHunks = []
                 // IDs restart per file so a change in one file never shifts
                 // another file's line IDs across a reload.
@@ -74,6 +78,8 @@ enum DiffParser {
                 isBinary: currentIsBinary,
                 containsInvalidUTF8: invalidUTF8,
                 isCombined: currentIsCombined,
+                oldBlobHash: currentOldBlob,
+                newBlobHash: currentNewBlob,
                 hunks: currentHunks,
                 scope: scope
             ))
@@ -123,6 +129,19 @@ enum DiffParser {
                 }
                 if line.hasPrefix("GIT binary patch") {
                     currentIsBinary = true
+                    continue
+                }
+                // "index <old>..<new> <mode>" (combined: "<h1>,<h2>..<new>",
+                // no mode on mode-change diffs). The abbreviated OIDs are the
+                // only content fingerprint a diff carries — a binary file's
+                // FileDiff is otherwise byte-identical across content changes,
+                // and image previews key their reload off these.
+                if line.hasPrefix("index ") {
+                    let spec = line.dropFirst("index ".count).split(separator: " ").first ?? ""
+                    if let dots = spec.range(of: "..") {
+                        currentOldBlob = String(spec[..<dots.lowerBound])
+                        currentNewBlob = String(spec[dots.upperBound...])
+                    }
                     continue
                 }
                 // Pure renames/copies have no ---/+++ lines; these lines are

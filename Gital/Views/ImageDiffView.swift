@@ -9,6 +9,29 @@ struct ImageDiffContext {
     /// nil when the change has no old side at all (an untracked file).
     let oldRevision: BlobRevision?
     let newRevision: BlobRevision
+    /// Tried when `newRevision` has no such path. Stashes made with
+    /// `--include-untracked` keep untracked files in the stash's *third*
+    /// parent, never in the stash commit itself.
+    var newFallbackRevision: BlobRevision? = nil
+
+    /// Revision pair matching the comparison each working-copy scope's diff
+    /// came from. A staged rename's old side reads `HEAD:<oldPath>`; a
+    /// conflicted path has no index stage 0, so its old side renders empty.
+    /// nil for `.snapshot`, which the working-copy loaders never produce.
+    static func workingRevisions(for scope: DiffScope) -> (old: BlobRevision?, new: BlobRevision)? {
+        switch scope {
+        case .unstaged: (old: .index, new: .worktree)
+        case .staged: (old: .commit("HEAD"), new: .index)
+        case .untracked: (old: nil, new: .worktree)
+        case .snapshot: nil
+        }
+    }
+
+    static func working(repository: GitRepository, scope: DiffScope) -> ImageDiffContext? {
+        workingRevisions(for: scope).map {
+            ImageDiffContext(repository: repository, oldRevision: $0.old, newRevision: $0.new)
+        }
+    }
 }
 
 /// Content for a binary file in a diff list: image files get side-by-side
@@ -42,9 +65,19 @@ struct ImageDiffView: View {
     let diff: FileDiff
     let context: ImageDiffContext
 
+    /// Refuse to buffer more than this per side; also the post-read cap for
+    /// LFS smudges whose pointer passed the pre-read gate.
+    static let maxPreviewBytes = 32 << 20
+
     enum SideState: Equatable {
         case loading
-        case empty
+        /// No blob there at all — the added/deleted side of the change.
+        case absent
+        /// Bytes exist but can't be previewed truthfully (unresolved LFS
+        /// pointer, too large, undecodable). Distinct from `absent` because
+        /// showing "No image" for these would assert a file was added or
+        /// deleted when it wasn't.
+        case unavailable
         case loaded(NSImage, bytes: Int)
     }
 
@@ -52,12 +85,17 @@ struct ImageDiffView: View {
     @State private var newSide: SideState = .loading
 
     /// Everything that decides what the panes show — `.task(id:)` reloads
-    /// when the row is reused for another file or another comparison.
+    /// when the row is reused for another file or another comparison. The
+    /// blob OIDs are the content fingerprint: revisions like `.index` or
+    /// `.worktree` are mutable, so path + revision alone would keep showing
+    /// stale bytes after the file changes again.
     private struct LoadKey: Hashable {
         let oldPath: String?
         let newPath: String
         let oldRevision: BlobRevision?
         let newRevision: BlobRevision
+        let oldBlob: String?
+        let newBlob: String?
     }
 
     private var loadKey: LoadKey {
@@ -65,7 +103,9 @@ struct ImageDiffView: View {
             oldPath: diff.oldPath,
             newPath: diff.path,
             oldRevision: context.oldRevision,
-            newRevision: context.newRevision
+            newRevision: context.newRevision,
+            oldBlob: diff.oldBlobHash,
+            newBlob: diff.newBlobHash
         )
     }
 
@@ -74,8 +114,14 @@ struct ImageDiffView: View {
             .task(id: loadKey) {
                 oldSide = .loading
                 newSide = .loading
-                async let old = load(path: diff.oldPath ?? diff.path, revision: context.oldRevision)
-                async let new = load(path: diff.path, revision: context.newRevision)
+                async let old = load(
+                    path: diff.oldPath ?? diff.path,
+                    revisions: context.oldRevision.map { [$0] } ?? []
+                )
+                async let new = load(
+                    path: diff.path,
+                    revisions: [context.newRevision] + (context.newFallbackRevision.map { [$0] } ?? [])
+                )
                 let (loadedOld, loadedNew) = await (old, new)
                 guard !Task.isCancelled else { return }
                 oldSide = loadedOld
@@ -85,9 +131,11 @@ struct ImageDiffView: View {
 
     @ViewBuilder
     private var content: some View {
-        if oldSide == .empty, newSide == .empty {
-            // Neither side decoded (corrupt data, non-image bytes behind an
-            // image extension) — fall back to the plain placeholder.
+        if oldSide == .unavailable || newSide == .unavailable
+            || (oldSide == .absent && newSide == .absent) {
+            // An unavailable side would make the pane pair lie ("No image"
+            // next to a real image reads as an addition) — the whole file
+            // falls back to the plain placeholder instead.
             BinaryPlaceholderText()
         } else {
             HStack(alignment: .top, spacing: 0) {
@@ -105,11 +153,11 @@ struct ImageDiffView: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(tint)
             switch state {
-            case .loading:
+            case .loading, .unavailable:
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, minHeight: 110)
-            case .empty:
+            case .absent:
                 Text("No image")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
@@ -138,11 +186,30 @@ struct ImageDiffView: View {
         .padding(.horizontal, 16)
     }
 
-    private func load(path: String, revision: BlobRevision?) async -> SideState {
-        guard let revision else { return .empty }
-        guard let data = try? await context.repository.fileContents(path: path, at: revision),
-              !data.isEmpty, let image = NSImage(data: data) else { return .empty }
-        return .loaded(image, bytes: data.count)
+    /// Tries each revision in order; the first whose blob exists decides the
+    /// side's state. A blob that exists but can't be shown truthfully is
+    /// `.unavailable`, never skipped — falling through to a later revision
+    /// would preview different bytes than the diff describes.
+    private func load(path: String, revisions: [BlobRevision]) async -> SideState {
+        for revision in revisions {
+            guard let size = try? await context.repository.fileSize(path: path, at: revision) else {
+                continue  // no blob at this revision — try the next source
+            }
+            guard size <= Self.maxPreviewBytes else { return .unavailable }
+            guard let data = try? await context.repository.fileContents(path: path, at: revision),
+                  !data.isEmpty else { return .absent }
+            guard data.count <= Self.maxPreviewBytes, !Self.isLFSPointer(data),
+                  let image = NSImage(data: data) else { return .unavailable }
+            return .loaded(image, bytes: data.count)
+        }
+        return .absent
+    }
+
+    /// Git LFS pointer files start with this line; the real bytes live under
+    /// `.git/lfs` or on the server. `cat-file --filters` smudges pointers
+    /// when the object is local, so reaching one here means it isn't.
+    static func isLFSPointer(_ data: Data) -> Bool {
+        data.starts(with: Data("version https://git-lfs".utf8))
     }
 
     /// "640 × 480 px — 34 KB"; pixel part omitted when no bitmap rep reports

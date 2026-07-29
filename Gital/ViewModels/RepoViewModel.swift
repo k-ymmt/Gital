@@ -70,6 +70,12 @@ final class RepoViewModel {
     var commitDetail: CommitDetail?
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
+    /// The commit `commitDiffs` was actually loaded for. Image previews key
+    /// their revisions off this, not `selectedCommitHash`: the selection
+    /// updates synchronously on click while the diffs lag behind an async
+    /// load, and pairing new-selection revisions with old-selection diffs
+    /// would briefly render one commit's file header over another's blobs.
+    var commitDiffsHash: String?
     var selectedCommitFilePath: String?
 
     var selectedCommit: Commit? {

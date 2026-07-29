@@ -305,6 +305,13 @@ struct FileDiff: Hashable, Identifiable {
     /// the whole-file fallback would mark the conflict resolved with the
     /// markers still in the file.
     var isCombined: Bool = false
+    /// Abbreviated blob OIDs from the `index <old>..<new>` header line —
+    /// the diff's only content fingerprint. Two loads of the same binary
+    /// path compare unequal exactly when the bytes changed, which is what
+    /// re-triggers image-preview loads against mutable revisions
+    /// (index/worktree/HEAD). All-zero means the side does not exist.
+    var oldBlobHash: String? = nil
+    var newBlobHash: String? = nil
     let hunks: [DiffHunk]
     var scope: DiffScope = .snapshot
 

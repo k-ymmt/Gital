@@ -171,21 +171,8 @@ struct ChangesView: View {
         }
     }
 
-    /// Blob sources for each side of a working-copy binary diff, matching
-    /// the comparison the diff came from. A staged rename's old side reads
-    /// `HEAD:<oldPath>`; a conflicted path has no index stage 0, so its old
-    /// side correctly renders as empty.
     private func workingImageContext(_ diff: FileDiff) -> ImageDiffContext? {
-        switch diff.scope {
-        case .unstaged:
-            ImageDiffContext(repository: model.repository, oldRevision: .index, newRevision: .worktree)
-        case .staged:
-            ImageDiffContext(repository: model.repository, oldRevision: .commit("HEAD"), newRevision: .index)
-        case .untracked:
-            ImageDiffContext(repository: model.repository, oldRevision: nil, newRevision: .worktree)
-        case .snapshot:
-            nil  // never produced by the working-copy loader
-        }
+        ImageDiffContext.working(repository: model.repository, scope: diff.scope)
     }
 
     @ViewBuilder
