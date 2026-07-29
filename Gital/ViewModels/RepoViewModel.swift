@@ -109,8 +109,12 @@ final class RepoViewModel {
     // MARK: File history
 
     /// Non-nil while the file-history/blame sheet is up; owns that sheet's
-    /// whole state so dismissing drops it wholesale.
-    var fileHistory: FileHistoryModel?
+    /// whole state so dismissing drops it wholesale. The outgoing model is
+    /// closed so its in-flight git work dies with the sheet instead of
+    /// queueing ahead of the main window on the serialized executor.
+    var fileHistory: FileHistoryModel? {
+        didSet { if oldValue !== fileHistory { oldValue?.close() } }
+    }
 
     // MARK: Stash selection
 

@@ -262,7 +262,9 @@ struct FileHistoryEntry: Hashable, Identifiable {
     let path: String
     /// Pre-rename path when this commit renamed (or copied) the file.
     let previousPath: String?
-    let status: FileChange.Status
+    /// nil when the commit carried no name-status entry for the file (a
+    /// merge kept in the walk) — the row then shows no fabricated badge.
+    let status: FileChange.Status?
 
     var id: String { hash }
     var shortHash: String { String(hash.prefix(7)) }

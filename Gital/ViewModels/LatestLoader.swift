@@ -22,7 +22,15 @@ final class LatestLoader {
 
         let result: Result<T, Error>
         do {
-            result = .success(try await task.value)
+            // Forward the caller's cancellation to the inner task: awaiting
+            // `task.value` alone shields the operation from it, so a
+            // dismissed view's load would run its git subprocess to
+            // completion on the serialized executor.
+            result = .success(try await withTaskCancellationHandler {
+                try await task.value
+            } onCancel: {
+                task.cancel()
+            })
         } catch {
             result = .failure(error)
         }

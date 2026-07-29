@@ -334,8 +334,19 @@ final class GitRepository: @unchecked Sendable {
             "-n", String(limit), "--pretty=format:\(format)",
         ]
         if let startHash { args.append(startHash) }
-        args.append(contentsOf: ["--", path])
-        let output = try await executor.run(args)
+        // :(literal) — a bare pathspec globs, so "app/[id]/page.tsx" would
+        // also pull in app/i/page.tsx's commits AND derail the rename
+        // tracking onto that file. --follow keeps working with it.
+        args.append(contentsOf: ["--", ":(literal)\(path)"])
+        let output: String
+        do {
+            output = try await executor.run(args)
+        } catch let error as GitError {
+            // Unborn HEAD (fresh repo): no commits touch anything. Probed
+            // like `log()` does rather than matching stderr wording.
+            guard startHash == nil, await !headExists() else { throw error }
+            return []
+        }
         return Self.parseFileHistory(output, queryPath: path)
     }
 
@@ -355,12 +366,15 @@ final class GitRepository: @unchecked Sendable {
             index += 5
             guard !hash.isEmpty else { continue }
 
-            var tailLines = tail.split(separator: "\n", omittingEmptySubsequences: false)
-            let subject = tailLines.isEmpty ? "" : String(tailLines.removeFirst())
+            // components, not split: split(separator: "\n") treats a CRLF
+            // pair as one grapheme and would fuse a "\r"-ending subject with
+            // the name-status line after it.
+            var tailLines = tail.components(separatedBy: "\n")
+            let subject = tailLines.isEmpty ? "" : tailLines.removeFirst()
 
             // At most one name-status entry follows (single pathspec); merge
             // commits list none and keep the tracked name.
-            var status: FileChange.Status = .modified
+            var status: FileChange.Status?
             var entryPath = trackedPath
             var previousPath: String?
             for line in tailLines {
@@ -455,7 +469,11 @@ final class GitRepository: @unchecked Sendable {
         var currentLineNumber = 0
         var currentIsGroupStart = false
 
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        // components, not split: content lines of a CRLF file end in "\r",
+        // and split(separator: "\n") treats that "\r\n" as one grapheme —
+        // the content line and the next group's header would fuse, dropping
+        // every other line of the file.
+        for rawLine in output.components(separatedBy: "\n") {
             if rawLine.hasPrefix("\t") {
                 guard let hash = currentHash else { continue }
                 lines.append(BlameLine(

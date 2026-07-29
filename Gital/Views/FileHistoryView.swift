@@ -74,6 +74,19 @@ struct FileHistorySheet: View {
                 ProgressView()
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.entriesLoadFailed {
+                // Distinct from the no-commits case: claiming "no commits"
+                // after a failed load would be a statement the model can't
+                // back.
+                VStack(spacing: 10) {
+                    Text("The file's history could not be loaded")
+                        .foregroundStyle(.secondary)
+                    Button("Retry") {
+                        Task { await model.load() }
+                    }
+                    .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Text("No commits touch this file")
                     .foregroundStyle(.secondary)
@@ -163,7 +176,13 @@ private struct FileHistoryEntryRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            StatusBadge(status: entry.status)
+            // No badge for entries without a name-status record (merges) —
+            // showing the parser's default would fabricate an "M".
+            if let status = entry.status {
+                StatusBadge(status: status)
+            } else {
+                Color.clear.frame(width: 17, height: 17)
+            }
             VStack(alignment: .leading, spacing: 1) {
                 Text(entry.subject)
                     .font(.system(size: 12.5))
@@ -228,6 +247,16 @@ private struct FileBlameView: View {
                     }
                     .frame(minWidth: 700, alignment: .leading)
                 }
+            } else if !model.isLoadingBlame {
+                // Failed load. The `.task(id:)` below won't re-fire on its
+                // own (the target didn't change), so offer the retry here.
+                VStack(spacing: 10) {
+                    Text("Blame could not be loaded")
+                        .foregroundStyle(.secondary)
+                    Button("Retry") { model.reloadBlame() }
+                        .controlSize(.small)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Spacer()
             }
@@ -242,6 +271,11 @@ private struct FileBlameView: View {
     private var blameTitle: String {
         guard let key = model.blameTargetKey else { return "Blame" }
         if key.isEmpty { return "Blame — working tree" }
+        // A deleting commit has no content of its own; what's shown is the
+        // last version, blamed at the parent.
+        if model.selectedEntry?.status == .deleted {
+            return "Blame before \(key.prefix(7)) (file deleted)"
+        }
         return "Blame at \(key.prefix(7))"
     }
 }

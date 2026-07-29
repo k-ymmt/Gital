@@ -27,14 +27,20 @@ struct ChangesView: View {
                                     lineSelectionActions(diff)
                                 }
                                 .contextMenu {
-                                    // An untracked file has no commits yet —
-                                    // the sheet could only come up empty.
-                                    if diff.scope != .untracked {
+                                    // A file not in any commit yet (untracked
+                                    // or a staged addition) would only open
+                                    // an empty sheet. A staged rename's
+                                    // history lives under the old name.
+                                    let isNewFile = diff.scope == .untracked
+                                        || (model.status.staged + model.status.unstaged).contains {
+                                            $0.path == diff.path && ($0.status == .added || $0.status == .untracked)
+                                        }
+                                    if !isNewFile {
                                         Button("File History") {
-                                            model.showFileHistory(path: diff.path)
+                                            model.showFileHistory(path: diff.oldPath ?? diff.path)
                                         }
                                         Button("Blame") {
-                                            model.showFileHistory(path: diff.path, tab: .blame)
+                                            model.showFileHistory(path: diff.oldPath ?? diff.path, tab: .blame)
                                         }
                                     }
                                 }

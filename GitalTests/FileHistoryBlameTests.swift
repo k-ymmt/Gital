@@ -46,7 +46,7 @@ struct FileHistoryParsingTests {
         let entries = GitRepository.parseFileHistory(output, queryPath: "Docs/readme.md")
         #expect(entries.count == 2, "merge record still parsed")
         #expect(entries[0].path == "Docs/readme.md", "merge entry keeps tracked path")
-        #expect(entries[0].status == .modified, "merge entry defaults to modified")
+        #expect(entries[0].status == nil, "no name-status means no fabricated status")
     }
 
     // Subjects can contain anything but NUL and newline — including tabs and
@@ -138,11 +138,115 @@ struct BlameParsingTests {
         #expect(blame.annotations[Self.hashB]?.date == "1970-01-02", "date rendered in the author's zone")
     }
 
+    // CRLF files: porcelain content lines end in "\r" right before the next
+    // group's header. Regression for the grapheme-cluster trap — splitting
+    // on Character "\n" fuses "\r\n" and drops every other line.
+    @Test func crlfContentSurvives() {
+        let output = """
+        \(Self.hashA) 1 1 2
+        author Alice
+        author-mail <alice@example.com>
+        author-time 0
+        author-tz +0000
+        committer Alice
+        committer-mail <alice@example.com>
+        committer-time 0
+        committer-tz +0000
+        summary CRLF commit
+        filename run.bat
+        \tone\r
+        \(Self.hashA) 2 2
+        \ttwo\r
+        """
+        let blame = GitRepository.parseBlame(output)
+        #expect(blame.lines.count == 2, "both CRLF lines parsed")
+        #expect(blame.lines.map(\.number) == [1, 2], "line numbers intact")
+        #expect(blame.lines[0].text == "one\r" && blame.lines[1].text == "two\r", "content kept verbatim incl. CR")
+    }
+
     @Test func blameDateOffsets() {
         #expect(GitRepository.blameDate(epoch: "82800", timeZone: "+0900") == "1970-01-02", "positive offset")
         #expect(GitRepository.blameDate(epoch: "82800", timeZone: "-0100") == "1970-01-01", "negative offset")
         #expect(GitRepository.blameDate(epoch: "82800", timeZone: nil) == "1970-01-01", "missing zone falls back to UTC")
         #expect(GitRepository.blameDate(epoch: nil, timeZone: "+0000") == "", "missing epoch yields empty")
         #expect(GitRepository.blameDate(epoch: "junk", timeZone: "+0000") == "", "non-numeric epoch yields empty")
+    }
+}
+
+// MARK: - End-to-end against a real repository
+
+@MainActor
+@Suite(.timeLimit(.minutes(1)))
+struct FileHistoryIntegrationTests {
+    private func withRepo(_ body: (GitExecutor, GitRepository, URL) async throws -> Void) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gital-filehistory-tests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let git = GitExecutor(workingDirectory: root)
+        _ = try await git.run(["init", "-b", "main"])
+        _ = try await git.run(["config", "user.name", "Gital Tests"])
+        _ = try await git.run(["config", "user.email", "tests@example.com"])
+        _ = try await git.run(["config", "commit.gpgsign", "false"])
+        try await body(git, GitRepository(root: root), root)
+    }
+
+    // Regression: a bare pathspec globs, so "app/[id]/page.tsx" also matched
+    // app/i/page.tsx — pulling foreign commits into the history and derailing
+    // the rename tracking onto the wrong file.
+    @Test func globCharactersStayLiteral() async throws {
+        try await withRepo { git, repo, root in
+            for dir in ["app/[id]", "app/i"] {
+                try FileManager.default.createDirectory(
+                    at: root.appendingPathComponent(dir), withIntermediateDirectories: true)
+            }
+            try Data("dyn\n".utf8).write(to: root.appendingPathComponent("app/[id]/page.tsx"))
+            try Data("static\n".utf8).write(to: root.appendingPathComponent("app/i/page.tsx"))
+            _ = try await git.run(["add", "-A"])
+            _ = try await git.run(["commit", "-m", "add routes"])
+            try Data("static2\n".utf8).write(to: root.appendingPathComponent("app/i/page.tsx"))
+            _ = try await git.run(["commit", "-am", "edit only app/i"])
+            _ = try await git.run(["mv", "app/[id]/page.tsx", "app/[id]/route.tsx"])
+            _ = try await git.run(["commit", "-m", "rename dyn"])
+
+            let entries = try await repo.fileHistory(path: "app/[id]/route.tsx", startHash: nil, limit: 400)
+            #expect(entries.map(\.subject) == ["rename dyn", "add routes"], "sibling's commit not pulled in")
+            #expect(entries[0].previousPath == "app/[id]/page.tsx", "rename still followed")
+            #expect(entries[1].path == "app/[id]/page.tsx", "old name tracked past the rename")
+        }
+    }
+
+    // Regression: blaming a file at the commit that deleted it is fatal in
+    // git; the model must fall back to the last version at the parent.
+    @Test func blameAtDeletingCommitFallsBackToParent() async throws {
+        try await withRepo { git, repo, root in
+            try Data("a\nb\n".utf8).write(to: root.appendingPathComponent("f.txt"))
+            _ = try await git.run(["add", "-A"])
+            _ = try await git.run(["commit", "-m", "add f"])
+            _ = try await git.run(["rm", "f.txt"])
+            _ = try await git.run(["commit", "-m", "delete f"])
+            let deleteHash = (try await git.run(["rev-parse", "HEAD"]))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let model = FileHistoryModel(repository: repo, path: "f.txt", startHash: deleteHash, tab: .blame)
+            await model.load()
+            #expect(model.entries.count == 2, "delete + add commits listed")
+            #expect(model.entries.first?.status == .deleted, "newest entry is the deletion")
+            await model.loadBlameIfNeeded()
+            #expect(model.errorMessage == nil, "no fatal from blaming the deleting commit")
+            #expect(model.blame?.lines.count == 2, "last version's lines blamed at the parent")
+        }
+    }
+
+    // An unborn HEAD must read as an empty history, mirroring `log()`'s
+    // fallback, not surface git's raw fatal in the sheet.
+    @Test func unbornHeadYieldsEmptyHistory() async throws {
+        try await withRepo { git, repo, root in
+            try Data("x\n".utf8).write(to: root.appendingPathComponent("f.txt"))
+            _ = try await git.run(["add", "-A"])
+            let entries = try await repo.fileHistory(path: "f.txt", startHash: nil, limit: 400)
+            #expect(entries.isEmpty, "no commits, no error")
+        }
     }
 }

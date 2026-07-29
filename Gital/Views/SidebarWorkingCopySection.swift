@@ -100,7 +100,9 @@ struct SidebarWorkingCopySection: View {
                     model.requestDiscard(.file(change))
                 }
             }
-            if change.status != .untracked {
+            // Files in no commit yet (untracked, or an addition sitting in
+            // the index) would only open an empty sheet.
+            if change.status != .untracked, change.status != .added {
                 Divider()
                 // A staged rename's new name has no commits yet; its history
                 // lives under the original name.
