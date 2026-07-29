@@ -18,9 +18,13 @@ extension RepoViewModel {
 
     // MARK: - Commit operations
 
+    /// Reset target by bare hash, not `Commit` — reflog entries point at
+    /// commits the loaded log may not contain.
     struct PendingReset {
-        let commit: Commit
+        let hash: String
         let mode: GitRepository.ResetMode
+
+        var shortHash: String { String(hash.prefix(7)) }
     }
 
     func cherryPick(_ commit: Commit) {
@@ -31,16 +35,73 @@ extension RepoViewModel {
         runConflictAware("Reverting…") { try await self.repository.revert(commit.hash) }
     }
 
-    func requestReset(to commit: Commit, mode: GitRepository.ResetMode) {
+    func requestReset(toHash hash: String, mode: GitRepository.ResetMode) {
         if mode == .hard {
-            pendingReset = PendingReset(commit: commit, mode: mode)
+            pendingReset = PendingReset(hash: hash, mode: mode)
         } else {
-            performReset(to: commit, mode: mode)
+            performReset(toHash: hash, mode: mode)
         }
     }
 
-    func performReset(to commit: Commit, mode: GitRepository.ResetMode) {
-        runSync("Resetting…") { try await self.repository.reset(to: commit.hash, mode: mode) }
+    func performReset(toHash hash: String, mode: GitRepository.ResetMode) {
+        runSync("Resetting…") { try await self.repository.reset(to: hash, mode: mode) }
+    }
+
+    // MARK: - Detached checkout / reflog
+
+    /// A detached-HEAD checkout awaiting confirmation, carrying its own
+    /// display fields because the target may come from the reflog, where no
+    /// loaded `Commit` exists.
+    struct DetachedCheckoutRequest {
+        let hash: String
+        /// What the user clicked, for the alert ("Checkout abc1234?" needs
+        /// to say which commit that was).
+        let subject: String
+
+        var shortHash: String { String(hash.prefix(7)) }
+    }
+
+    /// The reflog list backing the sheet; `Identifiable` for `.sheet(item:)`.
+    struct ReflogSnapshot: Identifiable {
+        let entries: [ReflogEntry]
+        let id = UUID()
+    }
+
+    func requestCheckoutDetached(hash: String, subject: String) {
+        pendingDetachedCheckout = DetachedCheckoutRequest(hash: hash, subject: subject)
+    }
+
+    func checkoutDetached(_ request: DetachedCheckoutRequest) {
+        runSync("Checking out…") {
+            try await self.repository.checkoutDetached(request.hash)
+            // Follow HEAD in the detail pane. Works even when the hash is
+            // absent from the loaded log (reflog entries often are) — the
+            // detail load fetches by hash, not from the list.
+            self.selectedCommitHash = request.hash
+        }
+    }
+
+    /// Loads the HEAD reflog and raises the sheet. `runSync` for the same
+    /// reason as `requestInteractiveRebase`: the load queues behind the
+    /// serialized executor, and an invisible pending load would pop the
+    /// sheet "out of nowhere" much later.
+    func requestReflog() {
+        runSync("Loading reflog…") {
+            self.reflogSnapshot = ReflogSnapshot(entries: try await self.repository.reflog())
+        }
+    }
+
+    /// Entry actions close the sheet first: the confirmation alerts attach
+    /// beneath it in `ContentView`, and an alert raised under a presented
+    /// sheet stays invisible until the sheet happens to close.
+    func reflogCheckout(_ entry: ReflogEntry) {
+        reflogSnapshot = nil
+        requestCheckoutDetached(hash: entry.hash, subject: entry.subject)
+    }
+
+    func reflogReset(_ entry: ReflogEntry, mode: GitRepository.ResetMode) {
+        reflogSnapshot = nil
+        requestReset(toHash: entry.hash, mode: mode)
     }
 
     func createBranch(name: String, at commit: Commit, checkout: Bool) {

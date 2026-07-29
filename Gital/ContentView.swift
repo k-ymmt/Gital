@@ -19,7 +19,7 @@ struct ContentView: View {
             MainView(model: model)
         }
         .navigationTitle(model.repository.name)
-        .navigationSubtitle(model.status.branch ?? "detached HEAD")
+        .navigationSubtitle(subtitle)
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search commits, files…")
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -95,6 +95,14 @@ struct ContentView: View {
                 await model.refreshAll()
             }
         }
+    }
+
+    /// Detached HEAD shows where HEAD actually is — a bare "detached HEAD"
+    /// gives no way to tell which commit the working copy reflects.
+    private var subtitle: String {
+        if let branch = model.status.branch { return branch }
+        if let oid = model.status.headOID { return "Detached HEAD at \(String(oid.prefix(7)))" }
+        return "detached HEAD"
     }
 
     private var branchPopover: some View {
@@ -177,11 +185,11 @@ private struct WorkingCopyConfirmationAlerts: ViewModifier {
                 presenting: model.pendingReset
             ) { pending in
                 Button("Reset", role: .destructive) {
-                    model.performReset(to: pending.commit, mode: pending.mode)
+                    model.performReset(toHash: pending.hash, mode: pending.mode)
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { pending in
-                Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.commit.shortHash) and all working copy changes will be discarded. This cannot be undone.")
+                Text("“\(model.status.branch ?? "HEAD")” will be reset to \(pending.shortHash) and all working copy changes will be discarded. This cannot be undone.")
             }
             .alert(
                 "Drop Stash?",
@@ -314,6 +322,19 @@ private struct BranchManagementAlerts: ViewModifier {
                 }
             }
             .alert(
+                "Checkout Commit?",
+                isPresented: Binding(
+                    get: { model.pendingDetachedCheckout != nil },
+                    set: { if !$0 { model.pendingDetachedCheckout = nil } }
+                ),
+                presenting: model.pendingDetachedCheckout
+            ) { request in
+                Button("Checkout") { model.checkoutDetached(request) }
+                Button("Cancel", role: .cancel) {}
+            } message: { request in
+                Text("HEAD will detach at \(request.shortHash) (“\(request.subject)”) — you will be on no branch. Commits made here are kept in the reflog but easy to lose; create a branch to keep them. Check out any branch to return to normal.")
+            }
+            .alert(
                 "Rename Branch",
                 isPresented: Binding(
                     get: { model.renamingBranch != nil },
@@ -411,6 +432,9 @@ struct MainView: View {
             InteractiveRebaseSheet(prep: prep) { steps in
                 model.startInteractiveRebase(prep: prep, stepsNewestFirst: steps)
             }
+        }
+        .sheet(item: $model.reflogSnapshot) { snapshot in
+            ReflogSheet(model: model, snapshot: snapshot)
         }
     }
 }

@@ -90,6 +90,9 @@ struct FileChange: Hashable, Identifiable {
 
 struct WorkingStatus {
     var branch: String?
+    /// Commit HEAD points at; nil on an unborn branch. On a detached HEAD
+    /// (`branch == nil`) this is the only way the UI can say where HEAD is.
+    var headOID: String?
     var upstream: String?
     var ahead: Int = 0
     var behind: Int = 0
@@ -225,6 +228,25 @@ struct Stash: Hashable, Identifiable {
     let message: String
 
     var id: String { commitHash }
+}
+
+/// One HEAD-reflog entry. Like `Stash`, the positional selector (HEAD@{N})
+/// is display-only and valid only for the list it came from — every action
+/// targets `hash`, which stays correct no matter how stale the list is.
+struct ReflogEntry: Hashable, Identifiable {
+    let index: Int
+    let hash: String
+    /// When the entry was recorded ("5 minutes ago"), not the commit's own
+    /// date — checking out an old commit is a new reflog entry.
+    let recordedDate: String
+    /// The reflog message ("checkout: moving from main to abc1234").
+    let subject: String
+
+    var selector: String { "HEAD@{\(index)}" }
+    var shortHash: String { String(hash.prefix(7)) }
+    /// The same hash can appear many times (repeated checkouts), so identity
+    /// needs the position too.
+    var id: String { "\(index)-\(hash)" }
 }
 
 // MARK: - Diff

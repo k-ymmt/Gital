@@ -128,6 +128,13 @@ final class RepoViewModel {
     /// prepared input.
     var interactiveRebasePrep: GitRepository.InteractiveRebasePrep?
 
+    // MARK: Reflog
+
+    /// Non-nil while the reflog sheet is up. A snapshot, not live state:
+    /// entry actions dismiss the sheet and re-confirm against the entry's
+    /// hash, so the list going stale underneath is harmless.
+    var reflogSnapshot: ReflogSnapshot?
+
     // MARK: Stash selection
 
     var selectedStashRef: String? {
@@ -147,6 +154,9 @@ final class RepoViewModel {
 
     var pendingDiscard: DiscardTarget?
     var pendingReset: PendingReset?
+    /// Commit whose detached-HEAD checkout awaits confirmation — the state
+    /// itself is harmless, but landing on "no branch" unannounced is not.
+    var pendingDetachedCheckout: DetachedCheckoutRequest?
     var pendingStashDrop: Stash?
     /// Operation whose abort awaits user confirmation — aborting throws away
     /// every conflict resolution made so far.

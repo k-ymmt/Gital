@@ -73,6 +73,10 @@ struct AppCommands: Commands {
 
             Divider()
 
+            Button("Show Reflog") { repo?.requestReflog() }
+                .keyboardShortcut(shortcuts.combo(for: .showReflog)?.keyboardShortcut)
+                .disabled(repo == nil)
+
             Button("Refresh") {
                 guard let repo else { return }
                 Task { await repo.refreshAll() }

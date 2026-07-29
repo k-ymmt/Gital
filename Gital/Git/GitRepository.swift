@@ -52,6 +52,9 @@ final class GitRepository: @unchecked Sendable {
             if token.hasPrefix("# branch.head ") {
                 let value = String(token.dropFirst("# branch.head ".count))
                 status.branch = value == "(detached)" ? nil : value
+            } else if token.hasPrefix("# branch.oid ") {
+                let value = String(token.dropFirst("# branch.oid ".count))
+                status.headOID = value == "(initial)" ? nil : value
             } else if token.hasPrefix("# branch.upstream ") {
                 status.upstream = String(token.dropFirst("# branch.upstream ".count))
             } else if token.hasPrefix("# branch.ab ") {
@@ -788,8 +791,50 @@ final class GitRepository: @unchecked Sendable {
         }
     }
 
+    private static let reflogFormat = "%H\u{1f}%gd\u{1f}%gs"
+
+    /// The HEAD reflog — every place HEAD has been, newest first. Positions
+    /// map 1:1 to git's HEAD@{N} numbering because `git reflog` lists entries
+    /// in exactly that order. `--date=relative` makes %gd carry the entry's
+    /// own timestamp ("HEAD@{5 minutes ago}") instead of a positional index.
+    func reflog(limit: Int = 200) async throws -> [ReflogEntry] {
+        // An unborn branch has no reflog and `git reflog` fatals on it —
+        // that's the empty state, not an error to alert about.
+        guard await headExists() else { return [] }
+        let output = try await executor.run([
+            "reflog", "--date=relative", "--format=\(Self.reflogFormat)", "-n", String(limit),
+        ])
+        return Self.parseReflog(output)
+    }
+
+    static func parseReflog(_ output: String) -> [ReflogEntry] {
+        output.split(separator: "\n").enumerated().compactMap { index, line in
+            let fields = line.components(separatedBy: "\u{1f}")
+            guard fields.count >= 3, !fields[0].isEmpty else { return nil }
+            // %gd with --date=relative reads "HEAD@{5 minutes ago}"; the
+            // braces hold the timestamp. Fall back to the raw field if git
+            // ever changes the shape rather than showing nothing.
+            var date = fields[1]
+            if let open = date.firstIndex(of: "{"), let close = date.lastIndex(of: "}"), open < close {
+                date = String(date[date.index(after: open)..<close])
+            }
+            // Reflog messages embed free text (commit subjects), which can
+            // contain the separator byte — components() already split there,
+            // so stitch the tail back together instead of dropping it.
+            let subject = fields.dropFirst(2).joined(separator: "\u{1f}")
+            return ReflogEntry(index: index, hash: fields[0], recordedDate: date, subject: subject)
+        }
+    }
+
     func checkout(branch: String) async throws {
         try await executor.run(["checkout", branch])
+    }
+
+    /// Detaches HEAD at `commit`. `--detach` is explicit so a hash that
+    /// happens to also name a branch or tag can't silently check that out
+    /// instead.
+    func checkoutDetached(_ commit: String) async throws {
+        try await executor.run(["checkout", "--detach", commit])
     }
 
     func checkoutRemote(branch: String, remote: String) async throws {

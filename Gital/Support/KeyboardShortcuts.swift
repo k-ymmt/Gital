@@ -281,7 +281,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
     case fetch, pull, push, commit
     case newBranch, stashChanges
     case stageAll, unstageAll
-    case refresh
+    case refresh, showReflog
     case showWorkingCopy, showHistory, showPullRequests, showStashes
     case toggleDiffLayout
 
@@ -297,7 +297,8 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
         switch self {
         case .openRepository:
             .file
-        case .fetch, .pull, .push, .commit, .newBranch, .stashChanges, .stageAll, .unstageAll, .refresh:
+        case .fetch, .pull, .push, .commit, .newBranch, .stashChanges, .stageAll, .unstageAll, .refresh,
+             .showReflog:
             .repository
         case .showWorkingCopy, .showHistory, .showPullRequests, .showStashes, .toggleDiffLayout:
             .view
@@ -316,6 +317,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
         case .stageAll: "Stage All"
         case .unstageAll: "Unstage All"
         case .refresh: "Refresh"
+        case .showReflog: "Show Reflog"
         case .showWorkingCopy: "Show Working Copy"
         case .showHistory: "Show History"
         case .showPullRequests: "Show Pull Requests"
@@ -336,6 +338,7 @@ enum ShortcutAction: String, CaseIterable, Codable, Identifiable {
         case .stageAll: KeyCombo("s", [.command, .option])
         case .unstageAll: KeyCombo("u", [.command, .option])
         case .refresh: KeyCombo("r", .command)
+        case .showReflog: KeyCombo("g", [.command, .shift])
         case .showWorkingCopy: KeyCombo("1", .command)
         case .showHistory: KeyCombo("2", .command)
         case .showPullRequests: KeyCombo("3", .command)

@@ -23,6 +23,7 @@ struct GitRepositoryParsingTests {
 
         let status = GitRepository.parseStatus(statusData)
         #expect(status.branch == "feature/onboarding", "status branch")
+        #expect(status.headOID == "0123456789abcdef", "status HEAD oid")
         #expect(status.upstream == "origin/feature/onboarding", "status upstream")
         #expect(status.ahead == 2 && status.behind == 1, "status ahead/behind")
         #expect(status.unstaged.count == 2, "status unstaged count")
@@ -37,6 +38,7 @@ struct GitRepositoryParsingTests {
     @Test func statusConflictDetachedSpaces() {
         var statusData = Data()
         for token in [
+            "# branch.oid fedcba9876543210",
             "# branch.head (detached)",
             "1 .M N... 100644 100644 100644 aaaa bbbb My File.txt",
             "u UU N... 100644 100644 100644 100644 aaaa bbbb cccc Merge Conflict.swift",
@@ -46,10 +48,24 @@ struct GitRepositoryParsingTests {
         }
         let status = GitRepository.parseStatus(statusData)
         #expect(status.branch == nil, "detached HEAD parses as nil branch")
+        #expect(status.headOID == "fedcba9876543210", "detached HEAD still carries the oid")
         #expect(status.unstaged.contains { $0.path == "My File.txt" && $0.status == .modified },
                 "path with spaces survives status parsing")
         #expect(status.unstaged.contains { $0.path == "Merge Conflict.swift" && $0.status == .conflicted },
                 "conflicted u entry parses")
+    }
+
+    // An unborn branch reports "(initial)" as its oid — that placeholder must
+    // not leak into the UI as if it were a commit hash.
+    @Test func statusUnbornBranchHasNoOID() {
+        var statusData = Data()
+        for token in ["# branch.oid (initial)", "# branch.head main"] {
+            statusData.append(token.data(using: .utf8)!)
+            statusData.append(0)
+        }
+        let status = GitRepository.parseStatus(statusData)
+        #expect(status.branch == "main", "unborn branch keeps its name")
+        #expect(status.headOID == nil, "(initial) oid parses as nil")
     }
 
     @Test func logParsing() {
