@@ -16,9 +16,16 @@ struct ContentView: View {
             MainView(model: model)
         }
         .navigationTitle(model.repository.name)
-        .navigationSubtitle(subtitle)
+        // The repository identity lives in the principal toolbar item
+        // (Xcode-style); the inline title would duplicate it. The window
+        // title itself (Mission Control, window menu) keeps the repo name.
+        .toolbar(removing: .title)
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search commits, files…")
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                RepositorySwitcher(model: model)
+            }
+
             ToolbarItemGroup(placement: .navigation) {
                 Button {
                     model.fetch()
@@ -96,6 +103,65 @@ struct ContentView: View {
         .onDisappear { model.isWindowHosted = false }
     }
 
+}
+
+/// Xcode-style repository switcher in the center of the window toolbar:
+/// the open repository's name and current branch, with a menu of recent
+/// repositories to switch to.
+private struct RepositorySwitcher: View {
+    let model: RepoViewModel
+    @Environment(AppModel.self) private var appModel
+
+    var body: some View {
+        Menu {
+            Button("Open Another Repository…") {
+                appModel.pickRepository()
+            }
+            ForEach(appModel.recentRepositories, id: \.path) { url in
+                Button {
+                    appModel.openRepository(at: url)
+                } label: {
+                    Text(url.lastPathComponent)
+                    Text(Self.abbreviatedPath(for: url))
+                }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(String(model.repository.name.prefix(1)).uppercased())
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 20, height: 20)
+                    .background(
+                        LinearGradient(
+                            colors: [DesignStyle.linkBlue, DesignStyle.brandBlue],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: 5)
+                    )
+
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(model.repository.name)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Switch repository")
+    }
+
     /// Detached HEAD shows where HEAD actually is — a bare "detached HEAD"
     /// gives no way to tell which commit the working copy reflects.
     private var subtitle: String {
@@ -104,6 +170,14 @@ struct ContentView: View {
         return "detached HEAD"
     }
 
+    /// Menu items ignore Text line-limit/truncation modifiers, so ellipsize the string itself.
+    private static func abbreviatedPath(for url: URL, maxLength: Int = 48) -> String {
+        let path = url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
+        guard path.count > maxLength else { return path }
+        let head = path.prefix((maxLength - 1) / 2)
+        let tail = path.suffix(maxLength / 2)
+        return "\(head)…\(tail)"
+    }
 }
 
 /// Popover bodies are standalone structs, not computed properties of the

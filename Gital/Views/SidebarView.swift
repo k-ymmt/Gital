@@ -1,14 +1,14 @@
 import SwiftUI
 
-/// Sidebar shell: repository header, tab strip, and the scroll container for
-/// the per-tab sections (which live in SidebarXxxSection files). Collapse
-/// state stays here so it survives tab switches.
+/// Sidebar shell: tab strip and the scroll container for the per-tab
+/// sections (which live in SidebarXxxSection files). Collapse state stays
+/// here so it survives tab switches. The repository identity/switcher lives
+/// in the window toolbar (see RepositorySwitcher in ContentView).
 ///
 /// Deliberately a custom ScrollView, not List: on macOS 27 beta, List rows
 /// inside NavigationSplitView render outdented/clipped.
 struct SidebarView: View {
     @Bindable var model: RepoViewModel
-    @Environment(AppModel.self) private var appModel
 
     @State private var expandedSections: Set<String> = ["branches", "remotes", "tags", "stashes"]
     @State private var collapsedBranchFolders: Set<String> = []
@@ -17,7 +17,6 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            repoHeader
             tabStrip
             Divider()
                 .opacity(0.5)
@@ -43,68 +42,6 @@ struct SidebarView: View {
             }
         }
         .safeAreaPadding(.top, 2)
-    }
-
-    // MARK: - Header
-
-    private var repoHeader: some View {
-        HStack(spacing: 9) {
-            Text(String(model.repository.name.prefix(1)).uppercased())
-                .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 22, height: 22)
-                .background(
-                    LinearGradient(
-                        colors: [DesignStyle.linkBlue, DesignStyle.brandBlue],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    in: RoundedRectangle(cornerRadius: 6)
-                )
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(model.repository.name)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(model.repository.displayPath)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer()
-
-            Menu {
-                Button("Open Another Repository…") {
-                    appModel.pickRepository()
-                }
-                ForEach(appModel.recentRepositories, id: \.path) { url in
-                    Button {
-                        appModel.openRepository(at: url)
-                    } label: {
-                        Text(url.lastPathComponent)
-                        Text(Self.abbreviatedPath(for: url))
-                    }
-                }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-    }
-
-    /// Menu items ignore Text line-limit/truncation modifiers, so ellipsize the string itself.
-    private static func abbreviatedPath(for url: URL, maxLength: Int = 48) -> String {
-        let path = url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-        guard path.count > maxLength else { return path }
-        let head = path.prefix((maxLength - 1) / 2)
-        let tail = path.suffix(maxLength / 2)
-        return "\(head)…\(tail)"
     }
 
     // MARK: - Tab strip
@@ -145,6 +82,7 @@ struct SidebarView: View {
             }
         }
         .padding(.horizontal, 10)
+        .padding(.top, 10)
         .padding(.bottom, 8)
     }
 }
