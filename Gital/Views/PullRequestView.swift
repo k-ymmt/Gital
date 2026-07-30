@@ -366,12 +366,17 @@ struct PullRequestDetailView: View {
             .padding(.vertical, 9)
             .background(.quaternary.opacity(0.3))
             Divider()
-            Text(detail.body.isEmpty ? "No description provided." : detail.body)
-                .font(.system(size: 13))
-                .lineSpacing(4)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(16)
+            if detail.body.isEmpty {
+                Text("No description provided.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            } else {
+                MarkdownPreview(markdown: detail.body)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
         }
         .cardStyle()
     }
