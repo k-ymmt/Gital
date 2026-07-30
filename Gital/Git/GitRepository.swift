@@ -35,7 +35,10 @@ final class GitRepository: @unchecked Sendable {
     // MARK: - Status
 
     func status() async throws -> WorkingStatus {
-        let data = try await executor.runData(["status", "--porcelain=v2", "--branch", "-z"])
+        // --untracked-files=all: without it git collapses an untracked
+        // directory into one "dir/" entry, so the sidebar would show a folder
+        // pseudo-file instead of the files inside it.
+        let data = try await executor.runData(["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"])
         return Self.parseStatus(data)
     }
 
