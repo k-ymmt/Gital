@@ -222,8 +222,9 @@ final class RepoViewModel {
 
     /// When the last timer-driven fetch was attempted (success or not) —
     /// consulted by `autoFetchTick` so multiple windows sharing this model
-    /// don't stack duplicate background fetches.
-    @ObservationIgnored var lastAutoFetch: Date?
+    /// don't stack duplicate background fetches. Monotonic, not `Date`: a
+    /// wall-clock gate would stop fetching after the clock jumps backwards.
+    @ObservationIgnored var lastAutoFetch: ContinuousClock.Instant?
 
     // MARK: Load supersession
     //
@@ -251,13 +252,15 @@ final class RepoViewModel {
     /// working diffs can go stale silently, so tab entry must reload.
     var isWatchingFileSystem: Bool { watcher?.isWatching == true }
 
-    init(repository: GitRepository) {
+    /// `watchFileSystem: false` is for tests only: FSEvents refreshes firing
+    /// mid-test would race assertions about which loads a code path ran.
+    init(repository: GitRepository, watchFileSystem: Bool = true) {
         self.repository = repository
         let github = GitHubService(repoRoot: repository.root)
         self.github = github
         self.codex = CodexAppServer()
         self.prs = PullRequestsModel(repository: repository, github: github)
-        startWatching()
+        if watchFileSystem { startWatching() }
     }
 
     /// Releases resources owned by this view model. Must be called when the
@@ -373,6 +376,11 @@ final class RepoViewModel {
     // MARK: - Errors
 
     func report(_ error: Error) {
+        // Cancellation is supersession or teardown (a closing window killing
+        // an auto-fetch refresh, an interval change restarting the tick
+        // loop), never a git failure — surfacing it would show a bare
+        // "CancellationError" alert.
+        if error is CancellationError { return }
         errorMessage = error.localizedDescription
     }
 }

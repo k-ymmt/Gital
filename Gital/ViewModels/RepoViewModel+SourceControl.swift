@@ -12,9 +12,17 @@ extension RepoViewModel {
     /// the PR list (a gh network call of its own) are untouched.
     func autoFetchTick(interval: TimeInterval) async {
         guard !isSyncing else { return }
-        guard AutoFetchPreference.shouldFetch(lastFetch: lastAutoFetch, now: .now, interval: interval) else { return }
-        lastAutoFetch = .now
-        guard (try? await repository.fetch()) != nil else { return }
+        let now = ContinuousClock.now
+        guard AutoFetchPreference.shouldFetch(lastFetch: lastAutoFetch, now: now, interval: interval) else { return }
+        lastAutoFetch = now
+        // Timeout because the executor serializes every git command behind
+        // this fetch: a wedged remote would otherwise stall all user
+        // operations with no busy indicator anywhere. `try?` also swallows
+        // the tick's own cancellation (window closed, interval changed) —
+        // the refreshes below must not run in either case.
+        guard (try? await Timeout.run(seconds: AutoFetchPreference.fetchTimeout) { [repository] in
+            try await repository.fetch()
+        }) != nil else { return }
         await refreshStatus()
         await refreshLog()
         await refreshRefs()
