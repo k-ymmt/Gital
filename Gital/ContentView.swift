@@ -16,16 +16,12 @@ struct ContentView: View {
             MainView(model: model)
         }
         .navigationTitle(model.repository.name)
-        // The repository identity lives in the principal toolbar item
+        // The repository identity lives in the centered toolbar switcher
         // (Xcode-style); the inline title would duplicate it. The window
         // title itself (Mission Control, window menu) keeps the repo name.
         .toolbar(removing: .title)
         .searchable(text: $model.searchText, placement: .toolbar, prompt: "Search commits, files…")
         .toolbar {
-            ToolbarItem(placement: .principal) {
-                RepositorySwitcher(model: model)
-            }
-
             ToolbarItemGroup(placement: .navigation) {
                 Button {
                     model.fetch()
@@ -58,7 +54,26 @@ struct ContentView: View {
                 .disabled(model.isSyncing)
             }
 
-            ToolbarItemGroup {
+            // .principal is not actually centered on macOS (the item lands
+            // wherever the default section starts); flexible spacers on both
+            // sides balance the switcher into the middle, Xcode-style.
+            ToolbarSpacer(.flexible)
+
+            // Detached from the shared glass background: on macOS 27 beta
+            // the flexible spacers stretch INSIDE the shared capsule, fusing
+            // the switcher with the branch/stash buttons into one blob. The
+            // switcher draws its own capsule instead (see RepositorySwitcher).
+            ToolbarItem {
+                RepositorySwitcher(model: model)
+            }
+            .sharedBackgroundVisibility(.hidden)
+
+            ToolbarSpacer(.flexible)
+
+            // Explicit trailing placement: with .automatic these buttons
+            // fuse into the switcher's glass capsule despite the flexible
+            // spacer between them.
+            ToolbarItemGroup(placement: .primaryAction) {
                 if model.isSyncing {
                     ProgressView()
                         .controlSize(.small)
@@ -165,11 +180,18 @@ private struct RepositorySwitcher: View {
             .fixedSize()
             .help("Switch repository")
         }
-        // fixedSize is load-bearing: the toolbar compresses a flexible
-        // principal item to its minimum, which collapses the texts to
-        // nothing (verified on macOS 27 beta). With fixedSize the texts get
-        // their full ideal width, so Text truncation can never engage —
+        // minWidth gives the control an Xcode-like wide footprint even for
+        // short names (content stays centered inside). fixedSize is
+        // load-bearing: the toolbar compresses a flexible item to its
+        // minimum, which collapses the texts to nothing (verified on macOS
+        // 27 beta). Under fixedSize the frame resolves to
+        // max(minWidth, ideal), and Text truncation can never engage —
         // overlong names are ellipsized in the string itself instead.
+        .frame(minWidth: 320)
+        .padding(.vertical, 5)
+        // Own capsule: the item opts out of the toolbar's shared glass
+        // background (sharedBackgroundVisibility(.hidden) in ContentView).
+        .glassEffect(.regular, in: .capsule)
         .fixedSize()
         .help(model.repository.displayPath)
     }
