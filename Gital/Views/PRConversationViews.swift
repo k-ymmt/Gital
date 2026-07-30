@@ -23,12 +23,11 @@ struct ReviewThreadCard: View {
                     Divider()
                     commentRow(comment)
                 }
-                if let error = model.prs.threadErrors[thread.id] {
+                if thread.hasMoreComments {
                     Divider()
-                    Text(error)
+                    Text("This conversation has more comments than were fetched — open it on GitHub to read the rest.")
                         .font(.system(size: 11))
-                        .foregroundStyle(DesignStyle.deletion)
-                        .textSelection(.enabled)
+                        .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 7)
@@ -39,6 +38,18 @@ struct ReviewThreadCard: View {
                 } else {
                     footer
                 }
+            }
+            // Outside the collapse: a failed unresolve on a collapsed card
+            // must still be able to say why nothing happened.
+            if let error = model.prs.threadErrors[thread.id] {
+                Divider()
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignStyle.deletion)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
             }
         }
         .cardStyle()
@@ -56,7 +67,7 @@ struct ReviewThreadCard: View {
                 threadChip("Outdated", color: .secondary)
             }
             if isCollapsed, let first = thread.comments.first {
-                Text("\(Text(first.authorLogin).foregroundStyle(.primary)): \(first.body)")
+                Text("\(Text(first.displayName).foregroundStyle(.primary)): \(first.body)")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -114,8 +125,8 @@ struct ReviewThreadCard: View {
     private func commentRow(_ comment: ReviewThread.Comment) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
-                AvatarView(name: comment.authorLogin, size: 20, url: model.avatarURL(login: comment.authorLogin, size: 20))
-                Text(comment.authorLogin)
+                AvatarView(name: comment.displayName, size: 20, url: model.avatarURL(login: comment.authorLogin, size: 20))
+                Text(comment.displayName)
                     .font(.system(size: 12, weight: .semibold))
                 Text(comment.createdAt)
                     .font(.system(size: 11))
@@ -198,7 +209,23 @@ struct ConversationsCard: View {
         .cardStyle()
     }
 
+    @ViewBuilder
     private func row(_ thread: ReviewThread) -> some View {
+        // Only rows whose file is still part of the PR get click affordances;
+        // an outdated thread on a since-removed change has nowhere to go.
+        if detail.files.contains(where: { $0.path == thread.path }) {
+            rowContent(thread)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    model.prs.selectItem(.file(path: thread.path), in: detail.number)
+                }
+                .help("Open this file's diff")
+        } else {
+            rowContent(thread)
+        }
+    }
+
+    private func rowContent(_ thread: ReviewThread) -> some View {
         HStack(spacing: 10) {
             Image(systemName: thread.isResolved ? "checkmark.bubble" : "bubble.left")
                 .font(.system(size: 12))
@@ -216,7 +243,7 @@ struct ConversationsCard: View {
                     }
                 }
                 if let first = thread.comments.first {
-                    Text("\(Text(first.authorLogin).fontWeight(.medium)): \(first.body)")
+                    Text("\(Text(first.displayName).fontWeight(.medium)): \(first.body)")
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -229,14 +256,5 @@ struct ConversationsCard: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            // Outdated threads don't anchor anywhere; the file diff is still
-            // the closest place to look, when the file is part of the PR.
-            if detail.files.contains(where: { $0.path == thread.path }) {
-                model.prs.selectItem(.file(path: thread.path), in: detail.number)
-            }
-        }
-        .help("Open this file's diff")
     }
 }

@@ -509,6 +509,10 @@ final class PullRequestsModel {
     /// Resolved threads collapse to one row; this records the ones the user
     /// expanded back open. Model-owned to survive row recycling.
     var expandedThreadIDs: Set<String> = []
+    /// One loader per PR so a slow fetch can't overwrite the state a newer
+    /// fetch of the same PR produced (resolve → refresh → stale response),
+    /// while fetches for different PRs never supersede each other.
+    @ObservationIgnored private var threadLoaders: [Int: LatestLoader] = [:]
 
     func threads(for number: Int) -> [ReviewThread] {
         reviewThreads[number] ?? []
@@ -519,18 +523,33 @@ final class PullRequestsModel {
     }
 
     func loadThreads(_ number: Int) async {
-        do {
-            let threads = try await github.reviewThreads(number: number)
+        let loader = threadLoaders[number] ?? LatestLoader()
+        threadLoaders[number] = loader
+        let result = await loader.run { [github] in
+            try await github.reviewThreads(number: number)
+        }
+        switch result {
+        case .success(let threads):
+            // Per-thread UI state of threads that no longer exist (deleted
+            // on GitHub) would otherwise linger for the whole session.
+            let gone = Set((reviewThreads[number] ?? []).map(\.id))
+                .subtracting(threads.map(\.id))
+            for id in gone {
+                threadErrors[id] = nil
+                expandedThreadIDs.remove(id)
+            }
             reviewThreads[number] = threads
             if selectedNumber == number {
                 threadsLoadError = nil
             }
-        } catch {
+        case .failure(let error):
             // Stale threads stay on screen; the error only surfaces for the
             // PR being looked at.
             if selectedNumber == number {
                 threadsLoadError = error.localizedDescription
             }
+        case nil:
+            break  // superseded by a newer fetch of this PR
         }
     }
 
@@ -556,7 +575,12 @@ final class PullRequestsModel {
         defer { isSendingReply = false }
         do {
             try await github.replyToReviewComment(number: number, commentID: rootID, body: body)
-            closeReply()
+            // Close only if the composer still belongs to this thread — the
+            // user may have opened a reply on another thread mid-flight, and
+            // its half-typed text must not be wiped.
+            if replyingThreadID == thread.id {
+                closeReply()
+            }
             await loadThreads(number)
         } catch {
             threadErrors[thread.id] = error.localizedDescription

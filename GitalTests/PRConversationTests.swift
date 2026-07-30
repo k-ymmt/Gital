@@ -10,6 +10,7 @@ struct PRConversationTests {
         "repository": {
           "pullRequest": {
             "reviewThreads": {
+              "pageInfo": { "hasNextPage": false, "endCursor": "END" },
               "nodes": [
                 {
                   "id": "RT_kwDO1",
@@ -19,6 +20,7 @@ struct PRConversationTests {
                   "line": 12,
                   "diffSide": "RIGHT",
                   "comments": {
+                    "pageInfo": { "hasNextPage": true },
                     "nodes": [
                       {
                         "databaseId": 101,
@@ -45,6 +47,7 @@ struct PRConversationTests {
                   "line": null,
                   "diffSide": "LEFT",
                   "comments": {
+                    "pageInfo": { "hasNextPage": false },
                     "nodes": [
                       {
                         "databaseId": 201,
@@ -84,7 +87,9 @@ struct PRConversationTests {
     """
 
     @Test func parseThreads() throws {
-        let threads = try GitHubService.parseReviewThreads(Data(Self.sampleResponse.utf8))
+        let page = try GitHubService.parseReviewThreadsPage(Data(Self.sampleResponse.utf8))
+        let threads = page.threads
+        #expect(page.nextCursor == nil, "hasNextPage=false means no cursor, even when endCursor is present")
         // The third thread's only comment has no databaseId (a server-side
         // pending draft) — it can't be replied to and the thread is dropped.
         #expect(threads.count == 2)
@@ -99,21 +104,37 @@ struct PRConversationTests {
         #expect(!first.isOutdated)
         #expect(first.comments.map(\.id) == [101, 102])
         #expect(first.comments[0].authorLogin == "alice")
-        #expect(first.comments[1].authorLogin == "unknown", "deleted accounts come through with a null author")
+        #expect(first.comments[1].authorLogin == nil, "deleted accounts stay nil — a placeholder login would fetch a real user's avatar")
+        #expect(first.comments[1].displayName == "ghost")
         #expect(first.comments[0].body == "Should this be optional?")
         #expect(!first.comments[0].createdAt.isEmpty)
+        #expect(first.hasMoreComments, "comment-page truncation must be surfaced, not silent")
 
         let outdated = threads[1]
         #expect(outdated.line == nil, "outdated threads carry no current-diff line")
         #expect(outdated.side == .left)
         #expect(outdated.isResolved && outdated.isOutdated)
         #expect(outdated.lineText == "Ths line")
+        #expect(!outdated.hasMoreComments)
+    }
+
+    @Test func parseThreadsPagination() throws {
+        let json = """
+        {"data": {"repository": {"pullRequest": {"reviewThreads": {
+          "pageInfo": { "hasNextPage": true, "endCursor": "CURSOR1" },
+          "nodes": []
+        }}}}}
+        """
+        let page = try GitHubService.parseReviewThreadsPage(Data(json.utf8))
+        #expect(page.nextCursor == "CURSOR1")
+        #expect(page.threads.isEmpty)
     }
 
     @Test func parseThreadsMissingPR() throws {
         let json = #"{"data": {"repository": {"pullRequest": null}}}"#
-        let threads = try GitHubService.parseReviewThreads(Data(json.utf8))
-        #expect(threads.isEmpty)
+        let page = try GitHubService.parseReviewThreadsPage(Data(json.utf8))
+        #expect(page.threads.isEmpty)
+        #expect(page.nextCursor == nil)
     }
 
     @Test func lineTextFromDiffHunk() {
@@ -133,7 +154,8 @@ struct PRConversationTests {
             ReviewThread(
                 id: "t", path: "a.swift", side: side, line: line, lineText: lineText,
                 isResolved: false, isOutdated: false,
-                comments: [.init(id: 1, authorLogin: "alice", body: "hi", createdAt: "now")]
+                comments: [.init(id: 1, authorLogin: "alice", body: "hi", createdAt: "now")],
+                hasMoreComments: false
             )
         }
         let addition = DiffLine(id: "a.swift@0", kind: .addition, text: "new", oldNumber: nil, newNumber: 12)

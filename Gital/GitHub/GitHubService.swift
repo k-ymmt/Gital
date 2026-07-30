@@ -286,13 +286,15 @@ struct GitHubService {
     /// placeholders in `-F` values are substituted by gh from the repository
     /// the command runs in, same as in REST paths.
     static let reviewThreadsQuery = """
-    query($owner: String!, $name: String!, $number: Int!) {
+    query($owner: String!, $name: String!, $number: Int!, $after: String) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $number) {
-          reviewThreads(first: 100) {
+          reviewThreads(first: 100, after: $after) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id isResolved isOutdated path line diffSide
               comments(first: 100) {
+                pageInfo { hasNextPage }
                 nodes { databaseId body createdAt author { login } diffHunk }
               }
             }
@@ -303,20 +305,41 @@ struct GitHubService {
     """
 
     func reviewThreads(number: Int) async throws -> [ReviewThread] {
-        let data = try await runGH([
-            "api", "graphql",
-            "-F", "owner={owner}", "-F", "name={repo}", "-F", "number=\(number)",
-            "-f", "query=\(Self.reviewThreadsQuery)",
-        ])
-        return try Self.parseReviewThreads(data)
+        var threads: [ReviewThread] = []
+        var after: String?
+        // Follows the thread cursor to the end so big review rounds aren't
+        // silently cut at 100; the page cap only stops a server gone mad
+        // from looping forever.
+        for _ in 0..<20 {
+            var arguments = [
+                "api", "graphql",
+                "-F", "owner={owner}", "-F", "name={repo}", "-F", "number=\(number)",
+                "-f", "query=\(Self.reviewThreadsQuery)",
+            ]
+            if let after {
+                arguments += ["-f", "after=\(after)"]
+            }
+            let page = try Self.parseReviewThreadsPage(try await runGH(arguments))
+            threads += page.threads
+            guard let next = page.nextCursor else { break }
+            after = next
+        }
+        return threads
     }
 
-    static func parseReviewThreads(_ data: Data) throws -> [ReviewThread] {
+    static func parseReviewThreadsPage(_ data: Data) throws -> (threads: [ReviewThread], nextCursor: String?) {
         struct Response: Decodable {
             struct DataObject: Decodable { let repository: Repository? }
             struct Repository: Decodable { let pullRequest: PullRequest? }
             struct PullRequest: Decodable { let reviewThreads: ThreadConnection }
-            struct ThreadConnection: Decodable { let nodes: [ThreadNode] }
+            struct ThreadConnection: Decodable {
+                let pageInfo: PageInfo?
+                let nodes: [ThreadNode]
+            }
+            struct PageInfo: Decodable {
+                let hasNextPage: Bool
+                let endCursor: String?
+            }
             struct ThreadNode: Decodable {
                 let id: String
                 let isResolved: Bool
@@ -326,7 +349,10 @@ struct GitHubService {
                 let diffSide: String
                 let comments: CommentConnection
             }
-            struct CommentConnection: Decodable { let nodes: [CommentNode] }
+            struct CommentConnection: Decodable {
+                let pageInfo: PageInfo?
+                let nodes: [CommentNode]
+            }
             struct CommentNode: Decodable {
                 struct Author: Decodable { let login: String }
                 let databaseId: Int?
@@ -339,8 +365,8 @@ struct GitHubService {
         }
 
         let response = try Self.decode(Response.self, from: data, command: "gh api graphql")
-        let nodes = response.data?.repository?.pullRequest?.reviewThreads.nodes ?? []
-        return nodes.compactMap { node in
+        let connection = response.data?.repository?.pullRequest?.reviewThreads
+        let threads = (connection?.nodes ?? []).compactMap { node -> ReviewThread? in
             // Comments without a databaseId (only server-side pending-review
             // drafts have none) can't be replied to and are dropped; a thread
             // left without comments has nothing to show.
@@ -348,7 +374,9 @@ struct GitHubService {
                 guard let id = comment.databaseId else { return nil }
                 return ReviewThread.Comment(
                     id: id,
-                    authorLogin: comment.author?.login ?? "unknown",
+                    // Nil stays nil (deleted "ghost" accounts) — a fallback
+                    // string here would fetch a real github.com user's avatar.
+                    authorLogin: comment.author?.login,
                     body: comment.body,
                     createdAt: relativeDate(from: comment.createdAt)
                 )
@@ -362,9 +390,13 @@ struct GitHubService {
                 lineText: ReviewThread.lineText(fromDiffHunk: node.comments.nodes.first?.diffHunk),
                 isResolved: node.isResolved,
                 isOutdated: node.isOutdated,
-                comments: comments
+                comments: comments,
+                hasMoreComments: node.comments.pageInfo?.hasNextPage == true
             )
         }
+        let pageInfo = connection?.pageInfo
+        let nextCursor = pageInfo?.hasNextPage == true ? pageInfo?.endCursor : nil
+        return (threads, nextCursor)
     }
 
     /// Replies to an existing thread. The REST replies endpoint takes the

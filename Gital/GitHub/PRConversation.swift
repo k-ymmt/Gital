@@ -8,10 +8,15 @@ struct ReviewThread: Identifiable, Hashable {
     struct Comment: Identifiable, Hashable {
         /// REST `databaseId`, the ID the reply endpoint takes.
         let id: Int
-        let authorLogin: String
+        /// Nil when the author's account was deleted; avatar lookups must
+        /// receive the nil, not a placeholder that names a real github.com
+        /// user.
+        let authorLogin: String?
         let body: String
         /// Already formatted for display ("2 days ago").
         let createdAt: String
+
+        var displayName: String { authorLogin ?? "ghost" }
     }
 
     /// GraphQL node ID, consumed by the resolve/unresolve mutations.
@@ -29,6 +34,10 @@ struct ReviewThread: Identifiable, Hashable {
     let isResolved: Bool
     let isOutdated: Bool
     let comments: [Comment]
+    /// True when GitHub reported more comments than the fetch page held —
+    /// the card then says so instead of passing the truncation off as the
+    /// whole conversation.
+    let hasMoreComments: Bool
 
     /// Whether this thread belongs under the given displayed diff line:
     /// coordinates must match AND, when the anchor line's content is known,
