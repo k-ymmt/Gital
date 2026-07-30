@@ -119,6 +119,102 @@ struct MarkdownPreviewTests {
         #expect(blocks.count == 2, "CRLF input parses the same as LF")
     }
 
+    // A fence inside a block quote must be tracked too, or the hard-break
+    // suffix leaks into the quoted code's content.
+    @Test func quotedFencedCodeKeepsContentClean() throws {
+        let blocks = MarkdownBlockParser.parse("> ```\n> let a = 1\n> let b = 2\n> ```")
+        #expect(blocks.count == 1)
+        #expect(blocks[0].quoteDepth == 1)
+        guard case .codeBlock(let code) = blocks[0].kind else {
+            Issue.record("expected code block, got \(blocks[0].kind)")
+            return
+        }
+        #expect(code == "let a = 1\nlet b = 2", "no trailing spaces injected into quoted code")
+    }
+
+    // CommonMark: a tilde fence closes only with tildes, so backtick lines
+    // inside it are content and must stay untouched.
+    @Test func tildeFenceMayContainBackticks() throws {
+        let blocks = MarkdownBlockParser.parse("~~~\n```\ninner code\n```\n~~~")
+        guard case .codeBlock(let code) = blocks[0].kind else {
+            Issue.record("expected code block, got \(blocks[0].kind)")
+            return
+        }
+        #expect(code == "```\ninner code\n```")
+    }
+
+    // A backtick fence whose info string contains a backtick is not a fence;
+    // it must not flip the tracker and swallow hard breaks for the rest of
+    // the document.
+    @Test func falseFenceDoesNotSwallowHardBreaks() {
+        let output = MarkdownBlockParser.insertingHardBreaks("``` `` x\nplain one\nplain two")
+        #expect(output.contains("plain one  \n"), "paragraph lines after the false fence keep their breaks")
+    }
+
+    // A ``` marker indented four spaces is indented-code content, not a fence.
+    @Test func indentedFenceMarkerDoesNotToggle() {
+        let output = MarkdownBlockParser.insertingHardBreaks("    ```\nplain one\nplain two")
+        #expect(output.contains("plain one  \n"))
+        #expect(!output.contains("```  "), "the indented marker itself stays untouched")
+    }
+
+    @Test func closingFenceMustMatchCharAndLength() throws {
+        let mixed = MarkdownBlockParser.parse("```\ncode\n~~~\nmore\n```")
+        guard case .codeBlock(let mixedCode) = mixed[0].kind else {
+            Issue.record("expected code block")
+            return
+        }
+        #expect(mixedCode == "code\n~~~\nmore", "tildes don't close a backtick fence")
+
+        let longer = MarkdownBlockParser.parse("````\n```\ncode\n````")
+        guard case .codeBlock(let longerCode) = longer[0].kind else {
+            Issue.record("expected code block")
+            return
+        }
+        #expect(longerCode == "```\ncode", "a shorter run doesn't close a longer fence")
+    }
+
+    // A heading as a list item's first block consumes the item's marker slot:
+    // the follow-up paragraph is a continuation, not a second marker.
+    @Test func headingFirstListItemDoesNotDuplicateMarkers() throws {
+        let blocks = MarkdownBlockParser.parse("- ## Head\n\n  para under\n- second")
+        #expect(blocks.count == 3)
+        guard case .heading(_, let head) = blocks[0].kind else {
+            Issue.record("expected heading, got \(blocks[0].kind)")
+            return
+        }
+        #expect(plain(head) == "Head")
+        #expect(blocks[0].listIndent == 1, "the heading indents as list content")
+        guard case .listItem(_, .continuation, _) = blocks[1].kind else {
+            Issue.record("expected continuation, got \(blocks[1].kind)")
+            return
+        }
+        guard case .listItem(_, .bullet, _) = blocks[2].kind else {
+            Issue.record("expected bullet, got \(blocks[2].kind)")
+            return
+        }
+    }
+
+    @Test func codeBlockInsideListItemIndents() throws {
+        let blocks = MarkdownBlockParser.parse("1. item\n\n   ```\n   code\n   ```\n\n2. two")
+        let codeBlock = try #require(blocks.first {
+            if case .codeBlock = $0.kind { return true } else { return false }
+        })
+        #expect(codeBlock.listIndent == 1, "code inside a list item is indented as list content")
+    }
+
+    // Text can't show the bitmap, so the alt text becomes a link to the image.
+    @Test func imageBecomesLinkToItsURL() throws {
+        let blocks = MarkdownBlockParser.parse("![screenshot](https://example.com/a.png)")
+        guard case .paragraph(let text) = blocks[0].kind else {
+            Issue.record("expected paragraph, got \(blocks[0].kind)")
+            return
+        }
+        #expect(plain(text) == "screenshot")
+        let linked = text.runs.compactMap(\.link)
+        #expect(linked == [URL(string: "https://example.com/a.png")!], "alt text links to the image URL")
+    }
+
     @Test func multiParagraphListItemMarksContinuation() throws {
         let blocks = MarkdownBlockParser.parse("- first paragraph\n\n  second paragraph\n- next item")
         let markers: [MarkdownBlock.ListMarker] = blocks.compactMap {

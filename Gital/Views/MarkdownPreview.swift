@@ -24,6 +24,9 @@ struct MarkdownBlock: Identifiable {
     let id: Int
     /// How many block quotes enclose this block (0 = top level).
     let quoteDepth: Int
+    /// Extra list-content indentation for non-`listItem` blocks (headings,
+    /// code blocks, tables) that live inside a list item.
+    var listIndent: Int = 0
     let kind: Kind
 }
 
@@ -44,9 +47,23 @@ enum MarkdownBlockParser {
 
         func flushTable() {
             if let finished = table {
-                blocks.append(MarkdownBlock(id: blocks.count, quoteDepth: finished.quoteDepth, kind: finished.build()))
+                blocks.append(MarkdownBlock(
+                    id: blocks.count,
+                    quoteDepth: finished.quoteDepth,
+                    listIndent: finished.listIndent,
+                    kind: finished.build()
+                ))
                 table = nil
             }
+        }
+
+        // A non-paragraph block occupying a list item still consumes the
+        // item's marker slot, so its follow-up paragraphs render as
+        // continuations instead of sprouting a second marker.
+        func consumeListItem(_ context: BlockContext) -> Int {
+            guard let item = context.listItem else { return 0 }
+            seenListItems.insert(item.identity)
+            return item.depth + 1
         }
 
         for group in leafGroups(of: source) {
@@ -55,7 +72,12 @@ enum MarkdownBlockParser {
             if let cell = context.tableCell {
                 if table?.identity != cell.tableIdentity {
                     flushTable()
-                    table = TableBuilder(identity: cell.tableIdentity, columns: cell.columns, quoteDepth: context.quoteDepth)
+                    table = TableBuilder(
+                        identity: cell.tableIdentity,
+                        columns: cell.columns,
+                        quoteDepth: context.quoteDepth,
+                        listIndent: consumeListItem(context)
+                    )
                 }
                 table?.add(cell: styledInline(group.text), column: cell.column, row: cell.row)
                 continue
@@ -63,14 +85,17 @@ enum MarkdownBlockParser {
             flushTable()
 
             let kind: MarkdownBlock.Kind
+            var listIndent = 0
             if context.isThematicBreak {
                 kind = .thematicBreak
             } else if context.isCodeBlock {
                 var code = String(group.text.characters)
                 while code.hasSuffix("\n") { code.removeLast() }
                 kind = .codeBlock(code)
+                listIndent = consumeListItem(context)
             } else if let level = context.headerLevel {
                 kind = .heading(level: min(max(level, 1), 6), text: styledInline(group.text))
+                listIndent = consumeListItem(context)
             } else if let item = context.listItem {
                 var marker: MarkdownBlock.ListMarker = item.ordered ? .ordered(item.ordinal) : .bullet
                 var text = styledInline(group.text)
@@ -88,7 +113,7 @@ enum MarkdownBlockParser {
                 if text.characters.isEmpty { continue }
                 kind = .paragraph(text)
             }
-            blocks.append(MarkdownBlock(id: blocks.count, quoteDepth: context.quoteDepth, kind: kind))
+            blocks.append(MarkdownBlock(id: blocks.count, quoteDepth: context.quoteDepth, listIndent: listIndent, kind: kind))
         }
         flushTable()
         return blocks
@@ -97,26 +122,61 @@ enum MarkdownBlockParser {
     /// GitHub renders a single newline inside a comment paragraph as a hard
     /// line break, while CommonMark treats it as a space. Append the two-space
     /// hard-break suffix to interior lines so the preview matches github.com,
-    /// leaving fenced/indented code untouched.
+    /// leaving fenced/indented code untouched. Fence tracking follows
+    /// CommonMark: block-quote markers are stripped first (so `> ```` ``` ````
+    /// opens a fence too), a fence only closes on the same character with at
+    /// least the opening run's length, and a backtick fence whose info string
+    /// contains a backtick is not a fence at all.
     static func insertingHardBreaks(_ markdown: String) -> String {
-        var inFence = false
+        var openFence: (char: Character, length: Int)?
         let lines = markdown.components(separatedBy: "\n")
-        let processed = lines.enumerated().map { index, line in
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") {
-                inFence.toggle()
+        let processed = lines.enumerated().map { index, line -> String in
+            let content = strippingQuoteMarkers(line)
+            if let fence = openFence {
+                if closesFence(content, opening: fence) { openFence = nil }
                 return line
             }
-            guard !inFence,
-                  !trimmed.isEmpty,
-                  !line.hasPrefix("    "), !line.hasPrefix("\t"),
+            let isIndentedCode = content.hasPrefix("    ") || content.hasPrefix("\t")
+            if !isIndentedCode, let fence = openingFence(content) {
+                openFence = fence
+                return line
+            }
+            guard !isIndentedCode,
+                  !content.trimmingCharacters(in: .whitespaces).isEmpty,
                   !line.hasSuffix("  "), !line.hasSuffix("\\"),
                   index + 1 < lines.count,
-                  !lines[index + 1].trimmingCharacters(in: .whitespaces).isEmpty
+                  !strippingQuoteMarkers(lines[index + 1]).trimmingCharacters(in: .whitespaces).isEmpty
             else { return line }
             return line + "  "
         }
         return processed.joined(separator: "\n")
+    }
+
+    private static func strippingQuoteMarkers(_ line: String) -> String {
+        var rest = Substring(line)
+        while true {
+            let afterSpaces = rest.drop(while: { $0 == " " })
+            guard afterSpaces.first == ">" else { break }
+            rest = afterSpaces.dropFirst()
+            if rest.first == " " { rest = rest.dropFirst() }
+        }
+        return String(rest)
+    }
+
+    private static func openingFence(_ content: String) -> (char: Character, length: Int)? {
+        let trimmed = content.trimmingCharacters(in: .whitespaces)
+        guard let first = trimmed.first, first == "`" || first == "~" else { return nil }
+        let run = trimmed.prefix(while: { $0 == first })
+        guard run.count >= 3 else { return nil }
+        if first == "`", trimmed.dropFirst(run.count).contains("`") { return nil }
+        return (first, run.count)
+    }
+
+    private static func closesFence(_ content: String, opening: (char: Character, length: Int)) -> Bool {
+        guard !content.hasPrefix("    "), !content.hasPrefix("\t") else { return false }
+        let trimmed = content.trimmingCharacters(in: .whitespaces)
+        let run = trimmed.prefix(while: { $0 == opening.char })
+        return run.count >= opening.length && trimmed.dropFirst(run.count).isEmpty
     }
 
     // MARK: - Intent flattening
@@ -190,13 +250,15 @@ enum MarkdownBlockParser {
         let identity: Int
         let columns: Int
         let quoteDepth: Int
+        let listIndent: Int
         private var header: [Int: AttributedString] = [:]
         private var rows: [Int: [Int: AttributedString]] = [:]
 
-        init(identity: Int, columns: Int, quoteDepth: Int) {
+        init(identity: Int, columns: Int, quoteDepth: Int, listIndent: Int) {
             self.identity = identity
             self.columns = columns
             self.quoteDepth = quoteDepth
+            self.listIndent = listIndent
         }
 
         mutating func add(cell: AttributedString, column: Int, row: Row) {
@@ -258,6 +320,12 @@ enum MarkdownBlockParser {
             if run.link != nil {
                 result[run.range].foregroundColor = DesignStyle.linkBlue
             }
+            if let imageURL = run.imageURL {
+                // Text can't inline the bitmap; degrade the alt text to a
+                // link instead of showing a bare word with no affordance.
+                result[run.range].link = imageURL
+                result[run.range].foregroundColor = DesignStyle.linkBlue
+            }
         }
         return result
     }
@@ -285,8 +353,23 @@ enum MarkdownBlockParser {
 struct MarkdownPreview: View {
     private let blocks: [MarkdownBlock]
 
+    // SwiftUI re-evaluates the parent body on unrelated state changes (avatar
+    // loads, Viewed toggles), and parsing a huge bot-generated body costs
+    // visible milliseconds — memoize per source string.
+    private static var cache: [String: [MarkdownBlock]] = [:]
+    private static var cacheOrder: [String] = []
+
     init(markdown: String) {
-        blocks = MarkdownBlockParser.parse(markdown)
+        if let hit = Self.cache[markdown] {
+            blocks = hit
+        } else {
+            blocks = MarkdownBlockParser.parse(markdown)
+            Self.cache[markdown] = blocks
+            Self.cacheOrder.append(markdown)
+            if Self.cacheOrder.count > 16 {
+                Self.cache.removeValue(forKey: Self.cacheOrder.removeFirst())
+            }
+        }
     }
 
     var body: some View {
@@ -303,13 +386,17 @@ private struct MarkdownBlockView: View {
 
     var body: some View {
         if block.quoteDepth > 0 {
-            content
+            indentedContent
                 .foregroundStyle(.secondary)
                 .padding(.leading, CGFloat(block.quoteDepth) * 13)
                 .overlay(alignment: .leading) { quoteBars }
         } else {
-            content
+            indentedContent
         }
+    }
+
+    private var indentedContent: some View {
+        content.padding(.leading, CGFloat(block.listIndent) * 18)
     }
 
     private var quoteBars: some View {
