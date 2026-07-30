@@ -8,9 +8,6 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var model: RepoViewModel
 
-    @State private var newBranchName = ""
-    @State private var stashMessage = ""
-
     var body: some View {
         NavigationSplitView {
             SidebarView(model: model)
@@ -67,7 +64,7 @@ struct ContentView: View {
                 }
                 .help("Create a new branch")
                 .popover(isPresented: $model.isCreatingBranch, arrowEdge: .bottom) {
-                    branchPopover
+                    NewBranchPopover(model: model)
                 }
 
                 Button {
@@ -77,7 +74,7 @@ struct ContentView: View {
                 }
                 .help("Stash working copy changes")
                 .popover(isPresented: $model.isStashing, arrowEdge: .bottom) {
-                    stashPopover
+                    StashPopover(model: model)
                 }
             }
         }
@@ -107,37 +104,58 @@ struct ContentView: View {
         return "detached HEAD"
     }
 
-    private var branchPopover: some View {
+}
+
+/// Popover bodies are standalone structs, not computed properties of the
+/// presenting view: observable state accessed inline in a presentation
+/// closure inside NavigationSplitView trips an AppKit constraint-
+/// invalidation loop (uncaught exception in _postWindowNeedsUpdateConstraints,
+/// FB re macOS 15.4+; structure per Apple DTS workaround).
+private struct NewBranchPopover: View {
+    let model: RepoViewModel
+    @State private var name = ""
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("New Branch")
                 .font(.headline)
-            TextField("Branch name", text: $newBranchName)
+            TextField("Branch name", text: $name)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
-                .onSubmit(createBranch)
+                .onSubmit(create)
             HStack {
                 Spacer()
                 Button("Cancel") { model.isCreatingBranch = false }
-                Button("Create") { createBranch() }
+                Button("Create") { create() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(newBranchName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
         .padding(16)
     }
 
-    private var stashPopover: some View {
+    private func create() {
+        model.createBranch(name: name)
+        model.isCreatingBranch = false
+    }
+}
+
+private struct StashPopover: View {
+    let model: RepoViewModel
+    @State private var message = ""
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Stash Changes")
                 .font(.headline)
-            TextField("Message (optional)", text: $stashMessage)
+            TextField("Message (optional)", text: $message)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 240)
-                .onSubmit(stashChanges)
+                .onSubmit(stash)
             HStack {
                 Spacer()
                 Button("Cancel") { model.isStashing = false }
-                Button("Stash") { stashChanges() }
+                Button("Stash") { stash() }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.status.staged.isEmpty && model.status.unstaged.isEmpty)
             }
@@ -145,15 +163,8 @@ struct ContentView: View {
         .padding(16)
     }
 
-    private func createBranch() {
-        model.createBranch(name: newBranchName)
-        newBranchName = ""
-        model.isCreatingBranch = false
-    }
-
-    private func stashChanges() {
-        model.stashPush(message: stashMessage)
-        stashMessage = ""
+    private func stash() {
+        model.stashPush(message: message)
         model.isStashing = false
     }
 }
