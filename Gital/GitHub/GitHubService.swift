@@ -279,6 +279,117 @@ struct GitHubService {
         return try encoder.encode(payload)
     }
 
+    // MARK: - Review conversations
+
+    /// GraphQL is the only API that exposes a thread's resolved state and the
+    /// node ID the resolve/unresolve mutations take. `{owner}`/`{repo}`
+    /// placeholders in `-F` values are substituted by gh from the repository
+    /// the command runs in, same as in REST paths.
+    static let reviewThreadsQuery = """
+    query($owner: String!, $name: String!, $number: Int!) {
+      repository(owner: $owner, name: $name) {
+        pullRequest(number: $number) {
+          reviewThreads(first: 100) {
+            nodes {
+              id isResolved isOutdated path line diffSide
+              comments(first: 100) {
+                nodes { databaseId body createdAt author { login } diffHunk }
+              }
+            }
+          }
+        }
+      }
+    }
+    """
+
+    func reviewThreads(number: Int) async throws -> [ReviewThread] {
+        let data = try await runGH([
+            "api", "graphql",
+            "-F", "owner={owner}", "-F", "name={repo}", "-F", "number=\(number)",
+            "-f", "query=\(Self.reviewThreadsQuery)",
+        ])
+        return try Self.parseReviewThreads(data)
+    }
+
+    static func parseReviewThreads(_ data: Data) throws -> [ReviewThread] {
+        struct Response: Decodable {
+            struct DataObject: Decodable { let repository: Repository? }
+            struct Repository: Decodable { let pullRequest: PullRequest? }
+            struct PullRequest: Decodable { let reviewThreads: ThreadConnection }
+            struct ThreadConnection: Decodable { let nodes: [ThreadNode] }
+            struct ThreadNode: Decodable {
+                let id: String
+                let isResolved: Bool
+                let isOutdated: Bool
+                let path: String
+                let line: Int?
+                let diffSide: String
+                let comments: CommentConnection
+            }
+            struct CommentConnection: Decodable { let nodes: [CommentNode] }
+            struct CommentNode: Decodable {
+                struct Author: Decodable { let login: String }
+                let databaseId: Int?
+                let body: String
+                let createdAt: String
+                let author: Author?
+                let diffHunk: String?
+            }
+            let data: DataObject?
+        }
+
+        let response = try Self.decode(Response.self, from: data, command: "gh api graphql")
+        let nodes = response.data?.repository?.pullRequest?.reviewThreads.nodes ?? []
+        return nodes.compactMap { node in
+            // Comments without a databaseId (only server-side pending-review
+            // drafts have none) can't be replied to and are dropped; a thread
+            // left without comments has nothing to show.
+            let comments = node.comments.nodes.compactMap { comment -> ReviewThread.Comment? in
+                guard let id = comment.databaseId else { return nil }
+                return ReviewThread.Comment(
+                    id: id,
+                    authorLogin: comment.author?.login ?? "unknown",
+                    body: comment.body,
+                    createdAt: relativeDate(from: comment.createdAt)
+                )
+            }
+            guard !comments.isEmpty else { return nil }
+            return ReviewThread(
+                id: node.id,
+                path: node.path,
+                side: node.diffSide == "LEFT" ? .left : .right,
+                line: node.line,
+                lineText: ReviewThread.lineText(fromDiffHunk: node.comments.nodes.first?.diffHunk),
+                isResolved: node.isResolved,
+                isOutdated: node.isOutdated,
+                comments: comments
+            )
+        }
+    }
+
+    /// Replies to an existing thread. The REST replies endpoint takes the
+    /// thread's root comment ID; GitHub attaches the reply to the thread
+    /// regardless of which of its comments the ID names.
+    func replyToReviewComment(number: Int, commentID: Int, body: String) async throws {
+        _ = try await runGH(
+            ["api", "repos/{owner}/{repo}/pulls/\(number)/comments/\(commentID)/replies",
+             "--method", "POST", "--input", "-"],
+            stdin: try Self.replyBody(body)
+        )
+    }
+
+    static func replyBody(_ body: String) throws -> Data {
+        struct Payload: Encodable { let body: String }
+        return try JSONEncoder().encode(Payload(body: body))
+    }
+
+    func setThreadResolved(_ threadID: String, resolved: Bool) async throws {
+        let mutation = resolved
+            ? "mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { id } } }"
+            : "mutation($id: ID!) { unresolveReviewThread(input: {threadId: $id}) { thread { id } } }"
+        _ = try await runGH(["api", "graphql", "-f", "id=\(threadID)", "-f", "query=\(mutation)"])
+    }
+
     /// Decodes gh JSON output, wrapping decode failures with the subcommand
     /// that produced the data — a raw `DecodingError` in the UI gives the
     /// user no clue which gh call broke.

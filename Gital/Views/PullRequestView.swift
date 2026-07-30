@@ -135,6 +135,9 @@ struct PullRequestItemDiffView: View {
             // row; composing new comments happens in unified mode.
             ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
                 SplitDiffRowView(row: row)
+                ForEach(splitRowThreads(row, in: diff, number: number)) { thread in
+                    ReviewThreadCard(model: model, thread: thread, number: number)
+                }
                 ForEach(splitRowComments(row, in: diff, number: number)) { comment in
                     PendingReviewCommentCard(model: model, comment: comment, number: number)
                 }
@@ -151,12 +154,32 @@ struct PullRequestItemDiffView: View {
             }
         }
         if anchor != nil {
+            // Published conversations first, then local drafts — history
+            // above what is still pending, like GitHub.
+            ForEach(model.prs.threads(on: line, path: diff.path, in: number)) { thread in
+                ReviewThreadCard(model: model, thread: thread, number: number)
+            }
             ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
                 PendingReviewCommentCard(model: model, comment: comment, number: number)
             }
             if canComment, model.prs.reviewComposerAnchor == anchor,
                model.prs.reviewComposerLineText == line.text {
                 ReviewCommentComposerView(model: model, number: number)
+            }
+        }
+    }
+
+    private func splitRowThreads(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [ReviewThread] {
+        guard !row.isHunkHeader else { return [] }
+        return model.prs.threads(for: number).filter { thread in
+            guard thread.path == diff.path, let line = thread.line else { return false }
+            switch thread.side {
+            case .left:
+                return row.left.kind == .deletion && row.left.number == line
+                    && (thread.lineText.map { row.left.text == $0 } ?? true)
+            case .right:
+                return row.right.kind != nil && row.right.number == line
+                    && (thread.lineText.map { row.right.text == $0 } ?? true)
             }
         }
     }
@@ -271,6 +294,19 @@ struct PullRequestDetailView: View {
 
                 sectionTitle("Reviewers")
                 reviewersCard
+
+                // A refresh failure only replaces the list when there is no
+                // (possibly stale) cached copy left to show.
+                if let error = model.prs.threadsLoadError, model.prs.threads(for: detail.number).isEmpty {
+                    sectionTitle("Conversations")
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundStyle(DesignStyle.deletion)
+                        .textSelection(.enabled)
+                } else if !model.prs.threads(for: detail.number).isEmpty {
+                    sectionTitle("Conversations", count: model.prs.threads(for: detail.number).count)
+                    ConversationsCard(model: model, detail: detail)
+                }
 
                 // Also shown on closed/merged PRs while drafts remain, so
                 // leftover pending comments never become unreachable.

@@ -116,6 +116,10 @@ final class PullRequestsModel {
                 // can contain the same path/line anchor, where it would
                 // resurface with the previous PR's half-typed text.
                 closeReviewComposer()
+                closeReply()
+                // The previous PR's fetch failure must not show under the
+                // newly selected one while its threads load.
+                threadsLoadError = nil
                 Task { await loadDetail() }
             }
         }
@@ -130,6 +134,7 @@ final class PullRequestsModel {
                 // diff vs whole-PR diff), so an open composer would resurface
                 // under an unrelated line that shares its coordinates.
                 closeReviewComposer()
+                closeReply()
                 Task { await loadItemDiffs() }
             }
         }
@@ -255,6 +260,10 @@ final class PullRequestsModel {
             return
         }
         prefetchDiff(number)
+        // Threads refresh on every detail load (they change on GitHub's side
+        // at any time). Keyed by PR number, a stale load can never clobber
+        // another PR's threads, so no supersede guard is needed.
+        Task { await loadThreads(number) }
         if let cached = detailsCache[number] {
             detail = cached
             return
@@ -465,11 +474,108 @@ final class PullRequestsModel {
             detailsCache[number] = nil
             if selectedNumber == number {
                 await loadDetail()
+            } else {
+                // loadDetail refreshes threads itself; off-selection the
+                // submitted drafts still just became published threads.
+                await loadThreads(number)
             }
             return true
         } catch {
             reviewSubmitError = error.localizedDescription
             return false
+        }
+    }
+
+    // MARK: - Conversations
+
+    /// Published review threads per PR number, fetched from GitHub alongside
+    /// the detail. Unlike `pendingComments` these already live on GitHub;
+    /// the app shows them inline, replies, and resolves them.
+    var reviewThreads: [Int: [ReviewThread]] = [:]
+    /// Threads-fetch failure for the selected PR, shown in the overview's
+    /// Conversations section (non-fatal — the rest of the PR still works).
+    var threadsLoadError: String?
+    /// Thread the reply composer is open under, nil when closed. Model-owned
+    /// so the composer survives LazyVStack row recycling, like the review
+    /// composer.
+    var replyingThreadID: String?
+    var replyText = ""
+    var isSendingReply = false
+    /// Threads with an in-flight resolve/unresolve; drives per-thread
+    /// spinners and guards double-submission.
+    var resolvingThreadIDs: Set<String> = []
+    /// Per-thread action failures (reply/resolve), shown inside the card.
+    var threadErrors: [String: String] = [:]
+    /// Resolved threads collapse to one row; this records the ones the user
+    /// expanded back open. Model-owned to survive row recycling.
+    var expandedThreadIDs: Set<String> = []
+
+    func threads(for number: Int) -> [ReviewThread] {
+        reviewThreads[number] ?? []
+    }
+
+    func threads(on line: DiffLine, path: String, in number: Int) -> [ReviewThread] {
+        threads(for: number).filter { $0.isAnchored(to: line, path: path) }
+    }
+
+    func loadThreads(_ number: Int) async {
+        do {
+            let threads = try await github.reviewThreads(number: number)
+            reviewThreads[number] = threads
+            if selectedNumber == number {
+                threadsLoadError = nil
+            }
+        } catch {
+            // Stale threads stay on screen; the error only surfaces for the
+            // PR being looked at.
+            if selectedNumber == number {
+                threadsLoadError = error.localizedDescription
+            }
+        }
+    }
+
+    func openReply(for thread: ReviewThread) {
+        guard replyingThreadID != thread.id else { return }
+        // Unsaved text travels to the other thread instead of being silently
+        // discarded, mirroring the review composer.
+        replyingThreadID = thread.id
+        threadErrors[thread.id] = nil
+    }
+
+    func closeReply() {
+        replyingThreadID = nil
+        replyText = ""
+    }
+
+    func sendReply(to thread: ReviewThread, in number: Int) async {
+        guard !isSendingReply else { return }
+        let body = replyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, let rootID = thread.comments.first?.id else { return }
+        isSendingReply = true
+        threadErrors[thread.id] = nil
+        defer { isSendingReply = false }
+        do {
+            try await github.replyToReviewComment(number: number, commentID: rootID, body: body)
+            closeReply()
+            await loadThreads(number)
+        } catch {
+            threadErrors[thread.id] = error.localizedDescription
+        }
+    }
+
+    func setThreadResolved(_ thread: ReviewThread, resolved: Bool, in number: Int) async {
+        guard !resolvingThreadIDs.contains(thread.id) else { return }
+        resolvingThreadIDs.insert(thread.id)
+        threadErrors[thread.id] = nil
+        defer { resolvingThreadIDs.remove(thread.id) }
+        do {
+            try await github.setThreadResolved(thread.id, resolved: resolved)
+            // A freshly resolved thread collapses; expanding it again is a
+            // deliberate act, so drop any stale expansion.
+            expandedThreadIDs.remove(thread.id)
+            await loadThreads(number)
+        } catch {
+            threadErrors[thread.id] = error.localizedDescription
         }
     }
 
