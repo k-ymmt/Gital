@@ -108,7 +108,12 @@ final class RepoViewModel {
     /// every render.
     var workingDiffLineIDs: Set<String> = []
     var commitMessage = ""
-    var amend = false
+    /// Toggling amend mid-generation would leave a message describing content
+    /// the commit no longer has (the diff base was captured at click time) —
+    /// cancel the generation instead.
+    var amend = false {
+        didSet { if oldValue != amend { cancelCommitMessageGeneration() } }
+    }
     var isCommitting = false
 
     /// Diff lines picked for line-level staging. IDs embed the file path, so

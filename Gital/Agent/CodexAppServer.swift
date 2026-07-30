@@ -22,7 +22,13 @@ enum CodexError: LocalizedError {
 }
 
 enum CodexTurnEvent {
+    /// Progress that changes nothing ("Thinking…").
     case status(String)
+    /// Codex started running a command or editing files. Separate from
+    /// `.status` so text-only consumers (commit-message generation) can treat
+    /// repository side effects as a contract violation instead of pattern-
+    /// matching on display strings.
+    case sideEffect(String)
     case delta(String)
     case completed(String)
 }
@@ -34,13 +40,18 @@ actor CodexAppServer {
     /// methods), so plain vars are safe. The handler captures the record
     /// weakly — a strong capture would be a retain cycle.
     private nonisolated final class TurnRecord: @unchecked Sendable {
-        let threadID: String
+        /// Empty until setup (initialize + thread/start) completes; an empty
+        /// thread ID means there is no started turn to interrupt yet.
+        var threadID = ""
+        /// Set for one-shot conversations: the conversation→thread mapping is
+        /// dropped when this turn ends, whichever path ends it.
+        let oneShotConversationID: UUID?
         let continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         var completed = false
         var handle: ((CodexNotification) -> Void)?
 
-        init(threadID: String, continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation) {
-            self.threadID = threadID
+        init(oneShotConversationID: UUID?, continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation) {
+            self.oneShotConversationID = oneShotConversationID
             self.continuation = continuation
         }
     }
@@ -68,7 +79,12 @@ actor CodexAppServer {
     /// turn, streaming events. Each conversation gets its own codex thread —
     /// sharing one per repo made concurrent turns cross-talk (both observers
     /// received both answers and the first completion closed both streams).
-    func runTurn(prompt: String, repoRoot: URL, conversationID: UUID) -> AsyncThrowingStream<CodexTurnEvent, Error> {
+    /// `oneShot` marks a throwaway conversation (commit-message generation):
+    /// its conversation→thread mapping is dropped when the turn ends, so the
+    /// map does not grow with every use. Cleanup lives here, on the producer
+    /// side, because only the actor knows whether `ensureThread` has inserted
+    /// the mapping yet — a caller-side cleanup raced that insertion.
+    func runTurn(prompt: String, repoRoot: URL, conversationID: UUID, oneShot: Bool = false) -> AsyncThrowingStream<CodexTurnEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -76,6 +92,7 @@ actor CodexAppServer {
                         prompt: prompt,
                         repoRoot: repoRoot,
                         conversationID: conversationID,
+                        oneShot: oneShot,
                         continuation: continuation
                     )
                 } catch {
@@ -83,13 +100,6 @@ actor CodexAppServer {
                 }
             }
         }
-    }
-
-    /// Forgets the thread mapping of a one-shot conversation (commit-message
-    /// generation) so the map does not grow with every use. The codex-side
-    /// thread simply goes idle; a running turn is unaffected.
-    func endConversation(_ id: UUID) {
-        threadIDsByConversation[id] = nil
     }
 
     func shutdown() {
@@ -109,13 +119,37 @@ actor CodexAppServer {
         prompt: String,
         repoRoot: URL,
         conversationID: UUID,
+        oneShot: Bool,
         continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
     ) async throws {
-        try await ensureInitialized()
-        let threadID = try await ensureThread(conversationID: conversationID, repoRoot: repoRoot)
-
         let turnID = UUID()
-        let record = TurnRecord(threadID: threadID, continuation: continuation)
+        let record = TurnRecord(oneShotConversationID: oneShot ? conversationID : nil, continuation: continuation)
+        // Registered before the (slow) setup awaits: this producer task is
+        // unstructured, so it survives the consumer being cancelled, and a
+        // consumer that went away while codex was still launching must be
+        // noticed before turn/start — or the turn runs with nobody watching
+        // (and with approvals still auto-granted).
+        activeTurns[turnID] = record
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.turnTerminated(turnID) }
+        }
+
+        let threadID: String
+        do {
+            try await ensureInitialized()
+            threadID = try await ensureThread(conversationID: conversationID, repoRoot: repoRoot)
+        } catch {
+            cleanUpTurn(turnID)
+            throw error
+        }
+        guard activeTurns[turnID] != nil else {
+            // The consumer terminated during setup. turnTerminated already
+            // ran, but before `ensureThread` inserted the mapping — drop it
+            // here, where the insertion is known to have happened.
+            endOneShot(record)
+            return
+        }
+        record.threadID = threadID
         var finalText = ""
         // Thread routing happens in deliver(_:); this handler only sees
         // notifications meant for this turn.
@@ -128,9 +162,9 @@ actor CodexAppServer {
             case .itemStarted(_, let kind):
                 switch kind {
                 case .commandExecution(let command):
-                    continuation.yield(.status("$ \(command)"))
+                    continuation.yield(.sideEffect("$ \(command)"))
                 case .fileChange:
-                    continuation.yield(.status("Editing files…"))
+                    continuation.yield(.sideEffect("Editing files…"))
                 case .reasoning:
                     continuation.yield(.status("Thinking…"))
                 case .other:
@@ -151,12 +185,6 @@ actor CodexAppServer {
                 break
             }
         }
-        activeTurns[turnID] = record
-
-        continuation.onTermination = { [weak self] _ in
-            Task { await self?.turnTerminated(turnID) }
-        }
-
         do {
             _ = try await sendRequest(method: "turn/start", params: [
                 "threadId": threadID,
@@ -169,20 +197,32 @@ actor CodexAppServer {
     }
 
     private func cleanUpTurn(_ id: UUID) {
-        activeTurns[id] = nil
+        guard let record = activeTurns.removeValue(forKey: id) else { return }
+        endOneShot(record)
     }
 
     /// Called when the stream's consumer goes away (view dismissed, task
     /// cancelled) — and also after a normal finish. If the turn is still
     /// running, tell codex to stop: it edits repository files and would keep
-    /// going with nobody watching.
+    /// going with nobody watching. An empty thread ID means setup hadn't
+    /// finished — there is no turn to interrupt, and `performTurn` sees the
+    /// removed record and never starts one (nor leaves a one-shot mapping).
     private func turnTerminated(_ id: UUID) {
         guard let record = activeTurns.removeValue(forKey: id) else { return }
-        guard !record.completed else { return }
         let threadID = record.threadID
+        guard !threadID.isEmpty else { return }
+        endOneShot(record)
+        guard !record.completed else { return }
         Task {
             _ = try? await self.sendRequest(method: "turn/interrupt", params: ["threadId": threadID])
         }
+    }
+
+    /// Drops the conversation→thread mapping of a one-shot turn so the map
+    /// does not grow with every commit-message generation.
+    private func endOneShot(_ record: TurnRecord) {
+        guard let conversationID = record.oneShotConversationID else { return }
+        threadIDsByConversation[conversationID] = nil
     }
 
     private func ensureThread(conversationID: UUID, repoRoot: URL) async throws -> String {

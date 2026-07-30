@@ -38,6 +38,15 @@ import Testing
         #expect(CommitMessageGenerator.extractMessage("`Add feature`") == "Add feature")
     }
 
+    @Test func ambiguousQuoteEndsAreKept() {
+        // Starts and ends with a backtick without being wrapped in them —
+        // stripping would corrupt the subject.
+        let raw = "`GitExecutor` now serializes `runData`"
+        #expect(CommitMessageGenerator.extractMessage(raw) == raw)
+        let apostrophes = "'strict' mode implies 'safe'"
+        #expect(CommitMessageGenerator.extractMessage(apostrophes) == apostrophes)
+    }
+
     @Test func multiLineQuotesAreKept() {
         // Quotes spanning lines could be legitimate content; only a fully
         // quoted single line is unwrapped.
@@ -70,6 +79,15 @@ import Testing
         #expect(truncated)
     }
 
+    @Test func multibyteDiffWithinCharacterLimitIsNotTruncated() {
+        // 150 UTF-8 bytes but only 50 Characters — the byte-count fast path
+        // must not misreport this as truncated.
+        let diff = String(repeating: "あ", count: 50)
+        let (text, truncated) = CommitMessageGenerator.truncate(diff, limit: 100)
+        #expect(text == diff)
+        #expect(!truncated)
+    }
+
     // MARK: - prompt
 
     @Test func promptCarriesRulesAndDiff() {
@@ -79,6 +97,15 @@ import Testing
         #expect(prompt.contains("Do not run any commands"))
         #expect(!prompt.contains("amending"))
         #expect(!prompt.contains("truncated"))
+    }
+
+    @Test func promptWrapsDiffInSentinelMarkersNotFences() {
+        // A markdown diff contains ``` lines as content; a fenced prompt
+        // block would be closed early by them.
+        let diff = "+```swift\n+let x = 1\n+```"
+        let prompt = CommitMessageGenerator.prompt(diff: diff, amend: false, currentMessage: nil)
+        #expect(prompt.contains("<<<BEGIN-DIFF>>>\n\(diff)\n<<<END-DIFF>>>"))
+        #expect(!prompt.contains("```\n\(diff)"))
     }
 
     @Test func amendPromptCarriesCurrentMessage() {

@@ -393,6 +393,9 @@ struct CommitComposerView: View {
     var body: some View {
         VStack(spacing: 10) {
             PlaceholderTextEditor(text: $model.commitMessage, placeholder: "Summary (required)")
+                // Every codex delta rewrites the whole field; keystrokes made
+                // between deltas would be silently destroyed.
+                .disabled(model.isGeneratingCommitMessage)
 
             HStack(spacing: 12) {
                 Toggle("Amend", isOn: $model.amend)

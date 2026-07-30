@@ -87,7 +87,7 @@ extension RepoViewModel {
         do {
             for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root, conversationID: thread.id) {
                 switch event {
-                case .status(let text):
+                case .status(let text), .sideEffect(let text):
                     thread.statusText = text
                 case .delta(let delta):
                     thread.statusText = nil
@@ -146,18 +146,28 @@ extension RepoViewModel {
             // not abort the generation itself.
             let current = amending ? try? await repository.headCommitMessage() : nil
             let prompt = CommitMessageGenerator.prompt(diff: diff, amend: amending, currentMessage: current)
+            // Cancellation during the awaits above must not still start a
+            // codex turn (`try?` on the message fetch swallows it).
+            try Task.checkCancellation()
             // A fresh one-shot conversation every time: earlier generations
-            // must not bias this one, and the mapping is dropped afterwards.
-            let conversationID = UUID()
-            defer {
-                let codex = self.codex
-                Task.detached { await codex.endConversation(conversationID) }
-            }
+            // must not bias this one, and codex drops the thread mapping
+            // when the turn ends.
             var reply = ""
-            for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root, conversationID: conversationID) {
+            for try await event in await codex.runTurn(
+                prompt: prompt, repoRoot: repository.root, conversationID: UUID(), oneShot: true
+            ) {
                 switch event {
                 case .status:
                     break
+                case .sideEffect(let activity):
+                    // Generation is text-only, but approvals are auto-granted
+                    // server-wide — a codex that starts running commands or
+                    // editing files has broken the prompt contract and must
+                    // be stopped (exiting the loop sends turn/interrupt),
+                    // not silently tolerated.
+                    throw CodexError.turnFailed(
+                        "codex attempted repository changes during commit message generation (\(activity)) and was stopped. Review your working copy."
+                    )
                 case .delta(let delta):
                     reply += delta
                     commitMessage = reply

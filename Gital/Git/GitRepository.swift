@@ -267,7 +267,11 @@ final class GitRepository: @unchecked Sendable {
     /// never parsed. The stat rides in front of the patch so a length-capped
     /// prompt still names every file.
     func pendingCommitDiffText(amend: Bool) async throws -> String {
-        var args = ["diff", "--cached", "--stat", "--patch"]
+        // --no-ext-diff: a configured external (GUI) diff tool would replace
+        // the patch with its own output — or block on a window per file.
+        // --stat=400: the default stat width elides deep paths, and the
+        // truncation note in the prompt promises the stat names every file.
+        var args = ["diff", "--cached", "--no-ext-diff", "--stat=400", "--patch"]
         if amend {
             args.append(await amendDiffBase())
         }
@@ -678,7 +682,9 @@ final class GitRepository: @unchecked Sendable {
     /// Full message of the HEAD commit, shown to the AI as context when
     /// generating a message for an amend.
     func headCommitMessage() async throws -> String {
-        try await executor.run(["log", "-1", "--format=%B"])
+        // --no-show-signature: log.showSignature=true would prepend the
+        // verification block to stdout ahead of %B.
+        try await executor.run(["log", "-1", "--no-show-signature", "--format=%B"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
