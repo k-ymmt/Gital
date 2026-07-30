@@ -113,53 +113,65 @@ private struct RepositorySwitcher: View {
     @Environment(AppModel.self) private var appModel
 
     var body: some View {
-        Menu {
-            Button("Open Another Repository…") {
-                appModel.pickRepository()
-            }
-            ForEach(appModel.recentRepositories, id: \.path) { url in
-                Button {
-                    appModel.openRepository(at: url)
-                } label: {
-                    Text(url.lastPathComponent)
-                    Text(Self.abbreviatedPath(for: url))
-                }
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Text(String(model.repository.name.prefix(1)).uppercased())
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 20, height: 20)
-                    .background(
-                        LinearGradient(
-                            colors: [DesignStyle.linkBlue, DesignStyle.brandBlue],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        in: RoundedRectangle(cornerRadius: 5)
-                    )
+        // The texts sit OUTSIDE the Menu: a Menu label in a toolbar renders
+        // icon-only on macOS 27 beta (the Texts silently disappear), so only
+        // the chevron is the Menu and the badge/name/branch are plain views.
+        HStack(spacing: 8) {
+            Text(String(model.repository.name.prefix(1)).uppercased())
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 20, height: 20)
+                .background(
+                    LinearGradient(
+                        colors: [DesignStyle.linkBlue, DesignStyle.brandBlue],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    in: RoundedRectangle(cornerRadius: 5)
+                )
 
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(model.repository.name)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
-                    Text(subtitle)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                Text(Self.middleEllipsized(model.repository.name, maxLength: 36))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text(Self.middleEllipsized(subtitle, maxLength: 44))
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
 
+            Menu {
+                Button("Open Another Repository…") {
+                    appModel.pickRepository()
+                }
+                ForEach(appModel.recentRepositories, id: \.path) { url in
+                    Button {
+                        appModel.openRepository(at: url)
+                    } label: {
+                        Text(url.lastPathComponent)
+                        Text(Self.abbreviatedPath(for: url))
+                    }
+                    // The open repo is always the first recent; reopening it
+                    // would tear down and rebuild the whole repo state for
+                    // nothing.
+                    .disabled(url.standardizedFileURL.path == model.repository.root.standardizedFileURL.path)
+                }
+            } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
             }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Switch repository")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        // fixedSize is load-bearing: the toolbar compresses a flexible
+        // principal item to its minimum, which collapses the texts to
+        // nothing (verified on macOS 27 beta). With fixedSize the texts get
+        // their full ideal width, so Text truncation can never engage —
+        // overlong names are ellipsized in the string itself instead.
         .fixedSize()
-        .help("Switch repository")
+        .help(model.repository.displayPath)
     }
 
     /// Detached HEAD shows where HEAD actually is — a bare "detached HEAD"
@@ -167,15 +179,18 @@ private struct RepositorySwitcher: View {
     private var subtitle: String {
         if let branch = model.status.branch { return branch }
         if let oid = model.status.headOID { return "Detached HEAD at \(String(oid.prefix(7)))" }
-        return "detached HEAD"
+        return "Detached HEAD"
     }
 
     /// Menu items ignore Text line-limit/truncation modifiers, so ellipsize the string itself.
     private static func abbreviatedPath(for url: URL, maxLength: Int = 48) -> String {
-        let path = url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~")
-        guard path.count > maxLength else { return path }
-        let head = path.prefix((maxLength - 1) / 2)
-        let tail = path.suffix(maxLength / 2)
+        middleEllipsized(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), maxLength: maxLength)
+    }
+
+    private static func middleEllipsized(_ string: String, maxLength: Int) -> String {
+        guard string.count > maxLength else { return string }
+        let head = string.prefix((maxLength - 1) / 2)
+        let tail = string.suffix(maxLength / 2)
         return "\(head)…\(tail)"
     }
 }
