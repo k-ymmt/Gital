@@ -47,7 +47,11 @@ struct HistoryView: View {
                             CommitRowView(
                                 commit: commit,
                                 row: model.graph.rows[commit.hash],
-                                isSelected: model.selectedCommitHash == commit.hash
+                                isSelected: model.selectedCommitHash == commit.hash,
+                                avatarURL: model.avatarURL(
+                                    email: commit.authorEmail,
+                                    size: CommitRowView.avatarSize
+                                )
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
@@ -185,7 +189,9 @@ struct CommitRowView: View {
     let commit: Commit
     let row: CommitGraph.Row?
     let isSelected: Bool
+    var avatarURL: URL? = nil
 
+    static let avatarSize: CGFloat = 18
     private static let maxVisibleRefs = 3
     private static let laneSpacing: CGFloat = 15
 
@@ -223,11 +229,14 @@ struct CommitRowView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Text(commit.author)
-                .font(.system(size: 12))
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .lineLimit(1)
-                .frame(width: 150, alignment: .leading)
+            HStack(spacing: 6) {
+                AvatarView(name: commit.author, size: Self.avatarSize, url: avatarURL)
+                Text(commit.author)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .frame(width: 150, alignment: .leading)
             Text(commit.relativeDate)
                 .font(.system(size: 12))
                 .foregroundStyle(isSelected ? .primary : .secondary)
