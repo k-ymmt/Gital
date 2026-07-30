@@ -4,6 +4,21 @@ import Foundation
 
 extension RepoViewModel {
     func fetch() { runSync("Fetching…") { try await self.repository.fetch() } }
+
+    /// Timer-driven background fetch. Deliberately silent: no `runSync` (the
+    /// busy state would disable the toolbar sync buttons on every tick) and
+    /// no error alert (offline is a normal state here — the next tick simply
+    /// retries). Refreshes only what a fetch can change; the working diff and
+    /// the PR list (a gh network call of its own) are untouched.
+    func autoFetchTick(interval: TimeInterval) async {
+        guard !isSyncing else { return }
+        guard AutoFetchPreference.shouldFetch(lastFetch: lastAutoFetch, now: .now, interval: interval) else { return }
+        lastAutoFetch = .now
+        guard (try? await repository.fetch()) != nil else { return }
+        await refreshStatus()
+        await refreshLog()
+        await refreshRefs()
+    }
     func pull() { runSync("Pulling…") { try await self.repository.pull() } }
 
     func push(force: Bool = false) {

@@ -7,8 +7,47 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// App settings window: one row per rebindable action, grouped by menu.
+/// App settings window: a General tab (auto fetch) and the keyboard
+/// shortcuts editor.
 struct SettingsView: View {
+    let shortcuts: ShortcutStore
+
+    var body: some View {
+        TabView {
+            GeneralSettingsTab()
+                .tabItem { Label("General", systemImage: "gearshape") }
+            ShortcutsSettingsTab(shortcuts: shortcuts)
+                .tabItem { Label("Shortcuts", systemImage: "keyboard") }
+        }
+    }
+}
+
+private struct GeneralSettingsTab: View {
+    @AppStorage(AutoFetchPreference.defaultsKey)
+    private var autoFetchInterval = AutoFetchPreference.defaultInterval
+
+    var body: some View {
+        Form {
+            Section("Remotes") {
+                Picker("Fetch automatically", selection: $autoFetchInterval) {
+                    Text("Off").tag(TimeInterval(0))
+                    Text("Every 30 seconds").tag(TimeInterval(30))
+                    Text("Every minute").tag(TimeInterval(60))
+                    Text("Every 5 minutes").tag(TimeInterval(300))
+                    Text("Every 15 minutes").tag(TimeInterval(900))
+                }
+                Text("Periodically runs “git fetch --all --prune --tags” in the background for the open repository, so the ahead/behind badges and remote branches stay current. Fetch never changes your working copy.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 520, height: 220)
+    }
+}
+
+/// One row per rebindable action, grouped by menu.
+private struct ShortcutsSettingsTab: View {
     let shortcuts: ShortcutStore
     @State private var recording = ShortcutRecordingSession()
 

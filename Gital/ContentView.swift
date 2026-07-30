@@ -7,6 +7,8 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: RepoViewModel
+    @AppStorage(AutoFetchPreference.defaultsKey)
+    private var autoFetchInterval = AutoFetchPreference.defaultInterval
 
     var body: some View {
         NavigationSplitView {
@@ -112,6 +114,16 @@ struct ContentView: View {
         .task {
             if model.commits.isEmpty {
                 await model.refreshAll()
+            }
+        }
+        // Auto fetch: one tick loop per window, restarted when the Settings
+        // interval changes (`id:`) and cancelled when the window closes.
+        // A second window on the same repository runs its own loop; the
+        // duplicate ticks are collapsed inside autoFetchTick.
+        .task(id: autoFetchInterval) {
+            guard autoFetchInterval > 0 else { return }
+            while (try? await Task.sleep(for: .seconds(autoFetchInterval))) != nil {
+                await model.autoFetchTick(interval: autoFetchInterval)
             }
         }
         .onAppear { model.isWindowHosted = true }

@@ -220,6 +220,11 @@ final class RepoViewModel {
     var syncActivity: String?
     var errorMessage: String?
 
+    /// When the last timer-driven fetch was attempted (success or not) —
+    /// consulted by `autoFetchTick` so multiple windows sharing this model
+    /// don't stack duplicate background fetches.
+    @ObservationIgnored var lastAutoFetch: Date?
+
     // MARK: Load supersession
     //
     // Each load kind runs through its own LatestLoader — a slow stale load
