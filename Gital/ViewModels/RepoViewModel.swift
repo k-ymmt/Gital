@@ -178,6 +178,11 @@ final class RepoViewModel {
     var composerAnchorID: String?
     var agentDraft = ""
 
+    /// True while codex is writing a commit message into the composer; the
+    /// sparkles button doubles as Cancel during this.
+    var isGeneratingCommitMessage = false
+    @ObservationIgnored var commitMessageTask: Task<Void, Never>?
+
     // MARK: Pending confirmations
 
     var pendingDiscard: DiscardTarget?
@@ -250,6 +255,7 @@ final class RepoViewModel {
     /// not tied to our lifetime and would linger as an orphan otherwise.
     func close() {
         watcher = nil
+        commitMessageTask?.cancel()
         let codex = self.codex
         Task.detached { await codex.shutdown() }
     }

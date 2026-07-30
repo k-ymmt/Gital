@@ -85,6 +85,13 @@ actor CodexAppServer {
         }
     }
 
+    /// Forgets the thread mapping of a one-shot conversation (commit-message
+    /// generation) so the map does not grow with every use. The codex-side
+    /// thread simply goes idle; a running turn is unaffected.
+    func endConversation(_ id: UUID) {
+        threadIDsByConversation[id] = nil
+    }
+
     func shutdown() {
         let old = process
         process = nil

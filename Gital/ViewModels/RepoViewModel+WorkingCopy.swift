@@ -189,6 +189,9 @@ extension RepoViewModel {
         guard !isCommitting else { return }  // the button stays enabled for amend; don't double-commit
         let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty || amend else { return }
+        // A codex reply landing after the commit would refill the freshly
+        // cleared composer with a message for changes that no longer exist.
+        cancelCommitMessageGeneration()
         isCommitting = true
         Task {
             defer { isCommitting = false }

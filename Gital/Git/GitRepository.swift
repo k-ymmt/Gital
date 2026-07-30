@@ -261,6 +261,33 @@ final class GitRepository: @unchecked Sendable {
         return DiffParser.parse(output, strictUTF8: valid)
     }
 
+    /// Raw diffstat + patch of what the next commit would contain: index vs
+    /// HEAD, or — when amending — index vs HEAD's parent, so the text matches
+    /// the content of the commit being rewritten. Used as AI prompt context,
+    /// never parsed. The stat rides in front of the patch so a length-capped
+    /// prompt still names every file.
+    func pendingCommitDiffText(amend: Bool) async throws -> String {
+        var args = ["diff", "--cached", "--stat", "--patch"]
+        if amend {
+            args.append(await amendDiffBase())
+        }
+        return try await executor.runChecked(args).output
+    }
+
+    /// The base an amended commit is diffed against: HEAD's parent, or the
+    /// empty tree when HEAD is a root commit (computed per repo — a SHA-256
+    /// repo hashes the empty tree differently than SHA-1's well-known value).
+    private func amendDiffBase() async -> String {
+        if (try? await executor.run(["rev-parse", "--verify", "--quiet", "HEAD^"])) != nil {
+            return "HEAD^"
+        }
+        let emptyTree = try? await executor.run(["hash-object", "-t", "tree", "/dev/null"])
+        guard let emptyTree, !emptyTree.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "HEAD"
+        }
+        return emptyTree.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - File contents
 
     /// Raw bytes of one file at one revision, for image previews of binary
@@ -646,6 +673,13 @@ final class GitRepository: @unchecked Sendable {
             if amend { args.append("--amend") }
         }
         try await executor.run(args)
+    }
+
+    /// Full message of the HEAD commit, shown to the AI as context when
+    /// generating a message for an amend.
+    func headCommitMessage() async throws -> String {
+        try await executor.run(["log", "-1", "--format=%B"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Remote operations

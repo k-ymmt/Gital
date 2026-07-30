@@ -110,6 +110,76 @@ extension RepoViewModel {
         await loadWorkingDiffs()
     }
 
+    // MARK: - Commit message generation
+
+    /// There is something to describe: staged changes, or an amend (whose
+    /// content is HEAD's even with an empty index).
+    var canGenerateCommitMessage: Bool {
+        !status.staged.isEmpty || amend
+    }
+
+    func generateCommitMessage() {
+        guard !isGeneratingCommitMessage, canGenerateCommitMessage else { return }
+        isGeneratingCommitMessage = true
+        let amending = amend
+        commitMessageTask = Task {
+            defer {
+                isGeneratingCommitMessage = false
+                commitMessageTask = nil
+            }
+            await runCommitMessageGeneration(amending: amending)
+        }
+    }
+
+    func cancelCommitMessageGeneration() {
+        commitMessageTask?.cancel()
+    }
+
+    private func runCommitMessageGeneration(amending: Bool) async {
+        do {
+            let diff = try await repository.pendingCommitDiffText(amend: amending)
+            guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                errorMessage = "There are no staged changes to describe."
+                return
+            }
+            // Context only — an unreadable HEAD message (unborn branch) must
+            // not abort the generation itself.
+            let current = amending ? try? await repository.headCommitMessage() : nil
+            let prompt = CommitMessageGenerator.prompt(diff: diff, amend: amending, currentMessage: current)
+            // A fresh one-shot conversation every time: earlier generations
+            // must not bias this one, and the mapping is dropped afterwards.
+            let conversationID = UUID()
+            defer {
+                let codex = self.codex
+                Task.detached { await codex.endConversation(conversationID) }
+            }
+            var reply = ""
+            for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root, conversationID: conversationID) {
+                switch event {
+                case .status:
+                    break
+                case .delta(let delta):
+                    reply += delta
+                    commitMessage = reply
+                case .completed(let text):
+                    if !text.isEmpty { reply = text }
+                }
+            }
+            // A cancelled stream ends without throwing; whatever streamed in
+            // stays editable, but don't overwrite the field again.
+            try Task.checkCancellation()
+            let message = CommitMessageGenerator.extractMessage(reply)
+            guard !message.isEmpty else {
+                errorMessage = "Codex returned an empty commit message."
+                return
+            }
+            commitMessage = message
+        } catch is CancellationError {
+        } catch {
+            report(error)
+        }
+    }
+
     private func diffContext(file: String, range: ClosedRange<Int>) -> String {
         guard let diff = workingDiffs.first(where: { $0.path == file }) else { return "" }
         var lines: [String] = []

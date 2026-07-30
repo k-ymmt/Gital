@@ -399,6 +399,7 @@ struct CommitComposerView: View {
                     .toggleStyle(.checkbox)
                     .font(.system(size: 12))
                 Spacer()
+                generateButton
                 Button {
                     model.commit()
                 } label: {
@@ -418,6 +419,28 @@ struct CommitComposerView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
         .background(.bar)
+    }
+
+    /// Sparkles = generate a message from the staged changes via codex;
+    /// while a generation runs the same button becomes Cancel.
+    private var generateButton: some View {
+        Button {
+            if model.isGeneratingCommitMessage {
+                model.cancelCommitMessageGeneration()
+            } else {
+                model.generateCommitMessage()
+            }
+        } label: {
+            if model.isGeneratingCommitMessage {
+                Label("Cancel", systemImage: "stop.fill")
+            } else {
+                Label("Generate", systemImage: "sparkles")
+            }
+        }
+        .disabled(!model.isGeneratingCommitMessage && (!model.canGenerateCommitMessage || model.isCommitting))
+        .help(model.isGeneratingCommitMessage
+            ? "Stop generating the commit message"
+            : "Generate a commit message from the staged changes with Codex")
     }
 
     private var commitLabel: String {
