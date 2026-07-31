@@ -577,11 +577,20 @@ struct CommitDetailView: View {
                 DiffModePicker(mode: $model.diffMode)
             }
 
-            ScrollView([.vertical, .horizontal]) {
-                if let diff = model.selectedCommitDiff {
-                    FileDiffContentView(diff: diff, mode: model.diffMode, imageContext: commitImageContext)
-                        .frame(minWidth: 600, alignment: .leading)
+            if let diff = model.selectedCommitDiff {
+                if diff.isBinary || diff.hunks.isEmpty {
+                    ScrollView([.vertical, .horizontal]) {
+                        FileDiffContentView(diff: diff, mode: model.diffMode, imageContext: commitImageContext)
+                            .frame(minWidth: 600, alignment: .leading)
+                    }
+                } else {
+                    // Experimental WKWebView renderer: proper multi-line
+                    // selection, clean copies (no line numbers), native
+                    // scrolling. Binary/image diffs stay on the SwiftUI path.
+                    WebDiffView(diff: diff, mode: model.diffMode)
                 }
+            } else {
+                Color.clear
             }
         }
     }
