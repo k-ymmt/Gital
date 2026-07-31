@@ -18,11 +18,13 @@ extension RepoViewModel {
         // Timeout because the executor serializes every git command behind
         // this fetch: a wedged remote would otherwise stall all user
         // operations with no busy indicator anywhere. `try?` also swallows
-        // the tick's own cancellation (window closed, interval changed) —
-        // the refreshes below must not run in either case.
-        guard (try? await Timeout.run(seconds: AutoFetchPreference.fetchTimeout) { [repository] in
-            try await repository.fetch()
-        }) != nil else { return }
+        // the tick's own cancellation (window closed, interval changed).
+        // A fetch that changed nothing skips the refreshes outright — and
+        // with --no-write-fetch-head it leaves no file change behind either,
+        // so the FSEvents watcher stays quiet too.
+        guard let changed = try? await Timeout.run(seconds: AutoFetchPreference.fetchTimeout) { [repository] in
+            try await repository.autoFetch()
+        }, changed else { return }
         await refreshStatus()
         await refreshLog()
         await refreshRefs()

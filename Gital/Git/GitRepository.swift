@@ -694,7 +694,24 @@ final class GitRepository: @unchecked Sendable {
     // MARK: - Remote operations
 
     func fetch() async throws {
-        try await executor.run(["fetch", "--all", "--prune", "--tags"])
+        // --no-write-fetch-head (git 2.29+): nothing in the app reads
+        // FETCH_HEAD, and writing it turns even a no-change fetch into an
+        // FSEvents event that sends the watcher into a full refresh.
+        try await executor.run(["fetch", "--all", "--prune", "--tags", "--no-write-fetch-head"])
+    }
+
+    /// Fetch for the auto-fetch timer: reports whether anything changed, so
+    /// a no-change tick can skip its refreshes entirely. Change is detected
+    /// by snapshotting remote-tracking refs and tags around the fetch — the
+    /// only refs `fetch --all --prune --tags` can create, move, or prune.
+    func autoFetch() async throws -> Bool {
+        let before = try await refsSnapshot()
+        try await fetch()
+        return try await refsSnapshot() != before
+    }
+
+    private func refsSnapshot() async throws -> String {
+        try await executor.run(["for-each-ref", "refs/remotes", "refs/tags", "--format=%(objectname) %(refname)"])
     }
 
     /// Fetches a GitHub pull request's commits into the object store via the
