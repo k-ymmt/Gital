@@ -17,12 +17,18 @@ struct SidebarBranchesSection: View {
                 keyPrefix: "branches",
                 collapsed: collapsedBranchFolders
             )
+            // Visible display order, for ⇧-click ranges — leaves hidden in a
+            // collapsed folder are not part of what the user sees selected.
+            let visibleNames = rows.compactMap { row -> String? in
+                if case .leaf(let branch, _, _, _) = row { return branch.name }
+                return nil
+            }
             ForEach(rows) { row in
                 switch row {
                 case .folder(let path, let name, let depth):
                     SidebarFolderRow(path: path, name: name, depth: depth, collapsed: $collapsedBranchFolders)
                 case .leaf(let branch, let name, _, let depth):
-                    localBranchRow(branch, displayName: name, depth: depth)
+                    localBranchRow(branch, displayName: name, depth: depth, visibleNames: visibleNames)
                 }
             }
         }
@@ -72,7 +78,7 @@ struct SidebarBranchesSection: View {
         tagsSection
     }
 
-    private func localBranchRow(_ branch: Branch, displayName: String, depth: Int) -> some View {
+    private func localBranchRow(_ branch: Branch, displayName: String, depth: Int, visibleNames: [String]) -> some View {
         HStack(spacing: 9) {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 12))
@@ -91,34 +97,58 @@ struct SidebarBranchesSection: View {
         .padding(.trailing, 16)
         .padding(.vertical, 5)
         .contentShape(Rectangle())
-        .background(sidebarRowBackground(model.highlightedBranchName == branch.name))
+        .background(sidebarRowBackground(model.isBranchRowHighlighted(branch.name)))
         .onTapGesture(count: 2) {
             model.checkout(branch: branch)
         }
         .onTapGesture {
-            model.selectBranch(branch)
+            let modifiers = NSEvent.modifierFlags
+            if modifiers.contains(.command) {
+                model.toggleBranchSelection(branch)
+            } else if modifiers.contains(.shift) {
+                model.extendBranchSelection(to: branch, orderedNames: visibleNames)
+            } else {
+                model.selectBranch(branch)
+            }
         }
         .contextMenu {
-            Button("Checkout") { model.checkout(branch: branch) }
-                .disabled(branch.isCurrent)
-            Divider()
-            mergeRebaseMenuItems(target: branch.name, disabled: branch.isCurrent)
-            Divider()
-            // A branch tracking a local branch has nothing to push; publishing
-            // needs a remote actually named "origin" or the push just errors.
-            if branch.upstream == nil {
-                Button("Publish to Origin") { model.pushBranch(branch) }
-                    .disabled(!model.remotes.contains { $0.name == "origin" })
+            let multiSelection = model.multiSelectedBranches
+            if multiSelection.count > 1, model.selectedBranchNames.contains(branch.name) {
+                let deletable = multiSelection.filter { !$0.isCurrent }
+                Button(
+                    deletable.count == 1 ? "Delete 1 Branch…" : "Delete \(deletable.count) Branches…",
+                    role: .destructive
+                ) {
+                    model.requestDeleteBranches(deletable)
+                }
+                .disabled(deletable.isEmpty)
             } else {
-                Button("Push") { model.pushBranch(branch) }
-                    .disabled(branch.tracksLocalBranch)
+                singleBranchMenuItems(branch)
             }
-            Divider()
-            Button("Rename…") { model.renamingBranch = branch }
-            Button("Delete…", role: .destructive) { model.requestDeleteBranch(branch) }
-                .disabled(branch.isCurrent)
         }
         .help(branch.isCurrent ? "Current branch" : "Click to show latest commit, double-click to checkout")
+    }
+
+    @ViewBuilder
+    private func singleBranchMenuItems(_ branch: Branch) -> some View {
+        Button("Checkout") { model.checkout(branch: branch) }
+            .disabled(branch.isCurrent)
+        Divider()
+        mergeRebaseMenuItems(target: branch.name, disabled: branch.isCurrent)
+        Divider()
+        // A branch tracking a local branch has nothing to push; publishing
+        // needs a remote actually named "origin" or the push just errors.
+        if branch.upstream == nil {
+            Button("Publish to Origin") { model.pushBranch(branch) }
+                .disabled(!model.remotes.contains { $0.name == "origin" })
+        } else {
+            Button("Push") { model.pushBranch(branch) }
+                .disabled(branch.tracksLocalBranch)
+        }
+        Divider()
+        Button("Rename…") { model.renamingBranch = branch }
+        Button("Delete…", role: .destructive) { model.requestDeleteBranch(branch) }
+            .disabled(branch.isCurrent)
     }
 
     private func remoteBranchRow(_ branch: String, displayName: String, depth: Int, remote: String) -> some View {

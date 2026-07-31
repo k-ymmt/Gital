@@ -49,6 +49,7 @@ final class RepoViewModel {
                 if let name = selectedBranchName,
                    branches.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
                     selectedBranchName = nil
+                    selectedBranchNames = []
                 }
                 if let name = selectedTagName,
                    tags.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
@@ -59,12 +60,31 @@ final class RepoViewModel {
         }
     }
     var selectedBranchName: String?
+    /// All sidebar branch rows in the multi-selection (⌘-click / ⇧-click).
+    /// Always contains `selectedBranchName` while the selection came from a
+    /// branch click; cleared whenever the selection moves elsewhere (a tag,
+    /// an arbitrary commit). May hold names of branches that no longer exist
+    /// after a refresh — consumers resolve against `branches` at use time.
+    var selectedBranchNames: Set<String> = []
+    /// Row the next ⇧-click extends from; the visible-row order lives in the
+    /// sidebar, so the range itself is computed there.
+    @ObservationIgnored var branchSelectionAnchor: String?
     var selectedTagName: String?
 
     /// Branch row to highlight in the sidebar: the explicitly clicked branch,
     /// falling back to the current branch when nothing else is selected.
     var highlightedBranchName: String? {
         selectedBranchName ?? (selectedTagName == nil ? branches.first(where: \.isCurrent)?.name : nil)
+    }
+
+    /// The multi-selection resolved against the live branch list, in sidebar
+    /// (sorted) order — stale names left behind by a refresh drop out here.
+    var multiSelectedBranches: [Branch] {
+        branches.filter { selectedBranchNames.contains($0.name) }
+    }
+
+    func isBranchRowHighlighted(_ name: String) -> Bool {
+        selectedBranchNames.contains(name) || highlightedBranchName == name
     }
     var commitDetailTab: CommitDetailTab = .commit
     var commitDetail: CommitDetail?

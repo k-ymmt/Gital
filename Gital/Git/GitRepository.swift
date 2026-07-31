@@ -994,9 +994,11 @@ final class GitRepository: @unchecked Sendable {
 
     /// Always `-D`: the mergedness check and confirmation happened in the UI,
     /// and `-d`'s own refusal logic (against the upstream, not HEAD) would
-    /// second-guess a delete the user already confirmed.
-    func deleteBranch(name: String) async throws {
-        try await executor.run(["branch", "-D", "--", name])
+    /// second-guess a delete the user already confirmed. One invocation for
+    /// the whole batch: git deletes what it can and reports the failures,
+    /// so one bad name doesn't strand the rest undeleted.
+    func deleteBranches(names: [String]) async throws {
+        try await executor.run(["branch", "-D", "--"] + names)
     }
 
     /// `--` is load-bearing here: `newName` is free text from the rename

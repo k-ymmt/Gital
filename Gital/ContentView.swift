@@ -431,31 +431,27 @@ private struct BranchManagementAlerts: ViewModifier {
             }
             .onChange(of: model.branches) {
                 guard let pending = model.pendingBranchDelete else { return }
-                let live = model.branches.first { $0.name == pending.branch.name }
-                if live?.tipHash != pending.branch.tipHash
-                    || model.branches.first(where: \.isCurrent)?.name != pending.head {
+                let stale = pending.entries.contains { entry in
+                    model.branches.first { $0.name == entry.branch.name }?.tipHash != entry.branch.tipHash
+                }
+                if stale || model.branches.first(where: \.isCurrent)?.name != pending.head {
                     model.pendingBranchDelete = nil
                 }
             }
             .alert(
-                "Delete Branch?",
+                Text(model.pendingBranchDelete?.title ?? "Delete Branch?"),
                 isPresented: Binding(
                     get: { model.pendingBranchDelete != nil },
                     set: { if !$0 { model.pendingBranchDelete = nil } }
                 ),
                 presenting: model.pendingBranchDelete
             ) { pending in
-                Button("Delete", role: .destructive) { model.deleteBranch(pending.branch) }
+                Button(pending.confirmButtonLabel, role: .destructive) {
+                    model.deleteBranches(pending.branches)
+                }
                 Button("Cancel", role: .cancel) {}
             } message: { pending in
-                switch pending.unmergedCount {
-                case nil:
-                    Text("“\(pending.branch.name)” will be deleted. Whether its commits are reachable elsewhere could not be determined — they may be lost. This cannot be undone.")
-                case 0:
-                    Text("“\(pending.branch.name)” will be deleted. Its commits are all reachable from “\(pending.head ?? "HEAD")”.")
-                case let count?:
-                    Text("“\(pending.branch.name)” has \(count) commit(s) not on “\(pending.head ?? "HEAD")”. Unless another branch or tag points at them, deleting the branch loses them. This cannot be undone.")
-                }
+                Text(pending.message)
             }
             .alert(
                 "Checkout Commit?",
