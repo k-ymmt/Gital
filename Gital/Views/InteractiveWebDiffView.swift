@@ -5,6 +5,9 @@ import WebKit
 enum WebDiffAction {
     case toggleLine(id: String, extend: Bool)
     case ask(id: String, extend: Bool)
+    /// The "+" on a text-selection frame: ask about every line the
+    /// selection spans, first to last.
+    case askRange(startID: String, endID: String)
     case hunk(action: String, id: String)
 }
 
@@ -112,6 +115,10 @@ private struct InteractiveWebView: NSViewRepresentable {
             case "ask":
                 if let id = body["id"] as? String {
                     onAction(.ask(id: id, extend: body["extend"] as? Bool ?? false))
+                }
+            case "askRange":
+                if let start = body["start"] as? String, let end = body["end"] as? String {
+                    onAction(.askRange(startID: start, endID: end))
                 }
             default:
                 // Hunk buttons post their Swift-provided action name as the

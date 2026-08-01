@@ -4,8 +4,12 @@ import Foundation
 
 extension RepoViewModel {
     func openComposer(file: String, line: Int, anchorID: String) {
+        openComposer(file: file, lines: line...line, anchorID: anchorID)
+    }
+
+    func openComposer(file: String, lines: ClosedRange<Int>, anchorID: String) {
         composerFile = file
-        composerRange = line...line
+        composerRange = lines
         composerAnchorID = anchorID
     }
 

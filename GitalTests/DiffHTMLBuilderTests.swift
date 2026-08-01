@@ -134,9 +134,12 @@ struct DiffHTMLBuilderTests {
             #expect(page.contains("selectionchange"), "selection tracking script included")
             #expect(page.contains(".tsel::after"), "selection frame CSS included")
             #expect(page.contains("tsel-first") && page.contains("tsel-last"), "run edges draw top/bottom borders")
+            #expect(page.contains("askRange"), "frame's + button posts the selected range")
         }
         for mode in DiffMode.allCases {
-            #expect(!DiffHTMLBuilder.page(for: diff, mode: mode).contains("tsel"), "\(mode.rawValue): read-only pages have no selection frame")
+            let page = DiffHTMLBuilder.page(for: diff, mode: mode)
+            #expect(!page.contains("tsel"), "\(mode.rawValue): read-only pages have no selection frame")
+            #expect(!page.contains("askRange"), "\(mode.rawValue): read-only pages have no range-ask button")
         }
     }
 

@@ -292,6 +292,8 @@ enum DiffHTMLBuilder {
     }
     .tsel-first::after { border-top-width: 1.5px; }
     .tsel-last::after { border-bottom-width: 1.5px; }
+    .askr { display: block; z-index: 2; }
+    .line.i:hover .ask:has(~ .askr) { display: none; }
     @supports (color: AccentColor) {
         .line.sel, .line.sel:hover {
             background-image: linear-gradient(color-mix(in srgb, AccentColor 14%, transparent), color-mix(in srgb, AccentColor 14%, transparent));
@@ -329,6 +331,9 @@ enum DiffHTMLBuilder {
     new ResizeObserver(reportHeight).observe(document.body);
     window.addEventListener('load', reportHeight);
     document.addEventListener('mousedown', (e) => {
+        // Clicking the range-ask button must not collapse the text
+        // selection that defines its range.
+        if (e.target.closest('.askr')) { e.preventDefault(); return; }
         // Shift-click means "extend the line selection / composer range",
         // not "extend the text selection". Also drop any existing text
         // selection: preventDefault preserves it, and a non-collapsed
@@ -341,6 +346,9 @@ enum DiffHTMLBuilder {
     document.addEventListener('click', (e) => {
         const hb = e.target.closest('.hb');
         if (hb) { post({type: hb.dataset.act, id: hb.closest('.hunk').dataset.hid}); return; }
+        // Before .ask — the range button carries the .ask class for styling.
+        const askr = e.target.closest('.askr');
+        if (askr) { post({type: 'askRange', start: askr.dataset.start, end: askr.dataset.end}); return; }
         const ask = e.target.closest('.ask');
         if (ask) { post({type: 'ask', id: ask.closest('.line').dataset.id, extend: e.shiftKey}); return; }
         const line = e.target.closest('.line.selable');
@@ -375,6 +383,8 @@ enum DiffHTMLBuilder {
         return r.toString().length > 0;
     };
     document.addEventListener('selectionchange', () => {
+        // The button's own "+" text must never count as selected text below.
+        document.querySelectorAll('.askr').forEach((el) => el.remove());
         document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
         const sel = window.getSelection();
         if (!sel.rangeCount || sel.isCollapsed) { return; }
@@ -388,6 +398,17 @@ enum DiffHTMLBuilder {
             if (i === 0 || rowAbove(el) !== hits[i - 1]) { el.classList.add('tsel-first'); }
             if (i === hits.length - 1 || rowAbove(hits[i + 1]) !== el) { el.classList.add('tsel-last'); }
         });
+        // A "+" on the frame's top-left corner asks the AI agent about the
+        // whole selected range (split rows carry no line IDs — no button).
+        if (hits.length && hits[0].dataset.id) {
+            const btn = document.createElement('span');
+            btn.className = 'ask askr';
+            btn.textContent = '+';
+            btn.title = 'Ask AI Agent about the selected lines';
+            btn.dataset.start = hits[0].dataset.id;
+            btn.dataset.end = hits[hits.length - 1].dataset.id;
+            hits[0].appendChild(btn);
+        }
     });
     """
 }

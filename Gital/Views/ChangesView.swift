@@ -277,6 +277,14 @@ struct ChangesView: View {
                     model.openComposer(file: diff.path, line: number, anchorID: line.id)
                 }
             }
+        case .askRange(let startID, let endID):
+            if let start = line(withID: startID, in: diff), let end = line(withID: endID, in: diff) {
+                let first = agentLineNumber(start, in: diff)
+                let last = agentLineNumber(end, in: diff)
+                // Anchoring at the range's last line puts the composer right
+                // below the selection.
+                model.openComposer(file: diff.path, lines: min(first, last)...max(first, last), anchorID: end.id)
+            }
         case .hunk(let act, let id):
             guard let hunk = diff.hunks.first(where: { $0.id == id }) else { return }
             switch act {
