@@ -280,6 +280,18 @@ enum DiffHTMLBuilder {
         cursor: pointer;
     }
     .hb.destructive { color: #f85149; border-color: rgba(248, 81, 73, 0.4); }
+    .tsel { position: relative; }
+    .tsel::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border: 0 solid rgb(47, 111, 237);
+        border-left-width: 1.5px;
+        border-right-width: 1.5px;
+    }
+    .tsel-first::after { border-top-width: 1.5px; }
+    .tsel-last::after { border-bottom-width: 1.5px; }
     @supports (color: AccentColor) {
         .line.sel, .line.sel:hover {
             background-image: linear-gradient(color-mix(in srgb, AccentColor 14%, transparent), color-mix(in srgb, AccentColor 14%, transparent));
@@ -287,6 +299,7 @@ enum DiffHTMLBuilder {
         }
         .ask { background: AccentColor; }
         .hb { border-color: color-mix(in srgb, AccentColor 40%, transparent); color: AccentColor; }
+        .tsel::after { border-color: AccentColor; }
     }
     """
 
@@ -309,6 +322,7 @@ enum DiffHTMLBuilder {
     /// height; the outer SwiftUI ScrollView scrolls), line selection clicks,
     /// "+" (ask agent) clicks, and hunk-button clicks. Selection highlight is
     /// pushed back in via `gitalSetSelected` so a click never reloads the page.
+    /// The page also frames the rows a mouse text selection spans (`.tsel`).
     private static let bridgeScript = """
     const post = (m) => window.webkit.messageHandlers.gital.postMessage(m);
     const reportHeight = () => post({type: 'height', height: document.body.scrollHeight});
@@ -340,5 +354,40 @@ enum DiffHTMLBuilder {
             el.classList.toggle('sel', set.has(el.dataset.id));
         });
     };
+    // Text selection outlines every row it spans with an accent frame:
+    // side borders on each row, top/bottom only at contiguous-run edges, so
+    // a multi-line selection reads as one box. A DOM range can *touch* the
+    // row after a full-line selection (or, in split, pass through the
+    // unselectable column and empty sides) — a row only counts when the
+    // range actually contains some of its text.
+    const rowAbove = (el) => {
+        if (!el.classList.contains('side')) { return el.previousElementSibling; }
+        const row = el.parentElement.previousElementSibling;
+        if (!row || !row.classList.contains('row')) { return null; }
+        return row.querySelector(el.classList.contains('left') ? '.side.left' : '.side.right');
+    };
+    const selectsTextIn = (range, el) => {
+        const bounds = document.createRange();
+        bounds.selectNodeContents(el);
+        const r = range.cloneRange();
+        if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
+        if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
+        return r.toString().length > 0;
+    };
+    document.addEventListener('selectionchange', () => {
+        document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
+        const sel = window.getSelection();
+        if (!sel.rangeCount || sel.isCollapsed) { return; }
+        const range = sel.getRangeAt(0);
+        const rowSelector = document.body.classList.contains('sel-left') ? '.side.left'
+            : document.body.classList.contains('sel-right') ? '.side.right' : '.line';
+        const hits = [...document.querySelectorAll(rowSelector)]
+            .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+        hits.forEach((el, i) => {
+            el.classList.add('tsel');
+            if (i === 0 || rowAbove(el) !== hits[i - 1]) { el.classList.add('tsel-first'); }
+            if (i === hits.length - 1 || rowAbove(hits[i + 1]) !== el) { el.classList.add('tsel-last'); }
+        });
+    });
     """
 }

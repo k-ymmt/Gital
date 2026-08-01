@@ -121,6 +121,25 @@ struct DiffHTMLBuilderTests {
         #expect(!page.contains(#"data-hid="we"ird"#), "raw quote never reaches a split attribute")
     }
 
+    // Mouse text selection frames the rows it spans (blue outline). The
+    // machinery lives in the bridge script/CSS, so it must reach both
+    // interactive layouts and never the read-only pages.
+    @Test func interactivePagesFrameTextSelectedRows() {
+        let unified = DiffHTMLBuilder.interactiveUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            options: interactiveOptions
+        )
+        let split = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
+        for page in [unified, split] {
+            #expect(page.contains("selectionchange"), "selection tracking script included")
+            #expect(page.contains(".tsel::after"), "selection frame CSS included")
+            #expect(page.contains("tsel-first") && page.contains("tsel-last"), "run edges draw top/bottom borders")
+        }
+        for mode in DiffMode.allCases {
+            #expect(!DiffHTMLBuilder.page(for: diff, mode: mode).contains("tsel"), "\(mode.rawValue): read-only pages have no selection frame")
+        }
+    }
+
     @Test func readOnlyPagesHaveNoBridge() {
         for mode in DiffMode.allCases {
             let page = DiffHTMLBuilder.page(for: diff, mode: mode)
