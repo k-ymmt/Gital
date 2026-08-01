@@ -121,6 +121,23 @@ struct DiffHTMLBuilderTests {
         #expect(!page.contains(#"data-hid="we"ird"#), "raw quote never reaches a split attribute")
     }
 
+    // The selection frame's Stage/Unstage/Discard capsules clone from a
+    // Swift-rendered <template>, so titles/actions never live in JS strings.
+    @Test func selectionFrameButtonsRenderAsTemplate() {
+        var options = interactiveOptions
+        options.selectionButtons = [
+            DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage"),
+            DiffHTMLBuilder.HunkButton(action: "discardLines", title: "Discard", destructive: true),
+        ]
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
+        #expect(page.contains(#"<template id="selbtns">"#), "clone template present")
+        #expect(page.contains(#"data-act="stageLines""#) && page.contains(#"data-act="discardLines""#), "buttons post their actions")
+        #expect(page.contains("hb selb destructive"), "discard capsule is destructive")
+
+        let bare = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: interactiveOptions)
+        #expect(!bare.contains("<template"), "no template when the page has no selection buttons")
+    }
+
     // Mouse text selection frames the rows it spans (blue outline). The
     // machinery lives in the bridge script/CSS, so it must reach both
     // interactive layouts and never the read-only pages.

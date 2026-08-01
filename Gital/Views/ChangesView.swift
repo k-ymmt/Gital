@@ -232,6 +232,19 @@ struct ChangesView: View {
         options.selectableLines = model.canSelectLines(in: diff)
         options.askLines = true
         options.hunkButtons = hunkButtons(for: diff)
+        if options.selectableLines {
+            switch diff.scope {
+            case .unstaged:
+                options.selectionButtons = [
+                    DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage"),
+                    DiffHTMLBuilder.HunkButton(action: "discardLines", title: "Discard", destructive: true),
+                ]
+            case .staged:
+                options.selectionButtons = [DiffHTMLBuilder.HunkButton(action: "unstageLines", title: "Unstage")]
+            default:
+                break
+            }
+        }
         return options
     }
 
@@ -285,6 +298,20 @@ struct ChangesView: View {
                 // below the selection.
                 model.openComposer(file: diff.path, lines: min(first, last)...max(first, last), anchorID: end.id)
             }
+        case .lines(let act, let startID, let endID):
+            let ids = changedLineIDs(from: startID, to: endID, in: diff)
+            guard !ids.isEmpty else { return }
+            model.selectLines(ids, in: diff)
+            switch act {
+            case "stageLines", "unstageLines":
+                // Direction comes from the diff's scope inside the model —
+                // both actions are the same selection-based apply.
+                model.applySelectedLines(in: diff)
+            case "discardLines":
+                model.requestDiscard(.lines(diff, count: ids.count))
+            default:
+                break
+            }
         case .hunk(let act, let id):
             guard let hunk = diff.hunks.first(where: { $0.id == id }) else { return }
             switch act {
@@ -294,6 +321,15 @@ struct ChangesView: View {
             default: break
             }
         }
+    }
+
+    /// The changed (stageable) lines between two line IDs in document order,
+    /// bounds included — context lines in the span don't stage.
+    private func changedLineIDs(from startID: String, to endID: String, in diff: FileDiff) -> Set<String> {
+        let all = diff.hunks.flatMap(\.lines)
+        guard let from = all.firstIndex(where: { $0.id == startID }),
+              let to = all.firstIndex(where: { $0.id == endID }) else { return [] }
+        return Set(all[min(from, to)...max(from, to)].filter { $0.kind != .context }.map(\.id))
     }
 
     private func line(withID id: String, in diff: FileDiff) -> DiffLine? {

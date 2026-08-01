@@ -34,6 +34,9 @@ enum DiffHTMLBuilder {
         var askLines = false
         /// Buttons rendered on every hunk header (Stage/Unstage/Discard).
         var hunkButtons: [HunkButton] = []
+        /// Buttons shown next to the text-selection frame's "+", acting on
+        /// the changed lines the selection spans.
+        var selectionButtons: [HunkButton] = []
     }
 
     /// One row of a unified diff; segments of these render between native
@@ -45,7 +48,11 @@ enum DiffHTMLBuilder {
     }
 
     static func interactiveUnifiedPage(items: [UnifiedItem], options: InteractiveOptions) -> String {
-        assemble(body: render(items: items, options: options), bodyClass: "", interactive: true)
+        assemble(
+            body: render(items: items, options: options) + selectionButtonsTemplate(options.selectionButtons),
+            bodyClass: "",
+            interactive: true
+        )
     }
 
     static func interactiveSplitPage(for diff: FileDiff, options: InteractiveOptions) -> String {
@@ -132,6 +139,17 @@ enum DiffHTMLBuilder {
         <span class="text">\(side.text.map(textContent) ?? "")</span>\
         </div>
         """
+    }
+
+    /// Inert clone source for the buttons the selection script drops next to
+    /// the frame's "+" — rendering them in Swift keeps titles/actions out of
+    /// hand-built JS strings.
+    private static func selectionButtonsTemplate(_ buttons: [HunkButton]) -> String {
+        guard !buttons.isEmpty else { return "" }
+        let rendered = buttons.map { button in
+            "<button class=\"hb selb\(button.destructive ? " destructive" : "")\" data-act=\"\(escapeAttr(button.action))\">\(escape(button.title))</button>"
+        }.joined()
+        return "<template id=\"selbtns\">\(rendered)</template>\n"
     }
 
     private static func hunkHeader(_ text: String, hunkID: String? = nil, buttons: [HunkButton] = []) -> String {
@@ -294,6 +312,16 @@ enum DiffHTMLBuilder {
     .tsel-last::after { border-bottom-width: 1.5px; }
     .askr { display: block; z-index: 2; }
     .line.i:hover .ask:has(~ .askr) { display: none; }
+    .selbar {
+        position: absolute;
+        left: 24px;
+        top: 1px;
+        display: flex;
+        gap: 4px;
+        z-index: 2;
+        -webkit-user-select: none;
+        user-select: none;
+    }
     @supports (color: AccentColor) {
         .line.sel, .line.sel:hover {
             background-image: linear-gradient(color-mix(in srgb, AccentColor 14%, transparent), color-mix(in srgb, AccentColor 14%, transparent));
@@ -331,9 +359,9 @@ enum DiffHTMLBuilder {
     new ResizeObserver(reportHeight).observe(document.body);
     window.addEventListener('load', reportHeight);
     document.addEventListener('mousedown', (e) => {
-        // Clicking the range-ask button must not collapse the text
-        // selection that defines its range.
-        if (e.target.closest('.askr')) { e.preventDefault(); return; }
+        // Clicking the frame's ask/stage/discard buttons must not collapse
+        // the text selection that defines their range.
+        if (e.target.closest('.askr, .selbar')) { e.preventDefault(); return; }
         // Shift-click means "extend the line selection / composer range",
         // not "extend the text selection". Also drop any existing text
         // selection: preventDefault preserves it, and a non-collapsed
@@ -344,6 +372,14 @@ enum DiffHTMLBuilder {
         }
     });
     document.addEventListener('click', (e) => {
+        // Before .hb — frame buttons share its capsule styling but have no
+        // .hunk ancestor to read an ID from.
+        const selb = e.target.closest('.selb');
+        if (selb) {
+            const bar = selb.closest('.selbar');
+            post({type: selb.dataset.act, start: bar.dataset.start, end: bar.dataset.end});
+            return;
+        }
         const hb = e.target.closest('.hb');
         if (hb) { post({type: hb.dataset.act, id: hb.closest('.hunk').dataset.hid}); return; }
         // Before .ask — the range button carries the .ask class for styling.
@@ -383,8 +419,8 @@ enum DiffHTMLBuilder {
         return r.toString().length > 0;
     };
     document.addEventListener('selectionchange', () => {
-        // The button's own "+" text must never count as selected text below.
-        document.querySelectorAll('.askr').forEach((el) => el.remove());
+        // The buttons' own label text must never count as selected text below.
+        document.querySelectorAll('.askr, .selbar').forEach((el) => el.remove());
         document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
         const sel = window.getSelection();
         if (!sel.rangeCount || sel.isCollapsed) { return; }
@@ -408,6 +444,18 @@ enum DiffHTMLBuilder {
             btn.dataset.start = hits[0].dataset.id;
             btn.dataset.end = hits[hits.length - 1].dataset.id;
             hits[0].appendChild(btn);
+            // Stage/Unstage/Discard capsules right of the "+", acting on the
+            // range's changed lines — only when the page stages lines at all
+            // and the selection actually spans a changed line.
+            const tpl = document.getElementById('selbtns');
+            if (tpl && hits.some((el) => el.classList.contains('selable'))) {
+                const bar = document.createElement('span');
+                bar.className = 'selbar';
+                bar.dataset.start = btn.dataset.start;
+                bar.dataset.end = btn.dataset.end;
+                bar.appendChild(tpl.content.cloneNode(true));
+                hits[0].appendChild(bar);
+            }
         }
     });
     """

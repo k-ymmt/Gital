@@ -8,6 +8,9 @@ enum WebDiffAction {
     /// The "+" on a text-selection frame: ask about every line the
     /// selection spans, first to last.
     case askRange(startID: String, endID: String)
+    /// A Stage/Unstage/Discard capsule on the frame: act on the changed
+    /// lines the selection spans.
+    case lines(action: String, startID: String, endID: String)
     case hunk(action: String, id: String)
 }
 
@@ -121,10 +124,13 @@ private struct InteractiveWebView: NSViewRepresentable {
                     onAction(.askRange(startID: start, endID: end))
                 }
             default:
-                // Hunk buttons post their Swift-provided action name as the
-                // message type (stageHunk/unstageHunk/discardHunk).
+                // Hunk and selection-frame buttons post their Swift-provided
+                // action name as the message type; hunks carry an "id",
+                // selection ranges a "start"/"end" pair.
                 if let id = body["id"] as? String {
                     onAction(.hunk(action: type, id: id))
+                } else if let start = body["start"] as? String, let end = body["end"] as? String {
+                    onAction(.lines(action: type, startID: start, endID: end))
                 }
             }
         }

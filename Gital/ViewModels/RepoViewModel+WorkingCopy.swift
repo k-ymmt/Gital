@@ -74,6 +74,16 @@ extension RepoViewModel {
         lineSelectionAnchor = (diff.path, line.id)
     }
 
+    /// Replaces this diff's line selection (other files' selections stay) —
+    /// the text-selection frame's Stage/Discard buttons route through the
+    /// selection-based paths, and must act on exactly the framed lines.
+    func selectLines(_ ids: Set<String>, in diff: FileDiff) {
+        guard canSelectLines(in: diff) else { return }
+        let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
+        clearLineSelection(in: diff)
+        selectedDiffLineIDs.formUnion(ids.intersection(changed))
+    }
+
     func selectedLineIDs(in diff: FileDiff) -> Set<String> {
         let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
         return selectedDiffLineIDs.intersection(changed)
