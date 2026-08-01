@@ -43,6 +43,22 @@ struct DiffHTMLBuilderTests {
     @Test func emptyAdditionLineStillRendersARow() {
         let page = DiffHTMLBuilder.page(for: diff, mode: .unified)
         #expect(page.contains(#"data-n="12""#), "empty added line keeps its number")
+        // A truly empty span copies as nothing, silently dropping blank lines
+        // from multi-line copies — empty lines must carry a real space.
+        #expect(page.contains(#"<span class="text"> </span>"#), "empty line text is a space, not an empty span")
+    }
+
+    // WebKit on macOS 27 rejects `-webkit-focus-ring-color`, and one unknown
+    // color silently kills its whole declaration (selected-line highlight
+    // was invisible). Accent styling must use the standard `AccentColor`
+    // system color with a plain-rgb fallback.
+    @Test func accentStylingAvoidsWebkitFocusRingColor() {
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            options: interactiveOptions
+        )
+        #expect(!page.contains("-webkit-focus-ring-color"), "unsupported color keyword never appears")
+        #expect(page.contains("@supports (color: AccentColor)"), "accent styling upgrades via AccentColor")
     }
 
     @Test func splitDefaultsToRightSideSelection() {
@@ -50,6 +66,67 @@ struct DiffHTMLBuilderTests {
         // must start with one side (the new side) already selectable-only.
         #expect(DiffHTMLBuilder.page(for: diff, mode: .split).contains(#"<body class="sel-right">"#))
         #expect(!DiffHTMLBuilder.page(for: diff, mode: .unified).contains("sel-right\">"), "unified body carries no side class")
+    }
+
+    // MARK: - Interactive pages (Working Copy)
+
+    private var interactiveOptions: DiffHTMLBuilder.InteractiveOptions {
+        var options = DiffHTMLBuilder.InteractiveOptions()
+        options.selectableLines = true
+        options.askLines = true
+        options.hunkButtons = [
+            DiffHTMLBuilder.HunkButton(action: "discardHunk", title: "Discard", destructive: true),
+            DiffHTMLBuilder.HunkButton(action: "stageHunk", title: "Stage"),
+        ]
+        return options
+    }
+
+    @Test func interactiveUnifiedCarriesLineIDsAndAffordances() {
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            options: interactiveOptions
+        )
+        #expect(page.contains(#"data-id="l1""#), "changed lines carry their ID for the bridge")
+        #expect(page.contains(#"class="line del i selable""#), "changed lines are selectable")
+        #expect(page.contains(#"class="line ctx i""#) && !page.contains("ctx i selable"), "context lines are never selectable")
+        #expect(page.contains(#"class="ask""#), "hover ask button present")
+        #expect(page.contains(#"data-hid="h0""#), "hunk header carries the hunk ID")
+        #expect(page.contains(#"data-act="stageHunk""#) && page.contains(#"data-act="discardHunk""#), "hunk buttons post their actions")
+        #expect(page.contains("hb destructive"), "discard is styled destructive")
+        #expect(page.contains("gitalSetSelected") && page.contains("messageHandlers.gital"), "bridge script included")
+    }
+
+    @Test func interactiveSplitHasHunkButtonsButNoLineInteractivity() {
+        var options = DiffHTMLBuilder.InteractiveOptions()
+        options.hunkButtons = [DiffHTMLBuilder.HunkButton(action: "unstageHunk", title: "Unstage")]
+        let page = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: options)
+        #expect(page.contains(#"data-act="unstageHunk""#) && page.contains(#"data-hid="h0""#))
+        #expect(!page.contains("data-id="), "split has no per-line interactions")
+        #expect(page.contains(#"<body class="sel-right">"#), "split keeps the one-side selection default")
+    }
+
+    @Test func readOnlyPagesHaveNoBridge() {
+        for mode in DiffMode.allCases {
+            let page = DiffHTMLBuilder.page(for: diff, mode: mode)
+            #expect(!page.contains("messageHandlers"), "\(mode.rawValue): no bridge script")
+            #expect(!page.contains("data-id=") && !page.contains("data-hid=") && !page.contains("data-act="), "\(mode.rawValue): no interactive attributes")
+        }
+    }
+
+    // Line/hunk IDs embed the file path, which can contain quotes — they land
+    // in attribute values, so escaping must cover the quote too.
+    @Test func attributeSinksEscapeQuotes() {
+        #expect(DiffHTMLBuilder.escapeAttr(#"a"b<c>&"#) == "a&quot;b&lt;c&gt;&amp;")
+        let lines = [DiffLine(id: #"we"ird.swift@0"#, kind: .addition, text: "x", oldNumber: nil, newNumber: 1)]
+        let hunk = DiffHunk(id: #"we"ird.swift@h0"#, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: lines)
+        let hostile = FileDiff(path: #"we"ird.swift"#, oldPath: nil, isBinary: false, hunks: [hunk])
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: hostile),
+            options: interactiveOptions
+        )
+        #expect(page.contains(#"data-id="we&quot;ird.swift@0""#), "line ID quote is escaped")
+        #expect(page.contains(#"data-hid="we&quot;ird.swift@h0""#), "hunk ID quote is escaped")
+        #expect(!page.contains(#"data-id="we"ird"#), "raw quote never reaches an attribute")
     }
 
     // Hunk headers carry raw source as function context (`@@ … @@ <context>`),

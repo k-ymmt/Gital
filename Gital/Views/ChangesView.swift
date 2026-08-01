@@ -151,21 +151,30 @@ struct ChangesView: View {
         if diff.isBinary {
             BinaryFileContentView(diff: diff, imageContext: workingImageContext(diff))
         } else if model.diffMode == .split {
-            ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
-                if row.isHunkHeader,
-                   let hunk = diff.hunks.first(where: { row.id.hasPrefix("\($0.id)#") }) {
-                    SplitDiffRowView(row: row)
-                        .overlay(alignment: .trailing) { hunkStageButton(hunk, in: diff) }
-                } else {
-                    SplitDiffRowView(row: row)
-                }
-            }
+            // Split has no per-line interactions (selection/agent live in
+            // unified), so the whole file is one web chunk.
+            WebDiffChunkView(
+                html: DiffHTMLBuilder.interactiveSplitPage(for: diff, options: splitOptions(for: diff)),
+                estimatedHeight: CGFloat(SplitDiffRow.rows(for: diff.hunks).count) * 19,
+                onAction: { handle($0, in: diff) }
+            )
         } else {
-            ForEach(diff.hunks) { hunk in
-                HunkHeaderView(text: hunk.header)
-                    .overlay(alignment: .trailing) { hunkStageButton(hunk, in: diff) }
-                ForEach(hunk.lines) { line in
-                    interactiveLine(line, in: diff)
+            // Web chunks split where a native view (agent composer, agent
+            // thread cards) must interleave with the diff lines.
+            ForEach(unifiedSegments(for: diff)) { segment in
+                WebDiffChunkView(
+                    html: DiffHTMLBuilder.interactiveUnifiedPage(items: segment.items, options: unifiedOptions(for: diff)),
+                    selectedLineIDs: model.selectedLineIDs(in: diff),
+                    estimatedHeight: CGFloat(segment.items.count) * 19,
+                    onAction: { handle($0, in: diff) }
+                )
+                if let lineID = segment.interleaveAfterLineID {
+                    if model.composerAnchorID == lineID, let range = model.composerRange {
+                        AgentComposerView(model: model, range: range, fileName: diff.fileName)
+                    }
+                    ForEach(threadsAnchored(at: lineID)) { thread in
+                        AgentThreadView(model: model, thread: thread)
+                    }
                 }
             }
         }
@@ -175,39 +184,117 @@ struct ChangesView: View {
         ImageDiffContext.working(repository: model.repository, scope: diff.scope)
     }
 
-    @ViewBuilder
-    private func hunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
-        // Combined (conflict) hunks: no patch can be built from them, and the
-        // whole-file fallback behind "Stage" would mark the conflict resolved
-        // with the markers still in the file. Resolution happens through the
-        // sidebar's resolve menu, never through hunk buttons.
-        if diff.isCombined {
-            EmptyView()
-        } else {
-            plainHunkStageButton(hunk, in: diff)
+    // MARK: - Web diff plumbing
+
+    private struct UnifiedSegment: Identifiable {
+        let id: String
+        let items: [DiffHTMLBuilder.UnifiedItem]
+        /// Line whose composer/thread views render right after this chunk.
+        let interleaveAfterLineID: String?
+    }
+
+    /// Splits a file's unified rows into web chunks at every line that has an
+    /// open composer or anchored agent threads, so those stay native SwiftUI
+    /// between the chunks.
+    private func unifiedSegments(for diff: FileDiff) -> [UnifiedSegment] {
+        var segments: [UnifiedSegment] = []
+        var items: [DiffHTMLBuilder.UnifiedItem] = []
+        var firstID = ""
+
+        func flush(after lineID: String?) {
+            guard !items.isEmpty || lineID != nil else { return }
+            segments.append(UnifiedSegment(
+                id: "\(firstID)→\(lineID ?? "end")",
+                items: items,
+                interleaveAfterLineID: lineID
+            ))
+            items = []
+            firstID = ""
+        }
+
+        for hunk in diff.hunks {
+            if items.isEmpty { firstID = hunk.id }
+            items.append(.header(hunk))
+            for line in hunk.lines {
+                if items.isEmpty { firstID = line.id }
+                items.append(.line(line))
+                if model.composerAnchorID == line.id || !threadsAnchored(at: line.id).isEmpty {
+                    flush(after: line.id)
+                }
+            }
+        }
+        flush(after: nil)
+        return segments
+    }
+
+    private func unifiedOptions(for diff: FileDiff) -> DiffHTMLBuilder.InteractiveOptions {
+        var options = DiffHTMLBuilder.InteractiveOptions()
+        options.selectableLines = model.canSelectLines(in: diff)
+        options.askLines = true
+        options.hunkButtons = hunkButtons(for: diff)
+        return options
+    }
+
+    private func splitOptions(for diff: FileDiff) -> DiffHTMLBuilder.InteractiveOptions {
+        var options = DiffHTMLBuilder.InteractiveOptions()
+        options.hunkButtons = hunkButtons(for: diff)
+        return options
+    }
+
+    /// Combined (conflict) hunks: no patch can be built from them, and the
+    /// whole-file fallback behind "Stage" would mark the conflict resolved
+    /// with the markers still in the file. Resolution happens through the
+    /// sidebar's resolve menu, never through hunk buttons.
+    private func hunkButtons(for diff: FileDiff) -> [DiffHTMLBuilder.HunkButton] {
+        guard !diff.isCombined else { return [] }
+        switch diff.scope {
+        case .unstaged:
+            return [
+                DiffHTMLBuilder.HunkButton(action: "discardHunk", title: "Discard", destructive: true),
+                DiffHTMLBuilder.HunkButton(action: "stageHunk", title: "Stage"),
+            ]
+        case .untracked:
+            return [DiffHTMLBuilder.HunkButton(action: "stageHunk", title: "Stage")]
+        case .staged:
+            return [DiffHTMLBuilder.HunkButton(action: "unstageHunk", title: "Unstage")]
+        case .snapshot:
+            return []
         }
     }
 
-    @ViewBuilder
-    private func plainHunkStageButton(_ hunk: DiffHunk, in diff: FileDiff) -> some View {
-        switch diff.scope {
-        case .unstaged:
-            HStack(spacing: 6) {
-                HunkActionButton(title: "Discard", tint: DesignStyle.deletion) {
-                    model.requestDiscard(.hunk(hunk, diff))
-                }
-                HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
+    private func handle(_ action: WebDiffAction, in diff: FileDiff) {
+        switch action {
+        case .toggleLine(let id, let extend):
+            if let line = line(withID: id, in: diff) {
+                model.toggleLineSelection(line, in: diff, extend: extend)
             }
-            .padding(.trailing, 8)
-        case .untracked:
-            HunkActionButton(title: "Stage") { model.stageHunk(hunk, in: diff) }
-                .padding(.trailing, 8)
-        case .staged:
-            HunkActionButton(title: "Unstage") { model.unstageHunk(hunk, in: diff) }
-                .padding(.trailing, 8)
-        case .snapshot:
-            EmptyView()
+        case .ask(let id, let extend):
+            if let line = line(withID: id, in: diff) {
+                let number = agentLineNumber(line, in: diff)
+                if extend {
+                    model.extendComposer(file: diff.path, line: number, anchorID: line.id)
+                } else {
+                    model.openComposer(file: diff.path, line: number, anchorID: line.id)
+                }
+            }
+        case .hunk(let act, let id):
+            guard let hunk = diff.hunks.first(where: { $0.id == id }) else { return }
+            switch act {
+            case "stageHunk": model.stageHunk(hunk, in: diff)
+            case "unstageHunk": model.unstageHunk(hunk, in: diff)
+            case "discardHunk": model.requestDiscard(.hunk(hunk, diff))
+            default: break
+            }
         }
+    }
+
+    private func line(withID id: String, in diff: FileDiff) -> DiffLine? {
+        for hunk in diff.hunks {
+            if let line = hunk.lines.first(where: { $0.id == id }) {
+                return line
+            }
+        }
+        return nil
     }
 
     /// New-file coordinate for a diff line. Deletions have no new number, so
@@ -224,34 +311,6 @@ struct ChangesView: View {
             return hunk.newStart
         }
         return line.oldNumber ?? 0
-    }
-
-    @ViewBuilder
-    private func interactiveLine(_ line: DiffLine, in diff: FileDiff) -> some View {
-        let lineNumber = agentLineNumber(line, in: diff)
-        let selectable = model.canSelectLines(in: diff) && line.kind != .context
-
-        InteractiveDiffLineView(
-            line: line,
-            isSelected: model.selectedDiffLineIDs.contains(line.id),
-            onSelect: selectable ? { extend in
-                model.toggleLineSelection(line, in: diff, extend: extend)
-            } : nil
-        ) {
-            if NSEvent.modifierFlags.contains(.shift) {
-                model.extendComposer(file: diff.path, line: lineNumber, anchorID: line.id)
-            } else {
-                model.openComposer(file: diff.path, line: lineNumber, anchorID: line.id)
-            }
-        }
-
-        if model.composerAnchorID == line.id, let range = model.composerRange {
-            AgentComposerView(model: model, range: range, fileName: diff.fileName)
-        }
-
-        ForEach(threadsAnchored(at: line.id)) { thread in
-            AgentThreadView(model: model, thread: thread)
-        }
     }
 
     private func threadsAnchored(at lineID: String) -> [AgentThread] {
@@ -332,56 +391,6 @@ struct HunkActionButton: View {
         }
         .buttonStyle(.plain)
         .help(title)
-    }
-}
-
-// MARK: - Interactive diff line (hover + button)
-
-struct InteractiveDiffLineView: View {
-    let line: DiffLine
-    var isSelected = false
-    var onSelect: ((_ extend: Bool) -> Void)?
-    let onAsk: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        UnifiedDiffLineView(line: line)
-            .background(isHovering ? Color.primary.opacity(0.04) : .clear)
-            .overlay {
-                if isSelected {
-                    Rectangle()
-                        .fill(Color.accentColor.opacity(0.14))
-                        .allowsHitTesting(false)
-                }
-            }
-            .overlay(alignment: .leading) {
-                if isSelected {
-                    Rectangle()
-                        .fill(Color.accentColor)
-                        .frame(width: 2.5)
-                        .allowsHitTesting(false)
-                }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                onSelect?(NSEvent.modifierFlags.contains(.shift))
-            }
-            .overlay(alignment: .leading) {
-                if isHovering {
-                    Button(action: onAsk) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 17, height: 17)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 3)
-                    .help("Ask AI Agent about this line (⇧-click to extend range)")
-                }
-            }
-            .onHover { isHovering = $0 }
     }
 }
 
