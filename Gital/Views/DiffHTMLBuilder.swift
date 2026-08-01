@@ -316,8 +316,13 @@ enum DiffHTMLBuilder {
     window.addEventListener('load', reportHeight);
     document.addEventListener('mousedown', (e) => {
         // Shift-click means "extend the line selection / composer range",
-        // not "extend the text selection".
-        if (e.shiftKey && e.target.closest('.selable, .ask')) { e.preventDefault(); }
+        // not "extend the text selection". Also drop any existing text
+        // selection: preventDefault preserves it, and a non-collapsed
+        // selection would make the click handler swallow the extend.
+        if (e.shiftKey && e.target.closest('.selable, .ask')) {
+            e.preventDefault();
+            window.getSelection().removeAllRanges();
+        }
     });
     document.addEventListener('click', (e) => {
         const hb = e.target.closest('.hb');

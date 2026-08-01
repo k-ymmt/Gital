@@ -16,6 +16,22 @@ private final class HeightFittingWebView: WKWebView {
     }
 }
 
+/// Last reported page height per HTML content. `@State` heights die with
+/// their view, and chunk views die a lot — LazyVStack recycling, and every
+/// composer open/close re-splits a file's segments — after which a rows×19
+/// estimate (wrong whenever lines wrap) would visibly jump the layout.
+/// Heights are width-dependent, but a stale entry only mis-sizes the chunk
+/// until the live page re-reports.
+private let heightCache = NSCache<NSString, NSNumber>()
+
+private func cachedHeight(for html: String) -> CGFloat? {
+    heightCache.object(forKey: String(html.hashValue) as NSString).map { CGFloat($0.doubleValue) }
+}
+
+private func cacheHeight(_ height: CGFloat, for html: String) {
+    heightCache.setObject(NSNumber(value: height), forKey: String(html.hashValue) as NSString)
+}
+
 /// One self-sized, interactive diff chunk inside the Working Copy list.
 /// Chunks split where native views (agent composer, agent threads) interleave
 /// with diff lines, so those stay plain SwiftUI.
@@ -37,9 +53,17 @@ struct WebDiffChunkView: View {
             html: html,
             selectedLineIDs: selectedLineIDs,
             onAction: onAction,
-            onHeight: { reportedHeight = $0 }
+            onHeight: { height in
+                reportedHeight = height
+                cacheHeight(height, for: html)
+            }
         )
-        .frame(height: reportedHeight ?? estimatedHeight)
+        .frame(height: reportedHeight ?? cachedHeight(for: html) ?? estimatedHeight)
+        // Same view identity, new content (a refresh reusing the segment ID):
+        // the old page's height must not linger on the new page.
+        .onChange(of: html) {
+            reportedHeight = cachedHeight(for: html)
+        }
     }
 }
 
@@ -66,6 +90,16 @@ private struct InteractiveWebView: NSViewRepresentable {
             guard message.name == "gital",
                   let body = message.body as? [String: Any],
                   let type = body["type"] as? String else { return }
+            // Between a content refresh (markLoading) and didFinish the web
+            // view still shows the OLD page, while onAction closures already
+            // capture the NEW diff. Line/hunk IDs are positional (path@N), so
+            // an ID clicked on the stale page can resolve to a different
+            // physical hunk/line in the refreshed diff — and stage or discard
+            // something the user never saw. Drop those clicks; height reports
+            // stay welcome (the fresh load re-reports anyway).
+            if type != "height" {
+                guard pageReady else { return }
+            }
             switch type {
             case "height":
                 if let height = body["height"] as? Double, height > 0 {

@@ -105,6 +105,22 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains(#"<body class="sel-right">"#), "split keeps the one-side selection default")
     }
 
+    // The split page renders through its own sinks (`splitSide`, and
+    // `hunkHeader` reached via `splitBody`) — the empty-line-space and
+    // attribute-escaping invariants must be pinned there too, not only
+    // through the unified path that happens to share code today.
+    @Test func splitPageKeepsEmptyLinesAndEscapesHunkIDs() {
+        let plain = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
+        #expect(plain.contains(#"<span class="text"> </span>"#), "empty added line copies as a blank line in split too")
+
+        let lines = [DiffLine(id: #"we"ird.swift@0"#, kind: .addition, text: "", oldNumber: nil, newNumber: 1)]
+        let hunk = DiffHunk(id: #"we"ird.swift@h0"#, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: lines)
+        let hostile = FileDiff(path: #"we"ird.swift"#, oldPath: nil, isBinary: false, hunks: [hunk])
+        let page = DiffHTMLBuilder.interactiveSplitPage(for: hostile, options: interactiveOptions)
+        #expect(page.contains(#"data-hid="we&quot;ird.swift@h0""#), "split hunk ID quote is escaped")
+        #expect(!page.contains(#"data-hid="we"ird"#), "raw quote never reaches a split attribute")
+    }
+
     @Test func readOnlyPagesHaveNoBridge() {
         for mode in DiffMode.allCases {
             let page = DiffHTMLBuilder.page(for: diff, mode: mode)
