@@ -120,11 +120,12 @@ struct ChangesView: View {
 
     @ViewBuilder
     private func lineSelectionActions(_ diff: FileDiff) -> some View {
-        let selectedCount = model.selectedLineIDs(in: diff).count
+        let selected = model.selectedLineIDs(in: diff)
+        let selectedCount = selected.count
         if selectedCount > 0 {
             if diff.scope == .unstaged {
                 HunkActionButton(title: "Discard \(selectedCount) Line\(selectedCount == 1 ? "" : "s")", tint: DesignStyle.deletion) {
-                    model.requestDiscard(.lines(diff, count: selectedCount))
+                    model.requestDiscard(.lines(diff, ids: selected))
                 }
             }
             HunkActionButton(title: lineActionTitle(diff, count: selectedCount)) {
@@ -299,16 +300,18 @@ struct ChangesView: View {
                 model.openComposer(file: diff.path, lines: min(first, last)...max(first, last), anchorID: end.id)
             }
         case .lines(let act, let startID, let endID):
+            // The framed range goes to the model as explicit IDs — never
+            // through the click-based line selection, which the user may be
+            // curating separately.
             let ids = changedLineIDs(from: startID, to: endID, in: diff)
             guard !ids.isEmpty else { return }
-            model.selectLines(ids, in: diff)
             switch act {
             case "stageLines", "unstageLines":
                 // Direction comes from the diff's scope inside the model —
-                // both actions are the same selection-based apply.
-                model.applySelectedLines(in: diff)
+                // both actions are the same apply.
+                model.applyLines(ids, in: diff)
             case "discardLines":
-                model.requestDiscard(.lines(diff, count: ids.count))
+                model.requestDiscard(.lines(diff, ids: ids))
             default:
                 break
             }

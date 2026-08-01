@@ -74,16 +74,6 @@ extension RepoViewModel {
         lineSelectionAnchor = (diff.path, line.id)
     }
 
-    /// Replaces this diff's line selection (other files' selections stay) —
-    /// the text-selection frame's Stage/Discard buttons route through the
-    /// selection-based paths, and must act on exactly the framed lines.
-    func selectLines(_ ids: Set<String>, in diff: FileDiff) {
-        guard canSelectLines(in: diff) else { return }
-        let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
-        clearLineSelection(in: diff)
-        selectedDiffLineIDs.formUnion(ids.intersection(changed))
-    }
-
     func selectedLineIDs(in diff: FileDiff) -> Set<String> {
         let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
         return selectedDiffLineIDs.intersection(changed)
@@ -94,14 +84,25 @@ extension RepoViewModel {
     }
 
     func applySelectedLines(in diff: FileDiff) {
-        let ids = selectedLineIDs(in: diff)
+        applyLines(selectedLineIDs(in: diff), in: diff)
+    }
+
+    /// Stages/unstages an explicit set of changed lines — the text-selection
+    /// frame's capsules pass their framed range here directly, leaving the
+    /// click-based line selection untouched.
+    func applyLines(_ ids: Set<String>, in diff: FileDiff) {
         let direction: PatchBuilder.Direction? = switch diff.scope {
         case .unstaged: .stage
         case .staged: .unstage
         default: nil
         }
-        guard let direction,
-              let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: direction) else { return }
+        guard let direction, !ids.isEmpty else { return }
+        // A nil patch is a real outcome (e.g. a no-newline marker that can't
+        // land mid-file) — the button must say so, not silently do nothing.
+        guard let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: direction) else {
+            errorMessage = "These lines cannot be \(direction == .stage ? "staged" : "unstaged") on their own. Use the whole hunk or file instead."
+            return
+        }
         perform(refresh: .workingCopy) {
             try await self.repository.applyToIndex(patch: patch, reverse: direction == .unstage)
             self.selectedDiffLineIDs.subtract(ids)
@@ -113,7 +114,10 @@ extension RepoViewModel {
     enum DiscardTarget {
         case file(FileChange)
         case hunk(DiffHunk, FileDiff)
-        case lines(FileDiff, count: Int)
+        /// IDs are captured at request time — what the confirmation dialog
+        /// promised is exactly what gets reverted, independent of whatever
+        /// happens to the click-based line selection meanwhile.
+        case lines(FileDiff, ids: Set<String>)
 
         var confirmationTitle: String {
             switch self {
@@ -132,8 +136,8 @@ extension RepoViewModel {
                 "All unstaged changes in “\(change.path)” will be lost. This cannot be undone."
             case .hunk(_, let diff):
                 "This hunk in “\(diff.fileName)” will be reverted. This cannot be undone."
-            case .lines(let diff, let count):
-                "\(count) selected line\(count == 1 ? "" : "s") in “\(diff.fileName)” will be reverted. This cannot be undone."
+            case .lines(let diff, let ids):
+                "\(ids.count) line\(ids.count == 1 ? "" : "s") in “\(diff.fileName)” will be reverted. This cannot be undone."
             }
         }
     }
@@ -181,12 +185,19 @@ extension RepoViewModel {
                     )
                 }
                 try await self.repository.applyToWorktree(patch: patch, reverse: true)
-            case .lines(let diff, _):
+            case .lines(let diff, let ids):
                 // The worktree holds unselected additions and lacks unselected
                 // deletions — the same shape as the index in the unstage case,
                 // so `.unstage` builds the right reverse-apply patch here too.
-                let ids = self.selectedLineIDs(in: diff)
-                guard let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: .unstage) else { return }
+                guard let patch = PatchBuilder.linesPatch(for: diff, selecting: ids, direction: .unstage) else {
+                    // The user confirmed a destructive dialog — an
+                    // unrepresentable patch must not dissolve into silence.
+                    throw GitError(
+                        command: "discard",
+                        exitCode: 1,
+                        stderr: "These lines cannot be discarded on their own. Discard the whole hunk or file instead if that is what you want."
+                    )
+                }
                 try await self.repository.applyToWorktree(patch: patch, reverse: true)
                 self.selectedDiffLineIDs.subtract(ids)
             }
