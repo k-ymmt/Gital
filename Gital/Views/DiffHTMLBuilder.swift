@@ -8,9 +8,17 @@ import Foundation
 enum DiffHTMLBuilder {
     static func page(for diff: FileDiff, mode: DiffMode) -> String {
         let body: String
+        // Split starts with the right (new) side selectable so a keyboard
+        // Select All — which never goes through the mousedown guard — copies
+        // one coherent column instead of interleaving both sides.
+        let bodyClass: String
         switch mode {
-        case .unified: body = unifiedBody(for: diff)
-        case .split: body = splitBody(for: diff)
+        case .unified:
+            body = unifiedBody(for: diff)
+            bodyClass = ""
+        case .split:
+            body = splitBody(for: diff)
+            bodyClass = " class=\"sel-right\""
         }
         return """
         <!DOCTYPE html>
@@ -19,7 +27,7 @@ enum DiffHTMLBuilder {
         <meta charset="utf-8">
         <style>\(css)</style>
         </head>
-        <body>
+        <body\(bodyClass)>
         \(body)
         <script>\(script)</script>
         </body>
@@ -143,14 +151,15 @@ enum DiffHTMLBuilder {
 
     /// Split view: a drag that starts on one side must not smear selection
     /// across the other column, so mousedown disables selection on the
-    /// opposite side (the GitHub approach).
+    /// opposite side (the GitHub approach). A mousedown outside any side
+    /// (hunk header, empty space) keeps the current side — dropping both
+    /// classes there would let a later Select All interleave the columns.
     private static let script = """
     document.addEventListener('mousedown', (e) => {
-        document.body.classList.remove('sel-left', 'sel-right');
         const side = e.target.closest('.side');
-        if (side) {
-            document.body.classList.add(side.classList.contains('left') ? 'sel-left' : 'sel-right');
-        }
+        if (!side) { return; }
+        document.body.classList.remove('sel-left', 'sel-right');
+        document.body.classList.add(side.classList.contains('left') ? 'sel-left' : 'sel-right');
     });
     """
 }
