@@ -12,24 +12,41 @@ struct GitError: LocalizedError {
 }
 
 /// Runs git as a subprocess against a repository working directory.
-/// Commands are serialized: two concurrent index mutations would otherwise
-/// race on `.git/index.lock`, and out-of-order completion made "latest state"
-/// reads unreliable.
+/// Commands are serialized per lane: two concurrent index mutations would
+/// otherwise race on `.git/index.lock`, and out-of-order completion made
+/// "latest state" reads unreliable. Network commands run on a lane of their
+/// own — a fetch hanging on a dead remote used to wedge the single chain and
+/// froze every status/diff/log behind it for as long as the remote dangled.
 actor GitExecutor {
+    /// Serialization lane for a command.
+    /// - `local`: everything that reads or mutates the index/worktree/refs;
+    ///   one command at a time, as before.
+    /// - `network`: fetch/push — can hang on a dead remote, never touches the
+    ///   index, and must not stall local reads. Serialized among themselves
+    ///   so two fetches can't race on remote-tracking ref locks.
+    /// - `exclusive`: pull — mutates the worktree AND talks to the network,
+    ///   so it serializes against both lanes.
+    enum Lane {
+        case local
+        case network
+        case exclusive
+    }
+
     /// Kept as an alias for callers/tests that time out against the drain
     /// cutoff; the actual drain logic lives in `Subprocess`.
     static let drainGracePeriod = Subprocess.drainGracePeriod
 
     let workingDirectory: URL
-    private var tail: Task<Void, Never>?
+    private var localTail: Task<Void, Never>?
+    private var networkTail: Task<Void, Never>?
 
     init(workingDirectory: URL) {
         self.workingDirectory = workingDirectory
     }
 
     @discardableResult
-    func run(_ arguments: [String], successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> String {
-        let data = try await runData(arguments, successCodes: successCodes, stdin: stdin)
+    func run(_ arguments: [String], lane: Lane = .local, successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> String {
+        let data = try await runData(arguments, lane: lane, successCodes: successCodes, stdin: stdin)
         return String(decoding: data, as: UTF8.self)
     }
 
@@ -43,11 +60,13 @@ actor GitExecutor {
         return (String(decoding: data, as: UTF8.self), false)
     }
 
-    func runData(_ arguments: [String], successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> Data {
+    func runData(_ arguments: [String], lane: Lane = .local, successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> Data {
         let workingDirectory = self.workingDirectory
-        let previous = tail
+        let previousLocal = lane == .network ? nil : localTail
+        let previousNetwork = lane == .local ? nil : networkTail
         let task = Task<Data, Error> {
-            await previous?.value
+            await previousLocal?.value
+            await previousNetwork?.value
             // The command task is unstructured, so the caller's cancellation
             // is forwarded explicitly below. Cancelled while queued: skip the
             // spawn entirely. Cancelled while running: Subprocess terminates
@@ -60,7 +79,9 @@ actor GitExecutor {
                 stdin: stdin
             )
         }
-        tail = Task { _ = try? await task.value }
+        let settled = Task { _ = try? await task.value }
+        if lane != .network { localTail = settled }
+        if lane != .local { networkTail = settled }
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {

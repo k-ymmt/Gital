@@ -15,10 +15,11 @@ extension RepoViewModel {
         let now = ContinuousClock.now
         guard AutoFetchPreference.shouldFetch(lastFetch: lastAutoFetch, now: now, interval: interval) else { return }
         lastAutoFetch = now
-        // Timeout because the executor serializes every git command behind
-        // this fetch: a wedged remote would otherwise stall all user
-        // operations with no busy indicator anywhere. `try?` also swallows
-        // the tick's own cancellation (window closed, interval changed).
+        // Timeout because the executor serializes network commands behind
+        // this fetch: a wedged remote would otherwise stall every push/pull
+        // (and the following ticks) with no busy indicator anywhere. `try?`
+        // also swallows the tick's own cancellation (window closed, interval
+        // changed).
         // A fetch that changed nothing skips the refreshes outright — and
         // with --no-write-fetch-head it leaves no file change behind either,
         // so the FSEvents watcher stays quiet too.

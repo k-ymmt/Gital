@@ -697,7 +697,7 @@ final class GitRepository: @unchecked Sendable {
         // --no-write-fetch-head (git 2.29+): nothing in the app reads
         // FETCH_HEAD, and writing it turns even a no-change fetch into an
         // FSEvents event that sends the watcher into a full refresh.
-        try await executor.run(["fetch", "--all", "--prune", "--tags", "--no-write-fetch-head"])
+        try await executor.run(["fetch", "--all", "--prune", "--tags", "--no-write-fetch-head"], lane: .network)
     }
 
     /// Fetch for the auto-fetch timer: reports whether anything changed, so
@@ -719,11 +719,14 @@ final class GitRepository: @unchecked Sendable {
     /// only way to reach commits of PRs from forks (their remote is never
     /// configured locally); the ref namespace is GitHub-specific.
     func fetchPullRequestHead(number: Int) async throws {
-        try await executor.run(["fetch", "origin", "refs/pull/\(number)/head"])
+        try await executor.run(["fetch", "origin", "refs/pull/\(number)/head"], lane: .network)
     }
 
     func pull() async throws {
-        try await executor.run(["pull", "--ff-only"])
+        // Exclusive: pull rewrites the worktree and index, so it must not
+        // overlap local commands — but it also talks to the network, so it
+        // must not overlap an in-flight fetch either.
+        try await executor.run(["pull", "--ff-only"], lane: .exclusive)
     }
 
     func push(force: Bool = false) async throws {
@@ -736,7 +739,7 @@ final class GitRepository: @unchecked Sendable {
         }
         try await executor.run(Self.pushArguments(
             currentBranch: branch, upstreamRemote: remote, upstreamMerge: merge, force: force
-        ))
+        ), lane: .network)
     }
 
     /// Builds the `git push` invocation for the current branch. `force` uses
@@ -773,7 +776,7 @@ final class GitRepository: @unchecked Sendable {
         let merge = try await configValue("branch.\(name).merge")
         try await executor.run(Self.pushBranchArguments(
             branch: name, pushRemote: pushRemote, fetchRemote: fetchRemote, upstreamMerge: merge
-        ))
+        ), lane: .network)
     }
 
     /// Builds the `git push` invocation for a non-checked-out branch.
@@ -1013,7 +1016,7 @@ final class GitRepository: @unchecked Sendable {
     /// short form fail with "matches more than one" — the sidebar's remote
     /// rows only ever list branches, so heads is always the intent.
     func deleteRemoteBranch(remote: String, branch: String) async throws {
-        try await executor.run(["push", remote, "--delete", "refs/heads/\(branch)"])
+        try await executor.run(["push", remote, "--delete", "refs/heads/\(branch)"], lane: .network)
     }
 
     /// `--` separator: name and URL are free text from the add-remote prompt.

@@ -92,6 +92,97 @@ struct GitExecutorTests {
         }
     }
 
+    // A network-lane command hanging on a dead remote must not stall local
+    // commands — the regression was a wedged `git fetch` freezing every
+    // status/diff/log (the Working Copy pane stopped following file
+    // selection) until the fetch died.
+    @Test func networkLaneDoesNotBlockLocalLane() async throws {
+        try await withTempRepo { executor in
+            let slowFetch = Task {
+                try await executor.run(
+                    ["-c", "alias.slownet=!sleep 5 && touch net.done", "slownet"], lane: .network
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let seen = (try? await executor.run(
+                ["-c", "alias.probe=!test -f net.done && echo present || echo missing", "probe"]
+            )) ?? ""
+            #expect(seen.contains("missing"), "local command ran while the network command was still hanging")
+            slowFetch.cancel()
+            _ = try? await slowFetch.value
+        }
+    }
+
+    // Two network commands must still serialize with each other — concurrent
+    // fetches would race on remote-tracking ref locks.
+    @Test func networkLaneSerializesItself() async throws {
+        try await withTempRepo { executor in
+            let first = Task {
+                try await executor.run(
+                    ["-c", "alias.netone=!sleep 1 && touch n1.done", "netone"], lane: .network
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let seen = (try? await executor.run(
+                ["-c", "alias.nettwo=!test -f n1.done && echo present || echo missing", "nettwo"],
+                lane: .network
+            )) ?? ""
+            #expect(seen.contains("present"), "second network command waited for the first")
+            _ = try? await first.value
+        }
+    }
+
+    // An exclusive command (pull) must wait for BOTH lanes: it rewrites the
+    // worktree (can't overlap local commands) and talks to the remote (can't
+    // overlap an in-flight fetch).
+    @Test func exclusiveLaneWaitsForBothLanes() async throws {
+        try await withTempRepo { executor in
+            let slowLocal = Task {
+                try await executor.run(["-c", "alias.slowloc=!sleep 1 && touch local.done", "slowloc"])
+            }
+            let slowNetwork = Task {
+                try await executor.run(
+                    ["-c", "alias.slownet=!sleep 1 && touch net.done", "slownet"], lane: .network
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let seen = (try? await executor.run(
+                ["-c", "alias.excl=!ls local.done net.done 2>/dev/null | wc -l", "excl"],
+                lane: .exclusive
+            )) ?? ""
+            #expect(seen.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("2"),
+                    "exclusive command waited for both lanes (saw: \(seen))")
+            _ = try? await slowLocal.value
+            _ = try? await slowNetwork.value
+        }
+    }
+
+    // And the mirror image: once an exclusive command is queued, both lanes
+    // must wait behind it — a fetch overlapping a pull's worktree rewrite
+    // races on the same remote refs.
+    @Test func bothLanesWaitBehindExclusive() async throws {
+        try await withTempRepo { executor in
+            let exclusive = Task {
+                try await executor.run(
+                    ["-c", "alias.slowexcl=!sleep 1 && touch ex.done", "slowexcl"], lane: .exclusive
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            async let localSeen = executor.run(
+                ["-c", "alias.locprobe=!test -f ex.done && echo present || echo missing", "locprobe"]
+            )
+            async let networkSeen = executor.run(
+                ["-c", "alias.netprobe=!test -f ex.done && echo present || echo missing", "netprobe"],
+                lane: .network
+            )
+            let local = (try? await localSeen) ?? ""
+            let network = (try? await networkSeen) ?? ""
+            #expect(local.contains("present"), "local command waited behind the exclusive command")
+            #expect(network.contains("present"), "network command waited behind the exclusive command")
+            _ = try? await exclusive.value
+        }
+    }
+
     // Hammer the chain with concurrent mixed success/failure commands; every
     // call must complete with the expected outcome.
     @Test func concurrentMixedCommands() async throws {

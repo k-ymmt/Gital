@@ -6,10 +6,10 @@ enum AutoFetchPreference {
     static let defaultsKey = "autoFetchIntervalSeconds"
     static let defaultInterval: TimeInterval = 60
 
-    /// Upper bound on one background fetch. The executor serializes every
-    /// git command behind it, so without this a fetch against a wedged
-    /// remote (hung TCP after a VPN drop) would invisibly stall every user
-    /// operation for as long as the remote dangles.
+    /// Upper bound on one background fetch. The executor serializes network
+    /// commands behind it, so without this a fetch against a wedged remote
+    /// (hung TCP after a VPN drop) would invisibly stall every push/pull —
+    /// and the next ticks — for as long as the remote dangles.
     static let fetchTimeout: TimeInterval = 60
 
     /// Whether a timer tick should actually run a fetch. Each window hosting
