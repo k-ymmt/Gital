@@ -4,9 +4,8 @@ import WebKit
 /// A click routed out of an interactive diff page (Working Copy).
 enum WebDiffAction {
     case toggleLine(id: String, extend: Bool)
-    case ask(id: String, extend: Bool)
-    /// The "+" on a text-selection frame: ask about every line the
-    /// selection spans, first to last.
+    /// The "+" on a text-selection or hover-hunk frame: ask about every
+    /// line the frame spans, first to last.
     case askRange(startID: String, endID: String)
     /// A Stage/Unstage/Discard capsule on the frame: act on the changed
     /// lines the selection spans.
@@ -114,10 +113,6 @@ private struct InteractiveWebView: NSViewRepresentable {
             case "toggleLine":
                 if let id = body["id"] as? String {
                     onAction(.toggleLine(id: id, extend: body["extend"] as? Bool ?? false))
-                }
-            case "ask":
-                if let id = body["id"] as? String {
-                    onAction(.ask(id: id, extend: body["extend"] as? Bool ?? false))
                 }
             case "askRange":
                 if let start = body["start"] as? String, let end = body["end"] as? String {

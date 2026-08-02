@@ -89,7 +89,7 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains(#"data-id="l1""#), "changed lines carry their ID for the bridge")
         #expect(page.contains(#"class="line del i selable""#), "changed lines are selectable")
         #expect(page.contains(#"class="line ctx i""#) && !page.contains("ctx i selable"), "context lines are never selectable")
-        #expect(page.contains(#"class="ask""#), "hover ask button present")
+        #expect(!page.contains(#"class="ask""#), "no per-line ask button — the frame's corner + asks about ranges")
         #expect(page.contains(#"data-hid="h0""#), "hunk header carries the hunk ID")
         #expect(page.contains(#"data-act="stageHunk""#) && page.contains(#"data-act="discardHunk""#), "hunk buttons post their actions")
         #expect(page.contains("hb destructive"), "discard is styled destructive")

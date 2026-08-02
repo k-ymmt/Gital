@@ -31,7 +31,8 @@ enum DiffHTMLBuilder {
     struct InteractiveOptions {
         /// Non-context lines become click-to-select for line staging.
         var selectableLines = false
-        /// Lines grow a hover "+" button that opens the AI agent composer.
+        /// Every line carries its ID, so the hover/selection frames' "+" can
+        /// ask the AI agent about the range it spans.
         var askLines = false
         /// Buttons rendered on every hunk header (Stage/Unstage/Discard).
         var hunkButtons: [HunkButton] = []
@@ -93,7 +94,6 @@ enum DiffHTMLBuilder {
     private static func unifiedLine(_ line: DiffLine, options: InteractiveOptions?) -> String {
         var classes = "line \(kindClass(line.kind))"
         var attrs = ""
-        var ask = ""
         if let options {
             classes += " i"
             if options.selectableLines && line.kind != .context {
@@ -102,13 +102,9 @@ enum DiffHTMLBuilder {
             if options.selectableLines || options.askLines {
                 attrs = " data-id=\"\(escapeAttr(line.id))\""
             }
-            if options.askLines {
-                ask = "<span class=\"ask\" title=\"Ask AI Agent about this line (⇧-click to extend range)\">+</span>"
-            }
         }
         return """
         <div class="\(classes)"\(attrs)>\
-        \(ask)\
         <span class="num" data-n="\(line.oldNumber.map(String.init) ?? "")"></span>\
         <span class="num" data-n="\(line.newNumber.map(String.init) ?? "")"></span>\
         <span class="sign" data-s="\(line.kind == .context ? "" : line.sign)"></span>\
@@ -263,9 +259,10 @@ enum DiffHTMLBuilder {
     body.sel-left .side.right, body.sel-right .side.left { -webkit-user-select: none; user-select: none; }
     """
 
-    /// Hover/selection affordances for the Working Copy: hover tint and "+"
-    /// button, accent overlay + left bar on selected lines, capsule
-    /// hunk-action buttons (all matching the SwiftUI renderer they replace).
+    /// Hover/selection affordances for the Working Copy: hover tint, accent
+    /// overlay + left bar on selected lines, capsule hunk-action buttons, and
+    /// the frame corner buttons (all matching the SwiftUI renderer they
+    /// replace).
     /// The system accent is `AccentColor` (CSS system color) — WebKit on
     /// macOS 27 no longer accepts `-webkit-focus-ring-color`, and an unknown
     /// color silently drops the whole declaration. The rgb() fallbacks
@@ -277,7 +274,6 @@ enum DiffHTMLBuilder {
         box-shadow: inset 2.5px 0 0 0 rgb(47, 111, 237);
     }
     .ask {
-        display: none;
         position: absolute;
         left: 3px;
         top: 1px;
@@ -291,9 +287,8 @@ enum DiffHTMLBuilder {
         cursor: pointer;
         -webkit-user-select: none;
         user-select: none;
-        z-index: 1;
+        z-index: 2;
     }
-    .line.i:hover .ask { display: block; }
     .hunkbtns {
         display: flex;
         gap: 6px;
@@ -323,8 +318,6 @@ enum DiffHTMLBuilder {
     }
     .tsel-first::after, .hsel-first::after { border-top-width: 1.5px; }
     .tsel-last::after, .hsel-last::after { border-bottom-width: 1.5px; }
-    .askr { display: block; z-index: 2; }
-    .line.i:hover .ask:has(~ .askr) { display: none; }
     .selbar {
         position: absolute;
         left: 24px;
@@ -363,7 +356,7 @@ enum DiffHTMLBuilder {
     /// Interactive pages talk to `WebDiffChunkView` through the `gital`
     /// message handler: height reports (the chunk always matches content
     /// height; the outer SwiftUI ScrollView scrolls), line selection clicks,
-    /// "+" (ask agent) clicks, and hunk-button clicks. Selection highlight is
+    /// and hunk/frame-button clicks. Selection highlight is
     /// pushed back in via `gitalSetSelected` so a click never reloads the page.
     /// The page also frames the rows a mouse text selection spans (`.tsel`)
     /// and, while no text is selected, the hunk under the pointer (`.hsel`),
@@ -377,11 +370,11 @@ enum DiffHTMLBuilder {
         // Clicking the frame's ask/stage/discard buttons must not collapse
         // the text selection that defines their range.
         if (e.target.closest('.askr, .selbar')) { e.preventDefault(); return; }
-        // Shift-click means "extend the line selection / composer range",
-        // not "extend the text selection". Also drop any existing text
-        // selection: preventDefault preserves it, and a non-collapsed
-        // selection would make the click handler swallow the extend.
-        if (e.shiftKey && e.target.closest('.selable, .ask')) {
+        // Shift-click means "extend the line selection", not "extend the
+        // text selection". Also drop any existing text selection:
+        // preventDefault preserves it, and a non-collapsed selection would
+        // make the click handler swallow the extend.
+        if (e.shiftKey && e.target.closest('.selable')) {
             e.preventDefault();
             window.getSelection().removeAllRanges();
         }
@@ -397,11 +390,8 @@ enum DiffHTMLBuilder {
         }
         const hb = e.target.closest('.hb');
         if (hb) { post({type: hb.dataset.act, id: hb.closest('.hunk').dataset.hid}); return; }
-        // Before .ask — the range button carries the .ask class for styling.
         const askr = e.target.closest('.askr');
         if (askr) { post({type: 'askRange', start: askr.dataset.start, end: askr.dataset.end}); return; }
-        const ask = e.target.closest('.ask');
-        if (ask) { post({type: 'ask', id: ask.closest('.line').dataset.id, extend: e.shiftKey}); return; }
         const line = e.target.closest('.line.selable');
         if (line && window.getSelection().isCollapsed) {
             post({type: 'toggleLine', id: line.dataset.id, extend: e.shiftKey});

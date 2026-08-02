@@ -283,15 +283,6 @@ struct ChangesView: View {
             if let line = line(withID: id, in: diff) {
                 model.toggleLineSelection(line, in: diff, extend: extend)
             }
-        case .ask(let id, let extend):
-            if let line = line(withID: id, in: diff) {
-                let number = agentLineNumber(line, in: diff)
-                if extend {
-                    model.extendComposer(file: diff.path, line: number, anchorID: line.id)
-                } else {
-                    model.openComposer(file: diff.path, line: number, anchorID: line.id)
-                }
-            }
         case .askRange(let startID, let endID):
             if let start = line(withID: startID, in: diff), let end = line(withID: endID, in: diff) {
                 let first = agentLineNumber(start, in: diff)

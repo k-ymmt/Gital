@@ -3,23 +3,9 @@ import Foundation
 // MARK: - AI Agent
 
 extension RepoViewModel {
-    func openComposer(file: String, line: Int, anchorID: String) {
-        openComposer(file: file, lines: line...line, anchorID: anchorID)
-    }
-
     func openComposer(file: String, lines: ClosedRange<Int>, anchorID: String) {
         composerFile = file
         composerRange = lines
-        composerAnchorID = anchorID
-    }
-
-    func extendComposer(file: String, line: Int, anchorID: String) {
-        guard composerFile == file, let range = composerRange else {
-            openComposer(file: file, line: line, anchorID: anchorID)
-            return
-        }
-        // The composer stays anchored to the last-picked line.
-        composerRange = min(range.lowerBound, line)...max(range.upperBound, line)
         composerAnchorID = anchorID
     }
 
