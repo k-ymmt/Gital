@@ -64,7 +64,7 @@ struct DiffHTMLBuilderTests {
     @Test func splitDefaultsToRightSideSelection() {
         // Keyboard Select All never passes the mousedown guard, so split
         // must start with one side (the new side) already selectable-only.
-        #expect(DiffHTMLBuilder.page(for: diff, mode: .split).contains(#"<body class="sel-right">"#))
+        #expect(DiffHTMLBuilder.page(for: diff, mode: .split).contains(#"<body class="sel-right""#))
         #expect(!DiffHTMLBuilder.page(for: diff, mode: .unified).contains("sel-right\">"), "unified body carries no side class")
     }
 
@@ -102,7 +102,7 @@ struct DiffHTMLBuilderTests {
         let page = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: options)
         #expect(page.contains(#"data-act="unstageHunk""#) && page.contains(#"data-hid="h0""#))
         #expect(!page.contains("data-id="), "split has no per-line interactions")
-        #expect(page.contains(#"<body class="sel-right">"#), "split keeps the one-side selection default")
+        #expect(page.contains(#"<body class="sel-right""#), "split keeps the one-side selection default")
     }
 
     // The split page renders through its own sinks (`splitSide`, and
@@ -158,6 +158,27 @@ struct DiffHTMLBuilderTests {
             #expect(!page.contains("tsel"), "\(mode.rawValue): read-only pages have no selection frame")
             #expect(!page.contains("askRange"), "\(mode.rawValue): read-only pages have no range-ask button")
         }
+    }
+
+    // The injected Shiki user script reads the grammar id off <body
+    // data-lang>; pages for unknown file types must omit the attribute so
+    // the script exits without building a highlighter.
+    @Test func pagesCarryTheShikiLanguageAttribute() {
+        for mode in DiffMode.allCases {
+            #expect(DiffHTMLBuilder.page(for: diff, mode: mode).contains(#"data-lang="swift""#), "\(mode.rawValue): .swift page tags its language")
+        }
+        let unknown = FileDiff(path: "LICENSE", oldPath: nil, isBinary: false, hunks: diff.hunks)
+        for mode in DiffMode.allCases {
+            #expect(!DiffHTMLBuilder.page(for: unknown, mode: mode).contains("data-lang"), "\(mode.rawValue): unknown file type gets no language attribute")
+        }
+
+        var options = interactiveOptions
+        options.language = "swift"
+        let unified = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
+        #expect(unified.contains(#"data-lang="swift""#), "interactive unified page tags its language")
+        // Split derives from the diff path when options carry no language.
+        let split = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
+        #expect(split.contains(#"data-lang="swift""#), "interactive split page derives the language from the path")
     }
 
     @Test func readOnlyPagesHaveNoBridge() {

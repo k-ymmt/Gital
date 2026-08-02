@@ -182,6 +182,7 @@ private struct InteractiveWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.userContentController.add(context.coordinator, name: "gital")
+        DiffSyntaxHighlighting.install(into: configuration)
         let webView = HeightFittingWebView(frame: .zero, configuration: configuration)
         // Transparent page over the native window background — no KVC-safe
         // public API for this on macOS; the private key is long-stable.

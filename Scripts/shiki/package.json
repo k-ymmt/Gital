@@ -1,0 +1,15 @@
+{
+  "name": "gital-shiki-bundle",
+  "private": true,
+  "description": "Bundles Shiki into Gital/Resources/ShikiDiff.js for the WKWebView diff renderer. Run ./build.sh after changing entry.mjs or upgrading shiki.",
+  "type": "module",
+  "dependencies": {
+    "@shikijs/core": "^3.12.0",
+    "@shikijs/engine-javascript": "^3.12.0",
+    "@shikijs/langs": "^3.12.0",
+    "@shikijs/themes": "^3.12.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

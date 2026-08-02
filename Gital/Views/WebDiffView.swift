@@ -43,7 +43,9 @@ struct WebDiffView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
+        let configuration = WKWebViewConfiguration()
+        DiffSyntaxHighlighting.install(into: configuration)
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         // Transparent page over the native window background — no KVC-safe
         // public API for this on macOS; the private key is long-stable.
         webView.setValue(false, forKey: "drawsBackground")

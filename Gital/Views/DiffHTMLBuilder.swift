@@ -10,11 +10,12 @@ enum DiffHTMLBuilder {
     // MARK: - Read-only pages
 
     static func page(for diff: FileDiff, mode: DiffMode) -> String {
+        let language = DiffSyntaxHighlighting.language(forPath: diff.path)
         switch mode {
         case .unified:
-            return assemble(body: render(items: unifiedItems(for: diff), options: nil), bodyClass: "", interactive: false)
+            return assemble(body: render(items: unifiedItems(for: diff), options: nil), bodyClass: "", interactive: false, language: language)
         case .split:
-            return assemble(body: splitBody(for: diff, options: nil), bodyClass: splitBodyClass, interactive: false)
+            return assemble(body: splitBody(for: diff, options: nil), bodyClass: splitBodyClass, interactive: false, language: language)
         }
     }
 
@@ -37,6 +38,9 @@ enum DiffHTMLBuilder {
         /// Buttons shown next to the text-selection frame's "+", acting on
         /// the changed lines the selection spans.
         var selectionButtons: [HunkButton] = []
+        /// Shiki language id for syntax highlighting (`data-lang` on <body>);
+        /// nil leaves the page uncolored.
+        var language: String?
     }
 
     /// One row of a unified diff; segments of these render between native
@@ -51,12 +55,18 @@ enum DiffHTMLBuilder {
         assemble(
             body: render(items: items, options: options) + selectionButtonsTemplate(options.selectionButtons),
             bodyClass: "",
-            interactive: true
+            interactive: true,
+            language: options.language
         )
     }
 
     static func interactiveSplitPage(for diff: FileDiff, options: InteractiveOptions) -> String {
-        assemble(body: splitBody(for: diff, options: options), bodyClass: splitBodyClass, interactive: true)
+        assemble(
+            body: splitBody(for: diff, options: options),
+            bodyClass: splitBodyClass,
+            interactive: true,
+            language: options.language ?? DiffSyntaxHighlighting.language(forPath: diff.path)
+        )
     }
 
     // MARK: - Bodies
@@ -193,15 +203,18 @@ enum DiffHTMLBuilder {
 
     // MARK: - Page assembly
 
-    private static func assemble(body: String, bodyClass: String, interactive: Bool) -> String {
-        """
+    private static func assemble(body: String, bodyClass: String, interactive: Bool, language: String? = nil) -> String {
+        // data-lang tells the injected Shiki user script what grammar to
+        // tokenize with; without it the page stays uncolored.
+        let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
+        return """
         <!DOCTYPE html>
         <html>
         <head>
         <meta charset="utf-8">
         <style>\(css)\(interactive ? interactiveCSS : "")</style>
         </head>
-        <body\(bodyClass)>
+        <body\(bodyClass)\(langAttr)>
         \(body)
         <script>\(script)\(interactive ? bridgeScript : "")</script>
         </body>
