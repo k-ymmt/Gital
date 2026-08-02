@@ -10,6 +10,7 @@
     "@shikijs/themes": "^3.12.0"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "^0.25.0",
+    "linkedom": "^0.18.0"
   }
 }

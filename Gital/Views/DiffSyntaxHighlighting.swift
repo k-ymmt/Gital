@@ -24,6 +24,14 @@ enum DiffSyntaxHighlighting {
         }
     }
 
+    /// Language for a diff. Combined (`@@@`) diffs never highlight: their
+    /// deletion rows interleave both merge parents, so no coherent "old
+    /// file" exists to tokenize — the colors would smear misleadingly on
+    /// exactly the conflict-resolution screen.
+    static func language(for diff: FileDiff) -> String? {
+        diff.isCombined ? nil : language(forPath: diff.path)
+    }
+
     /// Shiki language id for a repo-relative path, or nil when the file's
     /// language isn't bundled. Ids must exist in `LANGS` in
     /// `Scripts/shiki/entry.mjs`.

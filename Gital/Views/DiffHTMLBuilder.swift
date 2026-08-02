@@ -10,7 +10,7 @@ enum DiffHTMLBuilder {
     // MARK: - Read-only pages
 
     static func page(for diff: FileDiff, mode: DiffMode) -> String {
-        let language = DiffSyntaxHighlighting.language(forPath: diff.path)
+        let language = DiffSyntaxHighlighting.language(for: diff)
         switch mode {
         case .unified:
             return assemble(body: render(items: unifiedItems(for: diff), options: nil), bodyClass: "", interactive: false, language: language)
@@ -65,7 +65,7 @@ enum DiffHTMLBuilder {
             body: splitBody(for: diff, options: options),
             bodyClass: splitBodyClass,
             interactive: true,
-            language: options.language ?? DiffSyntaxHighlighting.language(forPath: diff.path)
+            language: options.language ?? DiffSyntaxHighlighting.language(for: diff)
         )
     }
 

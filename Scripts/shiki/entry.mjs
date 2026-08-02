@@ -62,8 +62,19 @@ const LANGS = {
 
 const THEMES = { light: 'github-light', dark: 'github-dark' }
 
+// Oversized groups stay uncolored: tokenization is synchronous, and both a
+// multi-thousand-line group (generated/vendored files) and a single enormous
+// minified line (a 1MB bundle diff is two rows but megabytes of regex input)
+// would burn the shared WebContent process for seconds. Hand-written hunks
+// sit far below both caps.
+const MAX_GROUP_LINES = 1000
+const MAX_GROUP_CHARS = 200000
+
 function tokenize(highlighter, lang, lines) {
-  if (!lines.length) { return null }
+  if (!lines.length || lines.length > MAX_GROUP_LINES) { return null }
+  let chars = 0
+  for (const line of lines) { chars += line.length }
+  if (chars > MAX_GROUP_CHARS) { return null }
   let tokens
   try {
     ;({ tokens } = highlighter.codeToTokens(lines.join('\n'), {
@@ -103,6 +114,11 @@ function paint(textEl, tokens) {
       frag.appendChild(document.createTextNode(token.content))
     }
   }
+  // Tokens carry the CR-stripped text (see stripped()); restore the
+  // normalized \n so textContent — and therefore copies — stay unchanged.
+  if (textEl.textContent.endsWith('\n')) {
+    frag.appendChild(document.createTextNode('\n'))
+  }
   textEl.replaceChildren(frag)
 }
 
@@ -124,7 +140,16 @@ function groups(matcher) {
   return out
 }
 
-const textOf = (el) => el.querySelector('.text')?.textContent ?? ''
+// CRLF diffs keep each line's trailing \r, which the HTML parser normalized
+// to \n inside .text. Strip it before tokenizing — Shiki would split it into
+// an extra line and fail the count guard, unpainting the whole group —
+// and paint() re-appends it. A \n anywhere else (lone CR mid-line) still
+// fails the guard, which degrades to no color, never to smeared rows.
+const stripped = (span) => {
+  const text = span?.textContent ?? ''
+  return text.endsWith('\n') ? text.slice(0, -1) : text
+}
+const textOf = (el) => stripped(el.querySelector('.text'))
 const hasKind = (el) => el.classList.contains('add') || el.classList.contains('del') || el.classList.contains('ctx')
 
 // Unified rows: deletions + context reconstruct the old text, additions +
@@ -164,8 +189,8 @@ function paintSplit(highlighter, lang, rows) {
     if (left && hasKind(left)) { oldEls.push(left.querySelector('.text')) }
     if (right && hasKind(right)) { newEls.push(right.querySelector('.text')) }
   }
-  const oldTokens = tokenize(highlighter, lang, oldEls.map((el) => el?.textContent ?? ''))
-  const newTokens = tokenize(highlighter, lang, newEls.map((el) => el?.textContent ?? ''))
+  const oldTokens = tokenize(highlighter, lang, oldEls.map(stripped))
+  const newTokens = tokenize(highlighter, lang, newEls.map(stripped))
   if (oldTokens) { oldEls.forEach((el, i) => paint(el, oldTokens[i])) }
   if (newTokens) { newEls.forEach((el, i) => paint(el, newTokens[i])) }
 }
@@ -191,13 +216,25 @@ function run() {
   const style = document.createElement('style')
   style.textContent = '@media (prefers-color-scheme: dark){.text span[style]{color:var(--shiki-dark,currentColor)!important}}'
   document.head.appendChild(style)
+  const tasks = []
   for (const group of groups((el) => el.classList.contains('line'))) {
-    paintUnified(highlighter, langId, group)
+    tasks.push(() => paintUnified(highlighter, langId, group))
   }
   for (const group of groups((el) => el.classList.contains('row'))) {
-    paintSplit(highlighter, langId, group)
+    tasks.push(() => paintSplit(highlighter, langId, group))
   }
-  highlighter.dispose()
+  // One group per task, yielding in between: the user script runs at
+  // documentEnd, before first paint and the height report, so tokenizing
+  // everything synchronously would freeze large pages white. Deferring lets
+  // the page render first and colors arrive progressively; painting never
+  // changes layout, so late tokens can't invalidate the reported height.
+  const step = () => {
+    const task = tasks.shift()
+    if (!task) { highlighter.dispose(); return }
+    task()
+    setTimeout(step, 0)
+  }
+  setTimeout(step, 0)
 }
 
 run()

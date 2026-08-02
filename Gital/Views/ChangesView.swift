@@ -233,7 +233,7 @@ struct ChangesView: View {
         options.selectableLines = model.canSelectLines(in: diff)
         options.askLines = true
         options.hunkButtons = hunkButtons(for: diff)
-        options.language = DiffSyntaxHighlighting.language(forPath: diff.path)
+        options.language = DiffSyntaxHighlighting.language(for: diff)
         if options.selectableLines {
             switch diff.scope {
             case .unstaged:
