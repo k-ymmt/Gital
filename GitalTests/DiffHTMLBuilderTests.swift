@@ -172,9 +172,23 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains("hsel-first") && page.contains("hsel-last"), "hover frame draws its top/bottom edges")
         #expect(page.contains("mouseover") && page.contains("clearHover"), "hover tracking script included")
         #expect(page.contains("frameButtons"), "hover and selection frames share one corner-button builder")
+        #expect(page.contains("hoverButtonTimer = setTimeout"), "corner buttons wait out a dwell so gutter clicks can't land on Stage")
         for mode in DiffMode.allCases {
             #expect(!DiffHTMLBuilder.page(for: diff, mode: mode).contains("hsel"), "\(mode.rawValue): read-only pages have no hover frame")
         }
+    }
+
+    // The production unified configuration (ChangesView) puts no buttons on
+    // hunk headers for line-stageable files — hunk actions live on the hover
+    // frame's capsules instead — while headers keep their IDs.
+    @Test func unifiedWithoutHunkButtonsRendersBareHeaders() {
+        var options = interactiveOptions
+        options.hunkButtons = []
+        options.selectionButtons = [DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage")]
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
+        #expect(!page.contains(#"<span class="hunkbtns">"#), "hunk headers carry no button span")
+        #expect(page.contains(#"data-hid="h0""#), "headers keep their hunk ID")
+        #expect(page.contains(#"<template id="selbtns">"#), "frame capsules come from the template instead")
     }
 
     // The injected Shiki user script reads the grammar id off <body

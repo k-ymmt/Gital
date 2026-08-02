@@ -454,8 +454,11 @@ enum DiffHTMLBuilder {
     // and corner buttons as a text selection. Suppressed while text is
     // selected — two frames would stack two button bars on one corner.
     let hoveredHunk = null;
+    let hoverButtonTimer = null;
     const clearHover = () => {
         hoveredHunk = null;
+        clearTimeout(hoverButtonTimer);
+        hoverButtonTimer = null;
         document.querySelectorAll('.hsel').forEach((el) => el.classList.remove('hsel', 'hsel-first', 'hsel-last'));
         document.querySelectorAll('.askr.hov, .selbar.hov').forEach((el) => el.remove());
     };
@@ -481,7 +484,14 @@ enum DiffHTMLBuilder {
         rows.forEach((el) => el.classList.add('hsel'));
         first.classList.add('hsel-first');
         rows[rows.length - 1].classList.add('hsel-last');
-        frameButtons(rows, true);
+        // The corner buttons overlay the first row's number gutter, where a
+        // click means "select this line" — appearing the instant the pointer
+        // enters the hunk would let that click land on Stage instead. The
+        // frame shows immediately; the buttons wait out a short dwell.
+        hoverButtonTimer = setTimeout(() => {
+            hoverButtonTimer = null;
+            frameButtons(rows, true);
+        }, 350);
     });
     document.documentElement.addEventListener('mouseleave', () => clearHover());
     document.addEventListener('selectionchange', () => {

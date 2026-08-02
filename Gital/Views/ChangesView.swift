@@ -232,8 +232,13 @@ struct ChangesView: View {
         var options = DiffHTMLBuilder.InteractiveOptions()
         options.selectableLines = model.canSelectLines(in: diff)
         options.askLines = true
-        // No hunk-header buttons in unified — the hover-hunk frame's
-        // Stage/Unstage/Discard capsules cover hunk actions there.
+        // The hover-hunk frame's Stage/Unstage/Discard capsules cover hunk
+        // actions, so unified headers stay bare — except when lines can't be
+        // staged (untracked, renames, invalid UTF-8): no capsules appear
+        // there, and the header buttons are the pane's only affordance.
+        if !options.selectableLines {
+            options.hunkButtons = hunkButtons(for: diff)
+        }
         options.language = DiffSyntaxHighlighting.language(for: diff)
         if options.selectableLines {
             switch diff.scope {
@@ -257,8 +262,9 @@ struct ChangesView: View {
         return options
     }
 
-    /// Hunk-header buttons for split mode, which has no hover-hunk frame —
-    /// these are its only stage/unstage/discard affordance.
+    /// Hunk-header buttons for the pages the hover-hunk frame can't serve:
+    /// all of split mode (no frame there), and unified files whose lines
+    /// can't be staged (no capsules on their frame).
     /// Combined (conflict) hunks: no patch can be built from them, and the
     /// whole-file fallback behind "Stage" would mark the conflict resolved
     /// with the markers still in the file. Resolution happens through the
