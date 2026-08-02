@@ -160,6 +160,23 @@ struct DiffHTMLBuilderTests {
         }
     }
 
+    // Hovering a hunk frames its whole line run like a text selection, with
+    // the same corner buttons ("+" / Stage / Unstage / Discard). The frame
+    // is interactive-only machinery and must never reach read-only pages.
+    @Test func interactivePagesFrameHoveredHunks() {
+        let page = DiffHTMLBuilder.interactiveUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            options: interactiveOptions
+        )
+        #expect(page.contains(".tsel::after, .hsel::after"), "hover frame shares the selection frame's border styling")
+        #expect(page.contains("hsel-first") && page.contains("hsel-last"), "hover frame draws its top/bottom edges")
+        #expect(page.contains("mouseover") && page.contains("clearHover"), "hover tracking script included")
+        #expect(page.contains("frameButtons"), "hover and selection frames share one corner-button builder")
+        for mode in DiffMode.allCases {
+            #expect(!DiffHTMLBuilder.page(for: diff, mode: mode).contains("hsel"), "\(mode.rawValue): read-only pages have no hover frame")
+        }
+    }
+
     // The injected Shiki user script reads the grammar id off <body
     // data-lang>; pages for unknown file types must omit the attribute so
     // the script exits without building a highlighter.

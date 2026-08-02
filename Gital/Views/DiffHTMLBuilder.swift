@@ -311,8 +311,8 @@ enum DiffHTMLBuilder {
         cursor: pointer;
     }
     .hb.destructive { color: #f85149; border-color: rgba(248, 81, 73, 0.4); }
-    .tsel { position: relative; }
-    .tsel::after {
+    .tsel, .hsel { position: relative; }
+    .tsel::after, .hsel::after {
         content: "";
         position: absolute;
         inset: 0;
@@ -321,8 +321,8 @@ enum DiffHTMLBuilder {
         border-left-width: 1.5px;
         border-right-width: 1.5px;
     }
-    .tsel-first::after { border-top-width: 1.5px; }
-    .tsel-last::after { border-bottom-width: 1.5px; }
+    .tsel-first::after, .hsel-first::after { border-top-width: 1.5px; }
+    .tsel-last::after, .hsel-last::after { border-bottom-width: 1.5px; }
     .askr { display: block; z-index: 2; }
     .line.i:hover .ask:has(~ .askr) { display: none; }
     .selbar {
@@ -342,7 +342,7 @@ enum DiffHTMLBuilder {
         }
         .ask { background: AccentColor; }
         .hb { border-color: color-mix(in srgb, AccentColor 40%, transparent); color: AccentColor; }
-        .tsel::after { border-color: AccentColor; }
+        .tsel::after, .hsel::after { border-color: AccentColor; }
     }
     """
 
@@ -365,7 +365,9 @@ enum DiffHTMLBuilder {
     /// height; the outer SwiftUI ScrollView scrolls), line selection clicks,
     /// "+" (ask agent) clicks, and hunk-button clicks. Selection highlight is
     /// pushed back in via `gitalSetSelected` so a click never reloads the page.
-    /// The page also frames the rows a mouse text selection spans (`.tsel`).
+    /// The page also frames the rows a mouse text selection spans (`.tsel`)
+    /// and, while no text is selected, the hunk under the pointer (`.hsel`),
+    /// both with the same corner buttons ("+" / Stage / Unstage / Discard).
     private static let bridgeScript = """
     const post = (m) => window.webkit.messageHandlers.gital.postMessage(m);
     const reportHeight = () => post({type: 'height', height: document.body.scrollHeight});
@@ -431,12 +433,74 @@ enum DiffHTMLBuilder {
         if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
         return r.toString().length > 0;
     };
+    // Corner buttons for a row-range frame — the range "+" plus the Stage/
+    // Unstage/Discard capsules cloned from the Swift-rendered template.
+    // Shared by the text-selection frame and the hover-hunk frame; "hov"
+    // marks the hover frame's elements so selection cleanup spares them.
+    const frameButtons = (rows, hover) => {
+        const first = rows[0];
+        if (!first.dataset.id) { return; }
+        const suffix = hover ? ' hov' : '';
+        const btn = document.createElement('span');
+        btn.className = 'ask askr' + suffix;
+        btn.textContent = '+';
+        btn.title = 'Ask AI Agent about ' + (hover ? 'this hunk' : 'the selected lines');
+        btn.dataset.start = first.dataset.id;
+        btn.dataset.end = rows[rows.length - 1].dataset.id;
+        first.appendChild(btn);
+        // Stage/Unstage/Discard act on the range's changed lines — only when
+        // the page stages lines at all and the range spans a changed line.
+        const tpl = document.getElementById('selbtns');
+        if (tpl && rows.some((el) => el.classList.contains('selable'))) {
+            const bar = document.createElement('span');
+            bar.className = 'selbar' + suffix;
+            bar.dataset.start = btn.dataset.start;
+            bar.dataset.end = btn.dataset.end;
+            bar.appendChild(tpl.content.cloneNode(true));
+            first.appendChild(bar);
+        }
+    };
+    // Hovering a hunk's lines frames the whole hunk with the same accent box
+    // and corner buttons as a text selection. Suppressed while text is
+    // selected — two frames would stack two button bars on one corner.
+    let hoveredHunk = null;
+    const clearHover = () => {
+        hoveredHunk = null;
+        document.querySelectorAll('.hsel').forEach((el) => el.classList.remove('hsel', 'hsel-first', 'hsel-last'));
+        document.querySelectorAll('.askr.hov, .selbar.hov').forEach((el) => el.remove());
+    };
+    document.addEventListener('mouseover', (e) => {
+        const line = e.target.closest('.line');
+        const sel = window.getSelection();
+        if (!line || (sel.rangeCount && !sel.isCollapsed)) {
+            if (hoveredHunk) { clearHover(); }
+            return;
+        }
+        // Headers and lines are siblings, so a hunk is the contiguous .line
+        // run around the hovered line (a chunk split mid-hunk frames only
+        // its own rows — the native interleave bounds the page).
+        let first = line;
+        while (first.previousElementSibling && first.previousElementSibling.classList.contains('line')) {
+            first = first.previousElementSibling;
+        }
+        if (hoveredHunk === first) { return; }
+        clearHover();
+        hoveredHunk = first;
+        const rows = [];
+        for (let el = first; el && el.classList.contains('line'); el = el.nextElementSibling) { rows.push(el); }
+        rows.forEach((el) => el.classList.add('hsel'));
+        first.classList.add('hsel-first');
+        rows[rows.length - 1].classList.add('hsel-last');
+        frameButtons(rows, true);
+    });
+    document.documentElement.addEventListener('mouseleave', () => clearHover());
     document.addEventListener('selectionchange', () => {
         // The buttons' own label text must never count as selected text below.
-        document.querySelectorAll('.askr, .selbar').forEach((el) => el.remove());
+        document.querySelectorAll('.askr:not(.hov), .selbar:not(.hov)').forEach((el) => el.remove());
         document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
         const sel = window.getSelection();
         if (!sel.rangeCount || sel.isCollapsed) { return; }
+        clearHover();
         const range = sel.getRangeAt(0);
         const rowSelector = document.body.classList.contains('sel-left') ? '.side.left'
             : document.body.classList.contains('sel-right') ? '.side.right' : '.line';
@@ -448,28 +512,9 @@ enum DiffHTMLBuilder {
             if (i === hits.length - 1 || rowAbove(hits[i + 1]) !== el) { el.classList.add('tsel-last'); }
         });
         // A "+" on the frame's top-left corner asks the AI agent about the
-        // whole selected range (split rows carry no line IDs — no button).
-        if (hits.length && hits[0].dataset.id) {
-            const btn = document.createElement('span');
-            btn.className = 'ask askr';
-            btn.textContent = '+';
-            btn.title = 'Ask AI Agent about the selected lines';
-            btn.dataset.start = hits[0].dataset.id;
-            btn.dataset.end = hits[hits.length - 1].dataset.id;
-            hits[0].appendChild(btn);
-            // Stage/Unstage/Discard capsules right of the "+", acting on the
-            // range's changed lines — only when the page stages lines at all
-            // and the selection actually spans a changed line.
-            const tpl = document.getElementById('selbtns');
-            if (tpl && hits.some((el) => el.classList.contains('selable'))) {
-                const bar = document.createElement('span');
-                bar.className = 'selbar';
-                bar.dataset.start = btn.dataset.start;
-                bar.dataset.end = btn.dataset.end;
-                bar.appendChild(tpl.content.cloneNode(true));
-                hits[0].appendChild(bar);
-            }
-        }
+        // whole selected range, with the Stage/Unstage/Discard capsules
+        // beside it (split rows carry no line IDs — no buttons).
+        if (hits.length) { frameButtons(hits, false); }
     });
     """
 }
