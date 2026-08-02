@@ -19,6 +19,19 @@ enum DiffHTMLBuilder {
         }
     }
 
+    /// Read-only page for a height-fitting `WebDiffChunkView` (stash detail):
+    /// no line interactions, but the page must still report its laid-out
+    /// height because the outer SwiftUI ScrollView does the scrolling.
+    static func chunkPage(for diff: FileDiff, mode: DiffMode) -> String {
+        let language = DiffSyntaxHighlighting.language(for: diff)
+        switch mode {
+        case .unified:
+            return assemble(body: render(items: unifiedItems(for: diff), options: nil), bodyClass: "", interactive: false, reportsHeight: true, language: language)
+        case .split:
+            return assemble(body: splitBody(for: diff, options: nil), bodyClass: splitBodyClass, interactive: false, reportsHeight: true, language: language)
+        }
+    }
+
     // MARK: - Interactive pages (Working Copy)
 
     struct HunkButton {
@@ -199,7 +212,7 @@ enum DiffHTMLBuilder {
 
     // MARK: - Page assembly
 
-    private static func assemble(body: String, bodyClass: String, interactive: Bool, language: String? = nil) -> String {
+    private static func assemble(body: String, bodyClass: String, interactive: Bool, reportsHeight: Bool = false, language: String? = nil) -> String {
         // data-lang tells the injected Shiki user script what grammar to
         // tokenize with; without it the page stays uncolored.
         let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
@@ -212,7 +225,7 @@ enum DiffHTMLBuilder {
         </head>
         <body\(bodyClass)\(langAttr)>
         \(body)
-        <script>\(script)\(interactive ? bridgeScript : "")</script>
+        <script>\(script)\(interactive ? bridgeScript : reportsHeight ? heightScript : "")</script>
         </body>
         </html>
         """
@@ -351,6 +364,17 @@ enum DiffHTMLBuilder {
         document.body.classList.remove('sel-left', 'sel-right');
         document.body.classList.add(side.classList.contains('left') ? 'sel-left' : 'sel-right');
     });
+    """
+
+    /// Height reporting alone, for read-only pages hosted in a
+    /// `WebDiffChunkView`. `gitalSetSelected` is a stub: the host applies its
+    /// (always empty) selection after every load, and the call must not throw.
+    private static let heightScript = """
+    const post = (m) => window.webkit.messageHandlers.gital.postMessage(m);
+    const reportHeight = () => post({type: 'height', height: document.body.scrollHeight});
+    new ResizeObserver(reportHeight).observe(document.body);
+    window.addEventListener('load', reportHeight);
+    window.gitalSetSelected = () => {};
     """
 
     /// Interactive pages talk to `WebDiffChunkView` through the `gital`

@@ -68,6 +68,30 @@ struct DiffHTMLBuilderTests {
         #expect(!DiffHTMLBuilder.page(for: diff, mode: .unified).contains("sel-right\">"), "unified body carries no side class")
     }
 
+    // MARK: - Read-only chunk pages (stash detail)
+
+    @Test func chunkPageReportsHeightWithoutInteractivity() {
+        let page = DiffHTMLBuilder.chunkPage(for: diff, mode: .unified)
+        #expect(page.contains("type: 'height'"), "chunk page reports its laid-out height to the host")
+        #expect(page.contains("window.gitalSetSelected = () => {}"), "host's post-load selection push must be a no-op, not a JS error")
+        #expect(!page.contains("toggleLine"), "no line-selection bridge on a read-only page")
+        #expect(!page.contains("data-id="), "lines carry no IDs — nothing for hover/selection frames to target")
+        #expect(!page.contains(".hsel"), "no hover-hunk frame styling on a read-only page")
+    }
+
+    @Test func fullPanePageStaysFreeOfHeightReporting() {
+        // `WebDiffView` registers no `gital` message handler; a height post
+        // from its page would throw on load.
+        #expect(!DiffHTMLBuilder.page(for: diff, mode: .unified).contains("messageHandlers.gital"))
+        #expect(!DiffHTMLBuilder.page(for: diff, mode: .split).contains("messageHandlers.gital"))
+    }
+
+    @Test func chunkPageSplitKeepsSideSelectionGuard() {
+        let page = DiffHTMLBuilder.chunkPage(for: diff, mode: .split)
+        #expect(page.contains(#"<body class="sel-right""#), "split chunk keeps the one-side selection default")
+        #expect(page.contains("type: 'height'"), "split chunk reports height too")
+    }
+
     // MARK: - Interactive pages (Working Copy)
 
     private var interactiveOptions: DiffHTMLBuilder.InteractiveOptions {

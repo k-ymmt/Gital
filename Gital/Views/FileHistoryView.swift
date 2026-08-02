@@ -151,18 +151,25 @@ struct FileHistorySheet: View {
                 Spacer()
                 DiffModePicker(mode: $diffMode)
             }
-            ScrollView([.vertical, .horizontal]) {
-                if let diff = model.diffs.first {
-                    FileDiffContentView(diff: diff, mode: diffMode, imageContext: entryImageContext)
-                        .frame(minWidth: 600, alignment: .leading)
+            if let diff = model.diffs.first {
+                if diff.isBinary || diff.hunks.isEmpty {
+                    ScrollView([.vertical, .horizontal]) {
+                        FileDiffContentView(diff: diff, mode: diffMode, imageContext: entryImageContext)
+                            .frame(minWidth: 600, alignment: .leading)
+                    }
                 } else {
-                    // `git show` legitimately returns nothing here for a
-                    // merge commit that kept the first parent's version.
-                    Text("No changes to this file in this commit")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.secondary)
-                        .padding(40)
+                    // Same renderer split as the History pane: WKWebView for
+                    // text diffs, SwiftUI for binary/image diffs.
+                    WebDiffView(diff: diff, mode: diffMode)
                 }
+            } else {
+                // `git show` legitimately returns nothing here for a
+                // merge commit that kept the first parent's version.
+                Text("No changes to this file in this commit")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .padding(40)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
         }
     }
