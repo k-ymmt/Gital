@@ -232,7 +232,8 @@ struct ChangesView: View {
         var options = DiffHTMLBuilder.InteractiveOptions()
         options.selectableLines = model.canSelectLines(in: diff)
         options.askLines = true
-        options.hunkButtons = hunkButtons(for: diff)
+        // No hunk-header buttons in unified — the hover-hunk frame's
+        // Stage/Unstage/Discard capsules cover hunk actions there.
         options.language = DiffSyntaxHighlighting.language(for: diff)
         if options.selectableLines {
             switch diff.scope {
@@ -256,6 +257,8 @@ struct ChangesView: View {
         return options
     }
 
+    /// Hunk-header buttons for split mode, which has no hover-hunk frame —
+    /// these are its only stage/unstage/discard affordance.
     /// Combined (conflict) hunks: no patch can be built from them, and the
     /// whole-file fallback behind "Stage" would mark the conflict resolved
     /// with the markers still in the file. Resolution happens through the
