@@ -15,7 +15,7 @@ final class RepoViewModel {
 
     // MARK: Navigation
 
-    var navTab: NavTab = .branches
+    var navTab: NavTab = .changes
     var diffMode: DiffMode = .unified
     var searchText = ""
     /// Toolbar popovers, held here (not view-local) so menu shortcuts can
