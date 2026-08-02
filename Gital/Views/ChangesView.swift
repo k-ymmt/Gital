@@ -17,48 +17,17 @@ struct ChangesView: View {
             if model.workingDiffs.isEmpty {
                 emptyState
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
-                        ForEach(model.workingDiffs) { diff in
-                            Section {
-                                diffGroupContent(diff)
-                            } header: {
-                                FileSectionHeader(diff: diff) {
-                                    lineSelectionActions(diff)
-                                }
-                                .contextMenu {
-                                    // A file not in any commit yet (untracked
-                                    // or a staged addition) would only open
-                                    // an empty sheet. A staged rename's
-                                    // history lives under the old name.
-                                    let isNewFile = diff.scope == .untracked
-                                        || (model.status.staged + model.status.unstaged).contains {
-                                            $0.path == diff.path && ($0.status == .added || $0.status == .untracked)
-                                        }
-                                    if !isNewFile {
-                                        Button("File History") {
-                                            model.showFileHistory(path: diff.oldPath ?? diff.path)
-                                        }
-                                        Button("Blame") {
-                                            model.showFileHistory(path: diff.oldPath ?? diff.path, tab: .blame)
-                                        }
-                                    }
-                                }
-                            }
+                ScrollViewReader { proxy in
+                    diffList
+                        // Picking a file keeps the pane's scroll offset by
+                        // default, so after browsing (or line-selecting) deep
+                        // in a long diff the next file opens mid-content —
+                        // which reads as "the diff never switched".
+                        // Background refreshes must not reset the offset, so
+                        // this watches the selection, not the loaded diffs.
+                        .onChange(of: model.selectedChange) {
+                            proxy.scrollTo(Self.diffTopID, anchor: .top)
                         }
-                        // Threads whose anchor line no longer exists (the
-                        // agent's own edit re-shaped the diff) must stay
-                        // reachable — the answer would otherwise vanish.
-                        ForEach(orphanedThreads) { thread in
-                            AgentThreadView(model: model, thread: thread)
-                        }
-                        // Same for the composer: don't let a background diff
-                        // refresh silently swallow the box mid-typing.
-                        if let range = model.composerRange, let file = model.composerFile,
-                           let anchorID = model.composerAnchorID, !model.workingDiffLineIDs.contains(anchorID) {
-                            AgentComposerView(model: model, range: range, fileName: (file as NSString).lastPathComponent)
-                        }
-                    }
                 }
             }
 
@@ -67,6 +36,58 @@ struct ChangesView: View {
         }
         .task {
             await model.loadWorkingDiffsIfNeeded()
+        }
+    }
+
+    /// Scroll anchor sitting above the first file section — the file-switch
+    /// reset can't scrollTo a section id, which may not be materialized in
+    /// the lazy stack right after a selection change.
+    private static let diffTopID = "diff-top"
+
+    private var diffList: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                Color.clear.frame(height: 0).id(Self.diffTopID)
+                ForEach(model.workingDiffs) { diff in
+                    Section {
+                        diffGroupContent(diff)
+                    } header: {
+                        FileSectionHeader(diff: diff) {
+                            lineSelectionActions(diff)
+                        }
+                        .contextMenu {
+                            // A file not in any commit yet (untracked
+                            // or a staged addition) would only open
+                            // an empty sheet. A staged rename's
+                            // history lives under the old name.
+                            let isNewFile = diff.scope == .untracked
+                                || (model.status.staged + model.status.unstaged).contains {
+                                    $0.path == diff.path && ($0.status == .added || $0.status == .untracked)
+                                }
+                            if !isNewFile {
+                                Button("File History") {
+                                    model.showFileHistory(path: diff.oldPath ?? diff.path)
+                                }
+                                Button("Blame") {
+                                    model.showFileHistory(path: diff.oldPath ?? diff.path, tab: .blame)
+                                }
+                            }
+                        }
+                    }
+                }
+                // Threads whose anchor line no longer exists (the
+                // agent's own edit re-shaped the diff) must stay
+                // reachable — the answer would otherwise vanish.
+                ForEach(orphanedThreads) { thread in
+                    AgentThreadView(model: model, thread: thread)
+                }
+                // Same for the composer: don't let a background diff
+                // refresh silently swallow the box mid-typing.
+                if let range = model.composerRange, let file = model.composerFile,
+                   let anchorID = model.composerAnchorID, !model.workingDiffLineIDs.contains(anchorID) {
+                    AgentComposerView(model: model, range: range, fileName: (file as NSString).lastPathComponent)
+                }
+            }
         }
     }
 
