@@ -92,6 +92,42 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains("type: 'height'"), "split chunk reports height too")
     }
 
+    // MARK: - Review pages (PR pane)
+
+    @Test func reviewUnifiedMarksOnlyCommentableLines() {
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: { $0.kind != .context }
+        )
+        #expect(page.contains(#"data-id="l1""#) && page.contains("cmtbtn"), "commentable lines carry an ID and the hover +")
+        #expect(!page.contains(#"data-id="l0""#), "non-commentable lines carry no ID")
+        #expect(page.contains("type: 'commentLine'"), "the + posts commentLine over the bridge")
+        #expect(page.contains("type: 'height'"), "review chunks report height like any chunk page")
+        #expect(!page.contains("toggleLine") && !page.contains("selable"), "no Working Copy line selection")
+        #expect(!page.contains(".hsel"), "no hover-hunk frame machinery")
+    }
+
+    @Test func reviewUnifiedWithoutCommentingIsInert() {
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: nil
+        )
+        #expect(!page.contains("cmtbtn"), "closed PRs render no comment affordance")
+        #expect(!page.contains("data-id="), "no line IDs without an affordance to use them")
+        #expect(page.contains("type: 'height'"), "height reporting stays")
+    }
+
+    @Test func reviewSplitRendersRowsAndHeaders() {
+        let page = DiffHTMLBuilder.reviewSplitPage(rows: SplitDiffRow.rows(for: diff.hunks), language: nil)
+        #expect(page.contains("@@ -10,3 +10,4 @@ func f()"), "header row renders as a hunk header")
+        #expect(page.contains(#"class="side left del""#) && page.contains(#"class="side right add""#), "sides pair like the read-only split page")
+        #expect(page.contains(#"<body class="sel-right""#), "one-side selection guard applies")
+        #expect(page.contains("type: 'height'"), "split review chunks report height")
+        #expect(!page.contains("cmtbtn"), "split composes no comments")
+    }
+
     // MARK: - Interactive pages (Working Copy)
 
     private var interactiveOptions: DiffHTMLBuilder.InteractiveOptions {

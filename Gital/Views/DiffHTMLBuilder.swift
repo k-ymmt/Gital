@@ -32,6 +32,56 @@ enum DiffHTMLBuilder {
         }
     }
 
+    // MARK: - Review pages (PR pane)
+
+    /// Unified rows for one PR diff chunk: read-only and height-reporting
+    /// (native review cards interleave between chunks, so the outer SwiftUI
+    /// ScrollView scrolls), plus — when `commentable` is non-nil — a hover
+    /// "+" on lines that can take a review comment, posting `commentLine`
+    /// with the line's ID. No other Working Copy interactivity (line
+    /// selection, frames, hunk buttons) applies to a PR diff.
+    static func reviewUnifiedPage(items: [UnifiedItem], language: String?, commentable: ((DiffLine) -> Bool)?) -> String {
+        var body = ""
+        for item in items {
+            switch item {
+            case .header(let hunk):
+                body += hunkHeader(hunk.header)
+            case .line(let line):
+                body += unifiedLine(line, options: nil, commentable: commentable?(line) ?? false)
+            }
+        }
+        return assemble(
+            body: body,
+            bodyClass: "",
+            interactive: false,
+            reportsHeight: true,
+            extraCSS: commentable != nil ? commentCSS : "",
+            extraScript: commentable != nil ? commentScript : "",
+            language: language
+        )
+    }
+
+    /// Split rows for one PR diff chunk — a subset of
+    /// `SplitDiffRow.rows(for:)`, so review cards can interleave after the
+    /// row their comment anchors to. Read-only plus height reporting;
+    /// composing new comments stays a unified-mode affordance.
+    static func reviewSplitPage(rows: [SplitDiffRow], language: String?) -> String {
+        var body = ""
+        for row in rows {
+            if row.isHunkHeader {
+                body += hunkHeader(row.hunkText)
+            } else {
+                body += """
+                <div class="row">\
+                \(splitSide(row.left, position: "left"))\
+                \(splitSide(row.right, position: "right"))\
+                </div>\n
+                """
+            }
+        }
+        return assemble(body: body, bodyClass: splitBodyClass, interactive: false, reportsHeight: true, language: language)
+    }
+
     // MARK: - Interactive pages (Working Copy)
 
     struct HunkButton {
@@ -104,9 +154,10 @@ enum DiffHTMLBuilder {
         return out
     }
 
-    private static func unifiedLine(_ line: DiffLine, options: InteractiveOptions?) -> String {
+    private static func unifiedLine(_ line: DiffLine, options: InteractiveOptions?, commentable: Bool = false) -> String {
         var classes = "line \(kindClass(line.kind))"
         var attrs = ""
+        var button = ""
         if let options {
             classes += " i"
             if options.selectableLines && line.kind != .context {
@@ -116,8 +167,13 @@ enum DiffHTMLBuilder {
                 attrs = " data-id=\"\(escapeAttr(line.id))\""
             }
         }
+        if commentable {
+            attrs = " data-id=\"\(escapeAttr(line.id))\""
+            button = "<span class=\"cmtbtn\" title=\"Add review comment\">+</span>"
+        }
         return """
         <div class="\(classes)"\(attrs)>\
+        \(button)\
         <span class="num" data-n="\(line.oldNumber.map(String.init) ?? "")"></span>\
         <span class="num" data-n="\(line.newNumber.map(String.init) ?? "")"></span>\
         <span class="sign" data-s="\(line.kind == .context ? "" : line.sign)"></span>\
@@ -212,7 +268,7 @@ enum DiffHTMLBuilder {
 
     // MARK: - Page assembly
 
-    private static func assemble(body: String, bodyClass: String, interactive: Bool, reportsHeight: Bool = false, language: String? = nil) -> String {
+    private static func assemble(body: String, bodyClass: String, interactive: Bool, reportsHeight: Bool = false, extraCSS: String = "", extraScript: String = "", language: String? = nil) -> String {
         // data-lang tells the injected Shiki user script what grammar to
         // tokenize with; without it the page stays uncolored.
         let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
@@ -221,11 +277,11 @@ enum DiffHTMLBuilder {
         <html>
         <head>
         <meta charset="utf-8">
-        <style>\(css)\(interactive ? interactiveCSS : "")</style>
+        <style>\(css)\(interactive ? interactiveCSS : "")\(extraCSS)</style>
         </head>
         <body\(bodyClass)\(langAttr)>
         \(body)
-        <script>\(script)\(interactive ? bridgeScript : reportsHeight ? heightScript : "")</script>
+        <script>\(script)\(interactive ? bridgeScript : reportsHeight ? heightScript : "")\(extraScript)</script>
         </body>
         </html>
         """
@@ -363,6 +419,40 @@ enum DiffHTMLBuilder {
         if (!side) { return; }
         document.body.classList.remove('sel-left', 'sel-right');
         document.body.classList.add(side.classList.contains('left') ? 'sel-left' : 'sel-right');
+    });
+    """
+
+    /// Hover "+" on commentable lines of a PR review page, mirroring the
+    /// `.ask` frame-corner button's look. CSS-only visibility (shown by
+    /// `.line:hover`) needs no JS hover tracking; unselectable so copies of
+    /// the code never pick up a stray "+".
+    private static let commentCSS = """
+    .cmtbtn {
+        position: absolute;
+        left: 3px;
+        top: 1px;
+        width: 17px;
+        height: 17px;
+        border-radius: 4px;
+        background: rgb(47, 111, 237);
+        color: white;
+        font: 700 11px/17px -apple-system, system-ui;
+        text-align: center;
+        cursor: pointer;
+        -webkit-user-select: none;
+        user-select: none;
+        z-index: 2;
+        display: none;
+    }
+    .line:hover .cmtbtn { display: block; }
+    """
+
+    /// Appended after `heightScript` (same script block, so `post` is in
+    /// scope): routes a comment-button click to the host with the line's ID.
+    private static let commentScript = """
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.cmtbtn');
+        if (btn) { post({type: 'commentLine', id: btn.closest('.line').dataset.id}); }
     });
     """
 

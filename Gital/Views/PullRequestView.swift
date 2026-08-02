@@ -124,49 +124,144 @@ struct PullRequestItemDiffView: View {
     private func reviewableContent(_ diff: FileDiff, number: Int, canComment: Bool) -> some View {
         switch model.diffMode {
         case .unified:
-            ForEach(diff.hunks) { hunk in
-                HunkHeaderView(text: hunk.header)
-                ForEach(hunk.lines) { line in
-                    reviewableLine(line, in: diff, number: number, canComment: canComment)
+            ForEach(unifiedSegments(for: diff, number: number)) { segment in
+                WebDiffChunkView(
+                    html: DiffHTMLBuilder.reviewUnifiedPage(
+                        items: segment.items,
+                        language: DiffSyntaxHighlighting.language(for: diff),
+                        commentable: canComment
+                            ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
+                            : nil
+                    ),
+                    estimatedHeight: CGFloat(segment.items.count) * 19,
+                    onAction: { handleReview($0, in: diff) }
+                )
+                if let line = segment.interleaveAfterLine {
+                    // Published conversations first, then local drafts —
+                    // history above what is still pending, like GitHub.
+                    ForEach(model.prs.threads(on: line, path: diff.path, in: number)) { thread in
+                        ReviewThreadCard(model: model, thread: thread, number: number)
+                    }
+                    ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
+                        PendingReviewCommentCard(model: model, comment: comment, number: number)
+                    }
+                    if canComment, composerIsOpen(at: line, in: diff) {
+                        ReviewCommentComposerView(model: model, number: number)
+                    }
                 }
             }
         case .split:
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
-            ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
-                SplitDiffRowView(row: row)
-                ForEach(splitRowThreads(row, in: diff, number: number)) { thread in
+            ForEach(splitSegments(for: diff, number: number)) { segment in
+                WebDiffChunkView(
+                    html: DiffHTMLBuilder.reviewSplitPage(
+                        rows: segment.rows,
+                        language: DiffSyntaxHighlighting.language(for: diff)
+                    ),
+                    estimatedHeight: CGFloat(segment.rows.count) * 19,
+                    onAction: { _ in }
+                )
+                ForEach(segment.threads) { thread in
                     ReviewThreadCard(model: model, thread: thread, number: number)
                 }
-                ForEach(splitRowComments(row, in: diff, number: number)) { comment in
+                ForEach(segment.comments) { comment in
                     PendingReviewCommentCard(model: model, comment: comment, number: number)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func reviewableLine(_ line: DiffLine, in diff: FileDiff, number: Int, canComment: Bool) -> some View {
-        let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line)
-        ReviewableDiffLineView(line: line, canComment: canComment && anchor != nil) {
-            if let anchor {
-                model.prs.openReviewComposer(at: anchor, lineText: line.text)
+    private func composerIsOpen(at line: DiffLine, in diff: FileDiff) -> Bool {
+        model.prs.reviewComposerAnchor == ReviewCommentAnchor(path: diff.path, diffLine: line)
+            && model.prs.reviewComposerLineText == line.text
+    }
+
+    /// A `commentLine` post from a chunk's hover "+": open the composer at
+    /// that line. The only bridge action a PR page emits (height reports are
+    /// consumed by the chunk itself).
+    private func handleReview(_ action: WebDiffAction, in diff: FileDiff) {
+        guard case .hunk(let act, let id) = action, act == "commentLine",
+              let line = diff.hunks.lazy.flatMap(\.lines).first(where: { $0.id == id }),
+              let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line) else { return }
+        model.prs.openReviewComposer(at: anchor, lineText: line.text)
+    }
+
+    // MARK: - Web chunk segmentation
+
+    private struct ReviewSegment: Identifiable {
+        let id: String
+        let items: [DiffHTMLBuilder.UnifiedItem]
+        /// Line whose review cards (threads, drafts, composer) render right
+        /// after this chunk.
+        let interleaveAfterLine: DiffLine?
+    }
+
+    /// Splits a file's unified rows into web chunks at every line carrying a
+    /// published thread, a pending draft, or the open composer, so those stay
+    /// native SwiftUI between the chunks (same scheme as the Working Copy).
+    private func unifiedSegments(for diff: FileDiff, number: Int) -> [ReviewSegment] {
+        var segments: [ReviewSegment] = []
+        var items: [DiffHTMLBuilder.UnifiedItem] = []
+        var firstID = ""
+
+        func flush(after line: DiffLine?) {
+            guard !items.isEmpty || line != nil else { return }
+            segments.append(ReviewSegment(
+                id: "\(firstID)→\(line?.id ?? "end")",
+                items: items,
+                interleaveAfterLine: line
+            ))
+            items = []
+            firstID = ""
+        }
+
+        for hunk in diff.hunks {
+            if items.isEmpty { firstID = hunk.id }
+            items.append(.header(hunk))
+            for line in hunk.lines {
+                if items.isEmpty { firstID = line.id }
+                items.append(.line(line))
+                let hasCards = !model.prs.threads(on: line, path: diff.path, in: number).isEmpty
+                    || !model.prs.pendingComments(on: line, path: diff.path, in: number).isEmpty
+                    || composerIsOpen(at: line, in: diff)
+                if hasCards {
+                    flush(after: line)
+                }
             }
         }
-        if anchor != nil {
-            // Published conversations first, then local drafts — history
-            // above what is still pending, like GitHub.
-            ForEach(model.prs.threads(on: line, path: diff.path, in: number)) { thread in
-                ReviewThreadCard(model: model, thread: thread, number: number)
-            }
-            ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
-                PendingReviewCommentCard(model: model, comment: comment, number: number)
-            }
-            if canComment, model.prs.reviewComposerAnchor == anchor,
-               model.prs.reviewComposerLineText == line.text {
-                ReviewCommentComposerView(model: model, number: number)
+        flush(after: nil)
+        return segments
+    }
+
+    private struct ReviewSplitSegment: Identifiable {
+        let id: String
+        let rows: [SplitDiffRow]
+        /// Cards anchored to this chunk's last row, rendered right after it.
+        let threads: [ReviewThread]
+        let comments: [PendingReviewComment]
+    }
+
+    private func splitSegments(for diff: FileDiff, number: Int) -> [ReviewSplitSegment] {
+        var segments: [ReviewSplitSegment] = []
+        var rows: [SplitDiffRow] = []
+        var firstID = ""
+
+        for row in SplitDiffRow.rows(for: diff.hunks) {
+            if rows.isEmpty { firstID = row.id }
+            rows.append(row)
+            let threads = splitRowThreads(row, in: diff, number: number)
+            let comments = splitRowComments(row, in: diff, number: number)
+            if !threads.isEmpty || !comments.isEmpty {
+                segments.append(ReviewSplitSegment(id: "\(firstID)→\(row.id)", rows: rows, threads: threads, comments: comments))
+                rows = []
+                firstID = ""
             }
         }
+        if !rows.isEmpty {
+            segments.append(ReviewSplitSegment(id: "\(firstID)→end", rows: rows, threads: [], comments: []))
+        }
+        return segments
     }
 
     private func splitRowThreads(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [ReviewThread] {
@@ -601,36 +696,6 @@ struct PullRequestDetailView: View {
 }
 
 // MARK: - Review comments
-
-/// Hoverable unified diff line with a "+" bubble that opens the review
-/// comment composer, GitHub-style.
-struct ReviewableDiffLineView: View {
-    let line: DiffLine
-    let canComment: Bool
-    let onComment: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        UnifiedDiffLineView(line: line)
-            .background(isHovering && canComment ? Color.primary.opacity(0.04) : .clear)
-            .overlay(alignment: .leading) {
-                if isHovering && canComment {
-                    Button(action: onComment) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 17, height: 17)
-                            .background(DesignStyle.linkBlue, in: RoundedRectangle(cornerRadius: 4))
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.leading, 3)
-                    .help("Add a review comment on this line")
-                }
-            }
-            .onHover { isHovering = $0 }
-    }
-}
 
 /// A draft review comment shown inline under its anchor line. Drafts stay
 /// pending until the review is submitted.
