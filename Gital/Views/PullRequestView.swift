@@ -124,7 +124,7 @@ struct PullRequestItemDiffView: View {
     private func reviewableContent(_ diff: FileDiff, number: Int, canComment: Bool) -> some View {
         switch model.diffMode {
         case .unified:
-            ForEach(unifiedSegments(for: diff, number: number)) { segment in
+            ForEach(unifiedSegments(for: diff, number: number, canComment: canComment)) { segment in
                 WebDiffChunkView(
                     html: DiffHTMLBuilder.reviewUnifiedPage(
                         items: segment.items,
@@ -200,7 +200,10 @@ struct PullRequestItemDiffView: View {
     /// Splits a file's unified rows into web chunks at every line carrying a
     /// published thread, a pending draft, or the open composer, so those stay
     /// native SwiftUI between the chunks (same scheme as the Working Copy).
-    private func unifiedSegments(for diff: FileDiff, number: Int) -> [ReviewSegment] {
+    /// The composer only counts while the PR accepts comments — the render
+    /// side gates it the same way, and a boundary with nothing rendered at it
+    /// would still split the chunk and break text selection across it.
+    private func unifiedSegments(for diff: FileDiff, number: Int, canComment: Bool) -> [ReviewSegment] {
         var segments: [ReviewSegment] = []
         var items: [DiffHTMLBuilder.UnifiedItem] = []
         var firstID = ""
@@ -224,7 +227,7 @@ struct PullRequestItemDiffView: View {
                 items.append(.line(line))
                 let hasCards = !model.prs.threads(on: line, path: diff.path, in: number).isEmpty
                     || !model.prs.pendingComments(on: line, path: diff.path, in: number).isEmpty
-                    || composerIsOpen(at: line, in: diff)
+                    || (canComment && composerIsOpen(at: line, in: diff))
                 if hasCards {
                     flush(after: line)
                 }
