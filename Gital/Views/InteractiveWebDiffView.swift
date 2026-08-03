@@ -29,11 +29,11 @@ private final class HeightFittingWebView: WKWebView {
 /// until the live page re-reports.
 private let heightCache = NSCache<NSString, NSNumber>()
 
-private func cachedHeight(for html: String) -> CGFloat? {
+func cachedHeight(for html: String) -> CGFloat? {
     heightCache.object(forKey: String(html.hashValue) as NSString).map { CGFloat($0.doubleValue) }
 }
 
-private func cacheHeight(_ height: CGFloat, for html: String) {
+func cacheHeight(_ height: CGFloat, for html: String) {
     heightCache.setObject(NSNumber(value: height), forKey: String(html.hashValue) as NSString)
 }
 
@@ -72,24 +72,43 @@ struct WebDiffChunkView: View {
     }
 }
 
-private struct InteractiveWebView: NSViewRepresentable {
+/// Space the page reserves for one native overlay (see `gitalSetSpacers` in
+/// `DiffHTMLBuilder`): static spacers (file headers, binary previews) exist
+/// in the HTML and only resize; dynamic ones (`line` non-nil) are inserted
+/// after the diff line they anchor to.
+struct WebDiffSpacer: Equatable {
+    let id: String
+    var line: String? = nil
+    let height: CGFloat
+}
+
+struct InteractiveWebView: NSViewRepresentable {
     let html: String
-    let selectedLineIDs: Set<String>
+    var selectedLineIDs: Set<String> = []
+    /// Native-overlay space requests, pushed via JS so a card opening or
+    /// resizing never reloads the page.
+    var spacers: [WebDiffSpacer] = []
     let onAction: (WebDiffAction) -> Void
     let onHeight: (CGFloat) -> Void
+    /// Laid-out document offsets of every spacer, reported by the page after
+    /// each load/layout change — where the native overlays position themselves.
+    var onAnchors: (([String: CGFloat]) -> Void)? = nil
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         // Re-pointed on every update so bridge messages never run stale
         // closures captured at makeNSView time.
         var onAction: (WebDiffAction) -> Void = { _ in }
         var onHeight: (CGFloat) -> Void = { _ in }
+        var onAnchors: (([String: CGFloat]) -> Void)?
         var loadedHTML: String?
         weak var webView: WKWebView?
         /// Selection can arrive before the page finishes loading; it is kept
-        /// pending and applied from didFinish.
+        /// pending and applied from didFinish. Spacers work the same way.
         private var pageReady = false
         private var appliedSelection: Set<String>?
         private var pendingSelection: Set<String> = []
+        private var appliedSpacers: [WebDiffSpacer]?
+        private var pendingSpacers: [WebDiffSpacer] = []
 
         func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
             guard message.name == "gital",
@@ -102,13 +121,17 @@ private struct InteractiveWebView: NSViewRepresentable {
             // physical hunk/line in the refreshed diff — and stage or discard
             // something the user never saw. Drop those clicks; height reports
             // stay welcome (the fresh load re-reports anyway).
-            if type != "height" {
+            if type != "height" && type != "anchors" {
                 guard pageReady else { return }
             }
             switch type {
             case "height":
                 if let height = body["height"] as? Double, height > 0 {
                     onHeight(CGFloat(height))
+                }
+            case "anchors":
+                if let anchors = body["anchors"] as? [String: Double] {
+                    onAnchors?(anchors.mapValues { CGFloat($0) })
                 }
             case "toggleLine":
                 if let id = body["id"] as? String {
@@ -143,7 +166,9 @@ private struct InteractiveWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             pageReady = true
             appliedSelection = nil
+            appliedSpacers = nil
             applySelectionIfNeeded()
+            applySpacersIfNeeded()
         }
 
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
@@ -158,9 +183,15 @@ private struct InteractiveWebView: NSViewRepresentable {
             applySelectionIfNeeded()
         }
 
+        func setSpacers(_ spacers: [WebDiffSpacer]) {
+            pendingSpacers = spacers
+            applySpacersIfNeeded()
+        }
+
         func markLoading() {
             pageReady = false
             appliedSelection = nil
+            appliedSpacers = nil
         }
 
         private func applySelectionIfNeeded() {
@@ -169,6 +200,22 @@ private struct InteractiveWebView: NSViewRepresentable {
             guard let data = try? JSONSerialization.data(withJSONObject: Array(pendingSelection)),
                   let json = String(data: data, encoding: .utf8) else { return }
             webView.evaluateJavaScript("window.gitalSetSelected(\(json))")
+        }
+
+        private func applySpacersIfNeeded() {
+            guard pageReady, pendingSpacers != appliedSpacers, let webView else { return }
+            // Pages that never host overlays (PR/stash chunks) skip the call
+            // entirely instead of poking their stub on every load.
+            if appliedSpacers == nil && pendingSpacers.isEmpty { return }
+            appliedSpacers = pendingSpacers
+            let specs: [[String: Any]] = pendingSpacers.map { spacer in
+                var spec: [String: Any] = ["id": spacer.id, "height": Double(spacer.height)]
+                if let line = spacer.line { spec["line"] = line }
+                return spec
+            }
+            guard let data = try? JSONSerialization.data(withJSONObject: specs),
+                  let json = String(data: data, encoding: .utf8) else { return }
+            webView.evaluateJavaScript("window.gitalSetSpacers(\(json))")
         }
     }
 
@@ -192,12 +239,14 @@ private struct InteractiveWebView: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.onAction = onAction
         coordinator.onHeight = onHeight
+        coordinator.onAnchors = onAnchors
         if coordinator.loadedHTML != html {
             coordinator.loadedHTML = html
             coordinator.markLoading()
             webView.loadHTMLString(html, baseURL: nil)
         }
         coordinator.setSelection(selectedLineIDs)
+        coordinator.setSpacers(spacers)
     }
 
     static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {

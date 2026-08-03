@@ -124,11 +124,13 @@ function paint(textEl, tokens) {
 
 // Rows between hunk headers form one tokenization group. Interactive pages
 // are chunks that can start mid-hunk (rows before any header), so a leading
-// headerless group is expected.
-function groups(matcher) {
+// headerless group is expected. `root` is one language scope: <body> on
+// single-file pages, a <section class="file"> on multi-file pages — spacer
+// divs and other non-row children just fall through the matcher.
+function groups(root, matcher) {
   const out = []
   let current = []
-  for (const el of document.body.children) {
+  for (const el of root.children) {
     if (el.classList.contains('hunk')) {
       if (current.length) { out.push(current) }
       current = []
@@ -196,13 +198,21 @@ function paintSplit(highlighter, lang, rows) {
 }
 
 function run() {
-  const langId = document.body?.dataset.lang
-  const grammar = langId && LANGS[langId]
-  if (!grammar) { return }
+  // Single-file pages tag <body data-lang>; the multi-file Working Copy page
+  // tags each <section class="file" data-lang> with its own language (and
+  // leaves unknown-language sections untagged).
+  let scopes = [...document.querySelectorAll('section.file[data-lang]')]
+    .map((el) => ({ root: el, lang: el.dataset.lang }))
+  if (!scopes.length && document.body?.dataset.lang) {
+    scopes = [{ root: document.body, lang: document.body.dataset.lang }]
+  }
+  scopes = scopes.filter((scope) => LANGS[scope.lang])
+  if (!scopes.length) { return }
+  const grammars = [...new Set(scopes.map((scope) => scope.lang))].map((lang) => LANGS[lang])
   let highlighter
   try {
     highlighter = createHighlighterCoreSync({
-      langs: [grammar],
+      langs: grammars,
       themes: [githubLight, githubDark],
       // forgiving: grammars with untranslatable Oniguruma patterns lose those
       // rules instead of failing the whole file.
@@ -217,11 +227,13 @@ function run() {
   style.textContent = '@media (prefers-color-scheme: dark){.text span[style]{color:var(--shiki-dark,currentColor)!important}}'
   document.head.appendChild(style)
   const tasks = []
-  for (const group of groups((el) => el.classList.contains('line'))) {
-    tasks.push(() => paintUnified(highlighter, langId, group))
-  }
-  for (const group of groups((el) => el.classList.contains('row'))) {
-    tasks.push(() => paintSplit(highlighter, langId, group))
+  for (const scope of scopes) {
+    for (const group of groups(scope.root, (el) => el.classList.contains('line'))) {
+      tasks.push(() => paintUnified(highlighter, scope.lang, group))
+    }
+    for (const group of groups(scope.root, (el) => el.classList.contains('row'))) {
+      tasks.push(() => paintSplit(highlighter, scope.lang, group))
+    }
   }
   // One group per task, yielding in between: the user script runs at
   // documentEnd, before first paint and the height report, so tokenizing

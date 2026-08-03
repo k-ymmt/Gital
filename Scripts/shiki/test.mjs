@@ -76,6 +76,26 @@ const check = (name, condition) => {
   check('split filler side untouched', doc.querySelector('.side.left:not(.del):not(.ctx) .text').childNodes.length === 0)
 }
 
+// 5. Multi-file page: each section.file[data-lang] tokenizes with its own
+// grammar; a section without data-lang (unknown language) stays uncolored,
+// and spacer divs between rows don't break grouping.
+{
+  const { window, document } = parseHTML(`<!DOCTYPE html><html><head></head><body>
+    <section class="file" data-lang="swift"><div class="sp"></div><div class="hunk"></div>${line('add', 'let a = 1')}<div class="sp"></div>${line('add', 'let b = 2')}</section>
+    <section class="file" data-lang="python"><div class="hunk"></div>${line('add', 'def f(): pass')}</section>
+    <section class="file"><div class="hunk"></div>${line('add', 'let plain = 1')}</section>
+  </body></html>`)
+  globalThis.document = document
+  globalThis.window = window
+  new Function(bundle)()
+  await settle()
+  const sections = [...document.querySelectorAll('section.file')]
+  check('multi-file: swift section colored', sections[0].querySelectorAll('.text span[style]').length > 0)
+  check('multi-file: spacer-separated row still colored', sections[0].querySelectorAll('.line:last-of-type .text span[style]').length > 0)
+  check('multi-file: python section colored', sections[1].querySelectorAll('.text span[style]').length > 0)
+  check('multi-file: untagged section untouched', sections[2].querySelectorAll('.text span').length === 0)
+}
+
 if (failures.length) {
   console.error(`\n${failures.length} bundle test(s) failed`)
   process.exit(1)

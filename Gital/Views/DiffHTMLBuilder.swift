@@ -107,30 +107,55 @@ enum DiffHTMLBuilder {
         var language: String?
     }
 
-    /// One row of a unified diff; segments of these render between native
-    /// interleaves (agent composer/threads), so a page is not always a
-    /// whole file.
+    /// One row of a unified diff — a hunk header or a line. PR review pages
+    /// render segments of these between native interleaves (review cards),
+    /// so a page is not always a whole file.
     enum UnifiedItem {
         case header(DiffHunk)
         case line(DiffLine)
     }
 
-    static func interactiveUnifiedPage(items: [UnifiedItem], options: InteractiveOptions) -> String {
-        assemble(
-            body: render(items: items, options: options) + selectionButtonsTemplate(options.selectionButtons),
-            bodyClass: "",
-            interactive: true,
-            language: options.language
-        )
+    /// Everything the multi-file Working Copy page needs for one file.
+    struct WorkingFile {
+        let diff: FileDiff
+        let options: InteractiveOptions
     }
 
-    static func interactiveSplitPage(for diff: FileDiff, options: InteractiveOptions) -> String {
-        assemble(
-            body: splitBody(for: diff, options: options),
-            bodyClass: splitBodyClass,
-            interactive: true,
-            language: options.language ?? DiffSyntaxHighlighting.language(for: diff)
-        )
+    /// Spacer IDs shared between the page and the native overlay layer: the
+    /// page reserves vertical space under these IDs and reports their laid-out
+    /// document offsets, and the host renders native views (file headers,
+    /// binary previews, agent cards) at exactly those offsets.
+    static func headerSpacerID(for diff: FileDiff) -> String { "hdr:\(diff.path)" }
+    static func binarySpacerID(for diff: FileDiff) -> String { "bin:\(diff.path)" }
+
+    /// Height the page reserves for a file header until the native overlay
+    /// reports its measured height (via `gitalSetSpacers`). A constant, not a
+    /// live measurement: the HTML string must not depend on runtime state, or
+    /// every native re-measure would reload the whole page.
+    static let headerSpacerEstimate: Double = 29
+
+    /// The whole Working Copy diff as ONE page: every file renders inside its
+    /// own `<section class="file">` carrying its Shiki language, with spacer
+    /// divs where native overlays (file header, binary preview) sit. Native
+    /// agent cards get their space at runtime through `gitalSetSpacers`, so
+    /// opening a composer never reloads the page.
+    static func workingCopyPage(files: [WorkingFile], mode: DiffMode) -> String {
+        var body = ""
+        for file in files {
+            let langAttr = file.options.language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
+            body += "<section class=\"file\"\(langAttr)>\n"
+            body += "<div class=\"sp\" data-sp=\"\(escapeAttr(headerSpacerID(for: file.diff)))\" style=\"height:\(headerSpacerEstimate)px\"></div>\n"
+            if file.diff.isBinary {
+                body += "<div class=\"sp\" data-sp=\"\(escapeAttr(binarySpacerID(for: file.diff)))\"></div>\n"
+            } else if mode == .split {
+                body += splitBody(for: file.diff, options: file.options)
+            } else {
+                body += render(items: unifiedItems(for: file.diff), options: file.options)
+                body += selectionButtonsTemplate(file.options.selectionButtons)
+            }
+            body += "</section>\n"
+        }
+        return assemble(body: body, bodyClass: mode == .split ? splitBodyClass : "", interactive: true)
     }
 
     // MARK: - Bodies
@@ -218,13 +243,15 @@ enum DiffHTMLBuilder {
 
     /// Inert clone source for the buttons the selection script drops next to
     /// the frame's "+" — rendering them in Swift keeps titles/actions out of
-    /// hand-built JS strings.
+    /// hand-built JS strings. Class-scoped, not an id: the multi-file page
+    /// carries one template per file section (scopes can differ per file),
+    /// and `frameButtons` clones from the section the frame starts in.
     private static func selectionButtonsTemplate(_ buttons: [HunkButton]) -> String {
         guard !buttons.isEmpty else { return "" }
         let rendered = buttons.map { button in
             "<button class=\"hb selb\(button.destructive ? " destructive" : "")\" data-act=\"\(escapeAttr(button.action))\">\(escape(button.title))</button>"
         }.joined()
-        return "<template id=\"selbtns\">\(rendered)</template>\n"
+        return "<template class=\"selbtns\">\(rendered)</template>\n"
     }
 
     private static func hunkHeader(_ text: String, hunkID: String? = nil, buttons: [HunkButton] = []) -> String {
@@ -465,6 +492,7 @@ enum DiffHTMLBuilder {
     new ResizeObserver(reportHeight).observe(document.body);
     window.addEventListener('load', reportHeight);
     window.gitalSetSelected = () => {};
+    window.gitalSetSpacers = () => {};
     """
 
     /// Interactive pages talk to `WebDiffChunkView` through the `gital`
@@ -478,8 +506,47 @@ enum DiffHTMLBuilder {
     private static let bridgeScript = """
     const post = (m) => window.webkit.messageHandlers.gital.postMessage(m);
     const reportHeight = () => post({type: 'height', height: document.body.scrollHeight});
-    new ResizeObserver(reportHeight).observe(document.body);
-    window.addEventListener('load', reportHeight);
+    // Spacer offsets, so the host can pin its native overlays to the rows
+    // they belong to. The page never scrolls (the outer native ScrollView
+    // does), so viewport coordinates ARE document coordinates.
+    const reportAnchors = () => {
+        const anchors = {};
+        document.querySelectorAll('.sp').forEach((el) => { anchors[el.dataset.sp] = el.getBoundingClientRect().top; });
+        post({type: 'anchors', anchors});
+    };
+    const reportLayout = () => { reportHeight(); reportAnchors(); };
+    new ResizeObserver(reportLayout).observe(document.body);
+    window.addEventListener('load', reportLayout);
+    // Reserves page space for the native overlays. Static spacers (file
+    // headers, binary previews) exist in the HTML and only resize; dynamic
+    // ones (agent composer/thread cards) are created here, inserted after
+    // the line they anchor to — several cards on one line keep spec order.
+    // Dropping a spec removes its dynamic spacer.
+    window.gitalSetSpacers = (specs) => {
+        const wanted = new Set(specs.map((s) => s.id));
+        document.querySelectorAll('.sp[data-dyn]').forEach((el) => {
+            if (!wanted.has(el.dataset.sp)) { el.remove(); }
+        });
+        const insertAfter = new Map();
+        for (const s of specs) {
+            let el = document.querySelector(`.sp[data-sp="${CSS.escape(s.id)}"]`);
+            if (!el && s.line) {
+                const anchor = insertAfter.get(s.line)
+                    || document.querySelector(`.line[data-id="${CSS.escape(s.line)}"]`);
+                if (!anchor) { continue; }
+                el = document.createElement('div');
+                el.className = 'sp';
+                el.dataset.sp = s.id;
+                el.dataset.dyn = '1';
+                anchor.insertAdjacentElement('afterend', el);
+            }
+            if (el) {
+                el.style.height = s.height + 'px';
+                if (s.line) { insertAfter.set(s.line, el); }
+            }
+        }
+        reportLayout();
+    };
     document.addEventListener('mousedown', (e) => {
         // Clicking the frame's ask/stage/discard buttons must not collapse
         // the text selection that defines their range.
@@ -553,8 +620,11 @@ enum DiffHTMLBuilder {
         btn.dataset.end = rows[rows.length - 1].dataset.id;
         first.appendChild(btn);
         // Stage/Unstage/Discard act on the range's changed lines — only when
-        // the page stages lines at all and the range spans a changed line.
-        const tpl = document.getElementById('selbtns');
+        // the file stages lines at all and the range spans a changed line.
+        // The template lives in the row's own file section: capsules differ
+        // per file (staged vs unstaged) on the multi-file page.
+        const scope = first.closest('.file') || document;
+        const tpl = scope.querySelector('template.selbtns');
         if (tpl && rows.some((el) => el.classList.contains('selable'))) {
             const bar = document.createElement('span');
             bar.className = 'selbar' + suffix;
@@ -618,8 +688,13 @@ enum DiffHTMLBuilder {
         const range = sel.getRangeAt(0);
         const rowSelector = document.body.classList.contains('sel-left') ? '.side.left'
             : document.body.classList.contains('sel-right') ? '.side.right' : '.line';
-        const hits = [...document.querySelectorAll(rowSelector)]
+        let hits = [...document.querySelectorAll(rowSelector)]
             .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+        // A drag can cross into the next file on the multi-file page, but a
+        // frame's actions (stage/discard/ask) are per-file — clip the frame
+        // to the file the selection starts in.
+        const fileScope = hits.length ? hits[0].closest('.file') : null;
+        if (fileScope) { hits = hits.filter((el) => el.closest('.file') === fileScope); }
         hits.forEach((el, i) => {
             el.classList.add('tsel');
             if (i === 0 || rowAbove(el) !== hits[i - 1]) { el.classList.add('tsel-first'); }

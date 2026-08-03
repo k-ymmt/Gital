@@ -53,10 +53,7 @@ struct DiffHTMLBuilderTests {
     // was invisible). Accent styling must use the standard `AccentColor`
     // system color with a plain-rgb fallback.
     @Test func accentStylingAvoidsWebkitFocusRingColor() {
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: diff),
-            options: interactiveOptions
-        )
+        let page = unifiedPage(for: diff, options: interactiveOptions)
         #expect(!page.contains("-webkit-focus-ring-color"), "unsupported color keyword never appears")
         #expect(page.contains("@supports (color: AccentColor)"), "accent styling upgrades via AccentColor")
     }
@@ -128,7 +125,18 @@ struct DiffHTMLBuilderTests {
         #expect(!page.contains("cmtbtn"), "split composes no comments")
     }
 
-    // MARK: - Interactive pages (Working Copy)
+    // MARK: - Working Copy page (interactive, multi-file)
+
+    /// Single-file conveniences over `workingCopyPage` — the pinned
+    /// invariants (bridge, frames, escaping) don't care how many sections
+    /// the page has.
+    private func unifiedPage(for diff: FileDiff, options: DiffHTMLBuilder.InteractiveOptions) -> String {
+        DiffHTMLBuilder.workingCopyPage(files: [.init(diff: diff, options: options)], mode: .unified)
+    }
+
+    private func splitPage(for diff: FileDiff, options: DiffHTMLBuilder.InteractiveOptions) -> String {
+        DiffHTMLBuilder.workingCopyPage(files: [.init(diff: diff, options: options)], mode: .split)
+    }
 
     private var interactiveOptions: DiffHTMLBuilder.InteractiveOptions {
         var options = DiffHTMLBuilder.InteractiveOptions()
@@ -142,10 +150,7 @@ struct DiffHTMLBuilderTests {
     }
 
     @Test func interactiveUnifiedCarriesLineIDsAndAffordances() {
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: diff),
-            options: interactiveOptions
-        )
+        let page = unifiedPage(for: diff, options: interactiveOptions)
         #expect(page.contains(#"data-id="l1""#), "changed lines carry their ID for the bridge")
         #expect(page.contains(#"class="line del i selable""#), "changed lines are selectable")
         #expect(page.contains(#"class="line ctx i""#) && !page.contains("ctx i selable"), "context lines are never selectable")
@@ -159,9 +164,11 @@ struct DiffHTMLBuilderTests {
     @Test func interactiveSplitHasHunkButtonsButNoLineInteractivity() {
         var options = DiffHTMLBuilder.InteractiveOptions()
         options.hunkButtons = [DiffHTMLBuilder.HunkButton(action: "unstageHunk", title: "Unstage")]
-        let page = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: options)
+        let page = splitPage(for: diff, options: options)
         #expect(page.contains(#"data-act="unstageHunk""#) && page.contains(#"data-hid="h0""#))
-        #expect(!page.contains("data-id="), "split has no per-line interactions")
+        // Leading space pins this to the HTML attribute — the bridge script
+        // itself contains a `[data-id="…"]` selector for dynamic spacers.
+        #expect(!page.contains(#" data-id=""#), "split rows carry no per-line interactions")
         #expect(page.contains(#"<body class="sel-right""#), "split keeps the one-side selection default")
     }
 
@@ -170,13 +177,13 @@ struct DiffHTMLBuilderTests {
     // attribute-escaping invariants must be pinned there too, not only
     // through the unified path that happens to share code today.
     @Test func splitPageKeepsEmptyLinesAndEscapesHunkIDs() {
-        let plain = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
+        let plain = splitPage(for: diff, options: interactiveOptions)
         #expect(plain.contains(#"<span class="text"> </span>"#), "empty added line copies as a blank line in split too")
 
         let lines = [DiffLine(id: #"we"ird.swift@0"#, kind: .addition, text: "", oldNumber: nil, newNumber: 1)]
         let hunk = DiffHunk(id: #"we"ird.swift@h0"#, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: lines)
         let hostile = FileDiff(path: #"we"ird.swift"#, oldPath: nil, isBinary: false, hunks: [hunk])
-        let page = DiffHTMLBuilder.interactiveSplitPage(for: hostile, options: interactiveOptions)
+        let page = splitPage(for: hostile, options: interactiveOptions)
         #expect(page.contains(#"data-hid="we&quot;ird.swift@h0""#), "split hunk ID quote is escaped")
         #expect(!page.contains(#"data-hid="we"ird"#), "raw quote never reaches a split attribute")
     }
@@ -189,12 +196,12 @@ struct DiffHTMLBuilderTests {
             DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage"),
             DiffHTMLBuilder.HunkButton(action: "discardLines", title: "Discard", destructive: true),
         ]
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
-        #expect(page.contains(#"<template id="selbtns">"#), "clone template present")
+        let page = unifiedPage(for: diff, options: options)
+        #expect(page.contains(#"<template class="selbtns">"#), "clone template present")
         #expect(page.contains(#"data-act="stageLines""#) && page.contains(#"data-act="discardLines""#), "buttons post their actions")
         #expect(page.contains("hb selb destructive"), "discard capsule is destructive")
 
-        let bare = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: interactiveOptions)
+        let bare = unifiedPage(for: diff, options: interactiveOptions)
         #expect(!bare.contains("<template"), "no template when the page has no selection buttons")
     }
 
@@ -202,11 +209,8 @@ struct DiffHTMLBuilderTests {
     // machinery lives in the bridge script/CSS, so it must reach both
     // interactive layouts and never the read-only pages.
     @Test func interactivePagesFrameTextSelectedRows() {
-        let unified = DiffHTMLBuilder.interactiveUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: diff),
-            options: interactiveOptions
-        )
-        let split = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
+        let unified = unifiedPage(for: diff, options: interactiveOptions)
+        let split = splitPage(for: diff, options: interactiveOptions)
         for page in [unified, split] {
             #expect(page.contains("selectionchange"), "selection tracking script included")
             #expect(page.contains(".tsel::after"), "selection frame CSS included")
@@ -224,10 +228,7 @@ struct DiffHTMLBuilderTests {
     // the same corner buttons ("+" / Stage / Unstage / Discard). The frame
     // is interactive-only machinery and must never reach read-only pages.
     @Test func interactivePagesFrameHoveredHunks() {
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: diff),
-            options: interactiveOptions
-        )
+        let page = unifiedPage(for: diff, options: interactiveOptions)
         #expect(page.contains(".tsel::after, .hsel::after"), "hover frame shares the selection frame's border styling")
         #expect(page.contains("hsel-first") && page.contains("hsel-last"), "hover frame draws its top/bottom edges")
         #expect(page.contains("mouseover") && page.contains("clearHover"), "hover tracking script included")
@@ -245,10 +246,10 @@ struct DiffHTMLBuilderTests {
         var options = interactiveOptions
         options.hunkButtons = []
         options.selectionButtons = [DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage")]
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
+        let page = unifiedPage(for: diff, options: options)
         #expect(!page.contains(#"<span class="hunkbtns">"#), "hunk headers carry no button span")
         #expect(page.contains(#"data-hid="h0""#), "headers keep their hunk ID")
-        #expect(page.contains(#"<template id="selbtns">"#), "frame capsules come from the template instead")
+        #expect(page.contains(#"<template class="selbtns">"#), "frame capsules come from the template instead")
     }
 
     // The injected Shiki user script reads the grammar id off <body
@@ -265,11 +266,14 @@ struct DiffHTMLBuilderTests {
 
         var options = interactiveOptions
         options.language = "swift"
-        let unified = DiffHTMLBuilder.interactiveUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), options: options)
-        #expect(unified.contains(#"data-lang="swift""#), "interactive unified page tags its language")
-        // Split derives from the diff path when options carry no language.
-        let split = DiffHTMLBuilder.interactiveSplitPage(for: diff, options: interactiveOptions)
-        #expect(split.contains(#"data-lang="swift""#), "interactive split page derives the language from the path")
+        // The multi-file page tags each file's <section>, not <body> — the
+        // Shiki script highlights every section with its own grammar.
+        let unified = unifiedPage(for: diff, options: options)
+        #expect(unified.contains(#"<section class="file" data-lang="swift">"#), "working copy section tags its language")
+        let split = splitPage(for: diff, options: options)
+        #expect(split.contains(#"<section class="file" data-lang="swift">"#), "split section tags its language too")
+        let untagged = unifiedPage(for: diff, options: interactiveOptions)
+        #expect(!untagged.contains("data-lang"), "no language in options, no attribute")
     }
 
     @Test func readOnlyPagesHaveNoBridge() {
@@ -287,10 +291,7 @@ struct DiffHTMLBuilderTests {
         let lines = [DiffLine(id: #"we"ird.swift@0"#, kind: .addition, text: "x", oldNumber: nil, newNumber: 1)]
         let hunk = DiffHunk(id: #"we"ird.swift@h0"#, header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: lines)
         let hostile = FileDiff(path: #"we"ird.swift"#, oldPath: nil, isBinary: false, hunks: [hunk])
-        let page = DiffHTMLBuilder.interactiveUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: hostile),
-            options: interactiveOptions
-        )
+        let page = unifiedPage(for: hostile, options: interactiveOptions)
         #expect(page.contains(#"data-id="we&quot;ird.swift@0""#), "line ID quote is escaped")
         #expect(page.contains(#"data-hid="we&quot;ird.swift@h0""#), "hunk ID quote is escaped")
         #expect(!page.contains(#"data-id="we"ird"#), "raw quote never reaches an attribute")
@@ -313,5 +314,59 @@ struct DiffHTMLBuilderTests {
             #expect(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"), "\(mode.rawValue): line text is escaped")
             #expect(page.contains("&lt;script&gt;doEvil() &amp;&amp; more&lt;/script&gt;"), "\(mode.rawValue): hunk header is escaped")
         }
+    }
+
+    // MARK: - Multi-file page structure
+
+    // The whole Working Copy renders as ONE page: per-file sections carrying
+    // their own language and header spacer, so the native overlay layer can
+    // pin headers to reported offsets and Shiki can mix grammars.
+    @Test func workingCopyPageRendersOneSectionPerFile() {
+        var swiftOptions = interactiveOptions
+        swiftOptions.language = "swift"
+        let other = FileDiff(path: "tool.py", oldPath: nil, isBinary: false, hunks: diff.hunks, scope: .unstaged)
+        var pyOptions = DiffHTMLBuilder.InteractiveOptions()
+        pyOptions.language = "python"
+        let page = DiffHTMLBuilder.workingCopyPage(
+            files: [.init(diff: diff, options: swiftOptions), .init(diff: other, options: pyOptions)],
+            mode: .unified
+        )
+        #expect(page.contains(#"<section class="file" data-lang="swift">"#) && page.contains(#"<section class="file" data-lang="python">"#), "each file section carries its own grammar")
+        #expect(page.contains(#"data-sp="hdr:Sources/A.swift""#) && page.contains(#"data-sp="hdr:tool.py""#), "each file reserves header space under its spacer ID")
+        #expect(page.contains("gitalSetSpacers"), "dynamic spacer API included for agent cards")
+        #expect(page.contains("type: 'anchors'"), "page reports spacer offsets for the overlay layer")
+        #expect(page.contains("type: 'height'"), "page reports its height like any hosted page")
+    }
+
+    // A binary file contributes only its overlay spacers — no rows, and
+    // nothing for the interactive machinery to target.
+    @Test func workingCopyPageReservesSpaceForBinaryFiles() {
+        var binary = FileDiff(path: "icon.png", oldPath: nil, isBinary: true, hunks: [])
+        binary.scope = .unstaged
+        let page = DiffHTMLBuilder.workingCopyPage(
+            files: [.init(diff: binary, options: DiffHTMLBuilder.InteractiveOptions())],
+            mode: .unified
+        )
+        #expect(page.contains(#"data-sp="hdr:icon.png""#) && page.contains(#"data-sp="bin:icon.png""#), "header and content spacers present")
+        #expect(!page.contains(#"class="line"#), "no diff rows for a binary file")
+    }
+
+    // Capsule templates are per-section: a staged and an unstaged file on
+    // the same page offer different actions, and the frame script clones
+    // from the section the selection starts in.
+    @Test func workingCopyPageScopesSelectionTemplatesPerFile() {
+        var unstaged = interactiveOptions
+        unstaged.selectionButtons = [DiffHTMLBuilder.HunkButton(action: "stageLines", title: "Stage")]
+        var staged = interactiveOptions
+        staged.selectionButtons = [DiffHTMLBuilder.HunkButton(action: "unstageLines", title: "Unstage")]
+        var stagedLines = diff
+        stagedLines.scope = .staged
+        let page = DiffHTMLBuilder.workingCopyPage(
+            files: [.init(diff: diff, options: unstaged), .init(diff: stagedLines, options: staged)],
+            mode: .unified
+        )
+        #expect(page.components(separatedBy: #"<template class="selbtns">"#).count == 3, "one template per file section")
+        #expect(page.contains(#"data-act="stageLines""#) && page.contains(#"data-act="unstageLines""#), "each section keeps its own actions")
+        #expect(page.contains("closest('.file')"), "frame script resolves the template per section")
     }
 }
