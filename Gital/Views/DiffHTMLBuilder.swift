@@ -300,11 +300,13 @@ enum DiffHTMLBuilder {
         // tokenize with; without it the page stays uncolored.
         let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
         // Lazy rendering only where the page scrolls itself (WebDiffView).
-        // Hosted pages fit their WKWebView to the full content height, so the
-        // layout viewport IS the whole page: `content-visibility: auto` would
-        // never skip anything there — and if it ever did, scrollHeight and
-        // spacer anchors would report placeholder-based numbers to a native
-        // layer that positions overlays by exact offsets.
+        // Hosted pages must not get it: their web view reaches the reported
+        // content height through estimate-sized frames (initial load,
+        // LazyVStack recycling), and while the frame is still short `auto`
+        // WOULD skip below-the-fold rows — feeding placeholder-based
+        // scrollHeight/anchor reports to a native layer that positions
+        // overlays by exact offsets. Once converged it is a no-op anyway:
+        // the layout viewport is the whole page.
         let selfScrolling = !interactive && !reportsHeight
         return """
         <!DOCTYPE html>
@@ -366,8 +368,11 @@ enum DiffHTMLBuilder {
     /// page a many-thousand-line diff lays out only what's near the viewport.
     /// 19px is the unwrapped row height (matches `min-height`); `auto`
     /// remembers a wrapped row's real height once it has rendered, so
-    /// scrolling back over it never jumps. Hunk headers stay always-rendered:
-    /// they are few, and `.htext` is the only nowrap row.
+    /// scrolling back over it never jumps. (`auto 19px` sets both axes; the
+    /// width component is moot — rows are block-level and stretch.) Hunk
+    /// headers stay always-rendered: they are few, and `.htext` is the only
+    /// nowrap row. Selection marks skipped rows relevant, so Select All +
+    /// Copy still serializes every row — pinned by `WebDiffLazyRenderTests`.
     private static let lazyRenderCSS = """
     .line, .row { content-visibility: auto; contain-intrinsic-size: auto 19px; }
     """
