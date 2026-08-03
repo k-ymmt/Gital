@@ -27,7 +27,7 @@ struct WorkingDiffPane: View {
     @State private var anchors: [String: CGFloat] = [:]
     /// Measured native overlay heights, pushed back as spacer heights.
     @State private var overlayHeights: [String: CGFloat] = [:]
-    @State private var page = BuiltPage(html: "", estimatedHeight: 0)
+    @State private var page = BuiltPage(html: "", estimatedHeight: 0, diffs: [])
     @State private var scroll = ScrollOffsetBox()
 
     /// Scroll anchor above the page — the file-switch reset scrolls here.
@@ -44,9 +44,16 @@ struct WorkingDiffPane: View {
                             selectedLineIDs: model.selectedDiffLineIDs,
                             spacers: spacers,
                             onAction: { handle($0) },
-                            onHeight: { height in
+                            onHeight: { height, ready in
                                 pageHeight = height
-                                cacheHeight(height, for: page.html)
+                                // Loading-phase reports can still describe
+                                // the outgoing page; only a post-didFinish
+                                // report certainly measures this one. The
+                                // spacer push after didFinish guarantees at
+                                // least one ready report per load.
+                                if ready {
+                                    cacheHeight(height, forKey: page.heightCacheKey)
+                                }
                             },
                             onAnchors: { anchors = $0 }
                         )
@@ -101,16 +108,35 @@ struct WorkingDiffPane: View {
     private struct BuiltPage {
         let html: String
         let estimatedHeight: CGFloat
+        /// The diffs this page was rendered from. Bridge actions resolve
+        /// their positional IDs against THIS snapshot, not the live model:
+        /// between a diff refresh landing in the model and the fresh page
+        /// replacing the old one, a click on the still-visible old page
+        /// would otherwise resolve `path@N` against the NEW diff — and stage
+        /// or discard a physical line the user never saw. Against the
+        /// snapshot, a stale action degrades to a patch that fails to apply.
+        let diffs: [FileDiff]
+        /// Height-cache key, hashed once — heights are reported on every
+        /// layout change and this page can be megabytes.
+        let heightCacheKey: String
+
+        init(html: String, estimatedHeight: CGFloat, diffs: [FileDiff]) {
+            self.html = html
+            self.estimatedHeight = estimatedHeight
+            self.diffs = diffs
+            self.heightCacheKey = Gital.heightCacheKey(for: html)
+        }
     }
 
     private func rebuildPage() {
         let mode = model.diffMode
-        let files = model.workingDiffs.map { diff in
+        let diffs = model.workingDiffs
+        let files = diffs.map { diff in
             DiffHTMLBuilder.WorkingFile(diff: diff, options: options(for: diff, mode: mode))
         }
         let html = DiffHTMLBuilder.workingCopyPage(files: files, mode: mode)
-        page = BuiltPage(html: html, estimatedHeight: Self.estimatedHeight(for: model.workingDiffs, mode: mode))
-        if let cached = cachedHeight(for: html) {
+        page = BuiltPage(html: html, estimatedHeight: Self.estimatedHeight(for: diffs, mode: mode), diffs: diffs)
+        if let cached = cachedHeight(forKey: page.heightCacheKey) {
             pageHeight = cached
         }
     }
@@ -356,8 +382,10 @@ struct WorkingDiffPane: View {
 
     /// The page's line/hunk IDs embed the file path and are unique across
     /// the whole multi-file page, so the owning diff is recovered by lookup.
+    /// Resolves against the snapshot the page was BUILT from (see
+    /// `BuiltPage.diffs`) — clicks always mean what the user saw.
     private func diff(containing id: String) -> FileDiff? {
-        model.workingDiffs.first { diff in
+        page.diffs.first { diff in
             diff.hunks.contains { $0.id == id || $0.lines.contains { $0.id == id } }
         }
     }

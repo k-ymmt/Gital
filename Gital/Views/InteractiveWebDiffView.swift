@@ -29,12 +29,27 @@ private final class HeightFittingWebView: WKWebView {
 /// until the live page re-reports.
 private let heightCache = NSCache<NSString, NSNumber>()
 
+/// Hashing is O(html length) — the Working Copy page can be megabytes, and
+/// heights are reported on every layout change, so callers with a long-lived
+/// page precompute the key once instead of re-hashing per report.
+func heightCacheKey(for html: String) -> String {
+    String(html.hashValue)
+}
+
+func cachedHeight(forKey key: String) -> CGFloat? {
+    heightCache.object(forKey: key as NSString).map { CGFloat($0.doubleValue) }
+}
+
+func cacheHeight(_ height: CGFloat, forKey key: String) {
+    heightCache.setObject(NSNumber(value: height), forKey: key as NSString)
+}
+
 func cachedHeight(for html: String) -> CGFloat? {
-    heightCache.object(forKey: String(html.hashValue) as NSString).map { CGFloat($0.doubleValue) }
+    cachedHeight(forKey: heightCacheKey(for: html))
 }
 
 func cacheHeight(_ height: CGFloat, for html: String) {
-    heightCache.setObject(NSNumber(value: height), forKey: String(html.hashValue) as NSString)
+    cacheHeight(height, forKey: heightCacheKey(for: html))
 }
 
 /// One self-sized, interactive diff chunk inside the Working Copy list.
@@ -58,7 +73,10 @@ struct WebDiffChunkView: View {
             html: html,
             selectedLineIDs: selectedLineIDs,
             onAction: onAction,
-            onHeight: { height in
+            // Chunk pages cache unconditionally: they are small (hashing is
+            // cheap) and post no guaranteed post-didFinish report, so gating
+            // on readiness could leave the cache cold across recycles.
+            onHeight: { height, _ in
                 reportedHeight = height
                 cacheHeight(height, for: html)
             }
@@ -89,7 +107,12 @@ struct InteractiveWebView: NSViewRepresentable {
     /// resizing never reloads the page.
     var spacers: [WebDiffSpacer] = []
     let onAction: (WebDiffAction) -> Void
-    let onHeight: (CGFloat) -> Void
+    /// Second argument is whether the report arrived after the current
+    /// page's didFinish. During a reload the OLD page can still post heights
+    /// (they keep the frame from collapsing, so they are delivered either
+    /// way) — but persisting one under the NEW page's cache key would poison
+    /// the warm-start height, so cache writers only trust ready reports.
+    let onHeight: (CGFloat, _ pageReady: Bool) -> Void
     /// Laid-out document offsets of every spacer, reported by the page after
     /// each load/layout change — where the native overlays position themselves.
     var onAnchors: (([String: CGFloat]) -> Void)? = nil
@@ -98,7 +121,7 @@ struct InteractiveWebView: NSViewRepresentable {
         // Re-pointed on every update so bridge messages never run stale
         // closures captured at makeNSView time.
         var onAction: (WebDiffAction) -> Void = { _ in }
-        var onHeight: (CGFloat) -> Void = { _ in }
+        var onHeight: (CGFloat, Bool) -> Void = { _, _ in }
         var onAnchors: (([String: CGFloat]) -> Void)?
         var loadedHTML: String?
         weak var webView: WKWebView?
@@ -127,7 +150,7 @@ struct InteractiveWebView: NSViewRepresentable {
             switch type {
             case "height":
                 if let height = body["height"] as? Double, height > 0 {
-                    onHeight(CGFloat(height))
+                    onHeight(CGFloat(height), pageReady)
                 }
             case "anchors":
                 if let anchors = body["anchors"] as? [String: Double] {

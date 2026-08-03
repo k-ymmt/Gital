@@ -530,20 +530,27 @@ enum DiffHTMLBuilder {
         const insertAfter = new Map();
         for (const s of specs) {
             let el = document.querySelector(`.sp[data-sp="${CSS.escape(s.id)}"]`);
-            if (!el && s.line) {
+            if (s.line) {
                 const anchor = insertAfter.get(s.line)
                     || document.querySelector(`.line[data-id="${CSS.escape(s.line)}"]`);
-                if (!anchor) { continue; }
-                el = document.createElement('div');
-                el.className = 'sp';
-                el.dataset.sp = s.id;
-                el.dataset.dyn = '1';
-                anchor.insertAdjacentElement('afterend', el);
+                // Anchor line gone (diff re-shaped underneath): a stale
+                // spacer must not keep holding space at the old position.
+                if (!anchor) { if (el && el.dataset.dyn) { el.remove(); } continue; }
+                if (!el) {
+                    el = document.createElement('div');
+                    el.className = 'sp';
+                    el.dataset.sp = s.id;
+                    el.dataset.dyn = '1';
+                }
+                // Re-anchoring an existing card — the composer keeps its ID
+                // when it moves to another range — must MOVE the spacer, not
+                // just resize it in place at the old line.
+                if (el.previousElementSibling !== anchor) {
+                    anchor.insertAdjacentElement('afterend', el);
+                }
+                insertAfter.set(s.line, el);
             }
-            if (el) {
-                el.style.height = s.height + 'px';
-                if (s.line) { insertAfter.set(s.line, el); }
-            }
+            if (el) { el.style.height = s.height + 'px'; }
         }
         reportLayout();
     };
