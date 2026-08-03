@@ -276,6 +276,21 @@ struct DiffHTMLBuilderTests {
         #expect(!untagged.contains("data-lang"), "no language in options, no attribute")
     }
 
+    // `content-visibility: auto` lazily renders rows only where the page
+    // scrolls itself (WebDiffView). Hosted pages fit their web view to the
+    // full content height — the viewport is the whole page, so `auto` could
+    // never skip anything, and a skipped row would corrupt the scrollHeight
+    // and spacer-anchor reports the native overlay layout depends on.
+    @Test func onlySelfScrollingPagesLazilyRenderRows() {
+        for mode in DiffMode.allCases {
+            #expect(DiffHTMLBuilder.page(for: diff, mode: mode).contains("content-visibility: auto"), "\(mode.rawValue): self-scrolling page skips off-screen rows")
+            #expect(!DiffHTMLBuilder.chunkPage(for: diff, mode: mode).contains("content-visibility"), "\(mode.rawValue): height-reporting chunk page must not")
+            #expect(!DiffHTMLBuilder.workingCopyPage(files: [.init(diff: diff, options: interactiveOptions)], mode: mode).contains("content-visibility"), "\(mode.rawValue): working copy page must not")
+        }
+        #expect(!DiffHTMLBuilder.reviewUnifiedPage(items: DiffHTMLBuilder.unifiedItems(for: diff), language: nil, commentable: nil).contains("content-visibility"), "review pages must not")
+        #expect(!DiffHTMLBuilder.reviewSplitPage(rows: SplitDiffRow.rows(for: diff.hunks), language: nil).contains("content-visibility"), "split review pages must not")
+    }
+
     @Test func readOnlyPagesHaveNoBridge() {
         for mode in DiffMode.allCases {
             let page = DiffHTMLBuilder.page(for: diff, mode: mode)

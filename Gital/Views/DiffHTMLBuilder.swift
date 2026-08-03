@@ -299,12 +299,19 @@ enum DiffHTMLBuilder {
         // data-lang tells the injected Shiki user script what grammar to
         // tokenize with; without it the page stays uncolored.
         let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
+        // Lazy rendering only where the page scrolls itself (WebDiffView).
+        // Hosted pages fit their WKWebView to the full content height, so the
+        // layout viewport IS the whole page: `content-visibility: auto` would
+        // never skip anything there — and if it ever did, scrollHeight and
+        // spacer anchors would report placeholder-based numbers to a native
+        // layer that positions overlays by exact offsets.
+        let selfScrolling = !interactive && !reportsHeight
         return """
         <!DOCTYPE html>
         <html>
         <head>
         <meta charset="utf-8">
-        <style>\(css)\(interactive ? interactiveCSS : "")\(extraCSS)</style>
+        <style>\(css)\(selfScrolling ? lazyRenderCSS : "")\(interactive ? interactiveCSS : "")\(extraCSS)</style>
         </head>
         <body\(bodyClass)\(langAttr)>
         \(body)
@@ -353,6 +360,16 @@ enum DiffHTMLBuilder {
     .side .num { flex: 0 0 40px; padding-right: 9px; text-align: right; opacity: 0.45; }
     .side.left { border-right: 1px solid color-mix(in srgb, CanvasText 15%, transparent); }
     body.sel-left .side.right, body.sel-right .side.left { -webkit-user-select: none; user-select: none; }
+    """
+
+    /// Off-screen rows skip style/layout/paint entirely — on a self-scrolling
+    /// page a many-thousand-line diff lays out only what's near the viewport.
+    /// 19px is the unwrapped row height (matches `min-height`); `auto`
+    /// remembers a wrapped row's real height once it has rendered, so
+    /// scrolling back over it never jumps. Hunk headers stay always-rendered:
+    /// they are few, and `.htext` is the only nowrap row.
+    private static let lazyRenderCSS = """
+    .line, .row { content-visibility: auto; contain-intrinsic-size: auto 19px; }
     """
 
     /// Hover/selection affordances for the Working Copy: hover tint, accent
