@@ -1,0 +1,205 @@
+{
+  "color-space-for-untagged-svg-colors": "display-p3",
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "display-p3:0.055,0.205,0.615,1.0",
+          "display-p3:0.185,0.485,1.0,1.0"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.08,
+            "y": 0.02
+          },
+          "stop": {
+            "x": 0.92,
+            "y": 0.98
+          }
+        }
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "display-p3:0.018,0.065,0.205,1.0",
+          "display-p3:0.075,0.225,0.565,1.0"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.08,
+            "y": 0.02
+          },
+          "stop": {
+            "x": 0.92,
+            "y": 0.98
+          }
+        }
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": "automatic"
+    }
+  ],
+  "groups": [
+    {
+      "blur": 0.42,
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "display-p3:1.0,1.0,1.0,0.12"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "display-p3:0.66,0.78,1.0,0.09"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": true,
+          "image-name": "lens.svg",
+          "name": "Glass Lens",
+          "opacity": 0.72
+        }
+      ],
+      "lighting": "individual",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.16
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.18
+      }
+    },
+    {
+      "blur": 0.12,
+      "layers": [
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "display-p3:0.09,0.27,0.72,1.0"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "display-p3:0.055,0.14,0.38,1.0"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": false,
+          "image-name": "node-cores.svg",
+          "name": "Commit Centers"
+        },
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "display-p3:0.975,0.987,1.0,1.0"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "display-p3:0.90,0.945,1.0,1.0"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": true,
+          "image-name": "nodes.svg",
+          "name": "Commits"
+        },
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "linear-gradient": [
+                  "display-p3:0.78,0.50,1.0,1.0",
+                  "display-p3:0.49,0.30,0.93,1.0"
+                ],
+                "orientation": {
+                  "start": {
+                    "x": 0.72,
+                    "y": 0.22
+                  },
+                  "stop": {
+                    "x": 0.4,
+                    "y": 0.6
+                  }
+                }
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "display-p3:0.73,0.58,1.0,1.0"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": true,
+          "image-name": "branch.svg",
+          "name": "Branch"
+        },
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "solid": "display-p3:0.965,0.982,1.0,1.0"
+              }
+            },
+            {
+              "appearance": "dark",
+              "value": {
+                "solid": "display-p3:0.88,0.93,1.0,1.0"
+              }
+            },
+            {
+              "appearance": "tinted",
+              "value": "automatic"
+            }
+          ],
+          "glass": true,
+          "image-name": "trunk.svg",
+          "name": "Main Line"
+        }
+      ],
+      "lighting": "combined",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.34
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": true,
+        "value": 0.1
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
