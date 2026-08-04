@@ -233,7 +233,8 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains("hsel-first") && page.contains("hsel-last"), "hover frame draws its top/bottom edges")
         #expect(page.contains("mouseover") && page.contains("clearHover"), "hover tracking script included")
         #expect(page.contains("frameButtons"), "hover and selection frames share one corner-button builder")
-        #expect(page.contains("hoverButtonTimer = setTimeout"), "corner buttons wait out a dwell so gutter clicks can't land on Stage")
+        #expect(page.contains("hoverButtonTimer = setTimeout"), "corner buttons arm after a dwell so line clicks can't land on Stage")
+        #expect(page.contains(".askr.arming, .selbar.arming { pointer-events: none; }"), "unarmed corner buttons are click-through, but visible immediately")
         for mode in DiffMode.allCases {
             #expect(!DiffHTMLBuilder.page(for: diff, mode: mode).contains("hsel"), "\(mode.rawValue): read-only pages have no hover frame")
         }

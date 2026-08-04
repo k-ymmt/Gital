@@ -446,6 +446,7 @@ enum DiffHTMLBuilder {
         -webkit-user-select: none;
         user-select: none;
     }
+    .askr.arming, .selbar.arming { pointer-events: none; }
     @supports (color: AccentColor) {
         .line.sel, .line.sel:hover {
             background-image: linear-gradient(color-mix(in srgb, AccentColor 14%, transparent), color-mix(in srgb, AccentColor 14%, transparent));
@@ -637,10 +638,12 @@ enum DiffHTMLBuilder {
     // Unstage/Discard capsules cloned from the Swift-rendered template.
     // Shared by the text-selection frame and the hover-hunk frame; "hov"
     // marks the hover frame's elements so selection cleanup spares them.
+    // Hover-frame buttons start in "arming" (visible but click-through) —
+    // see the mouseover handler for why.
     const frameButtons = (rows, hover) => {
         const first = rows[0];
         if (!first.dataset.id) { return; }
-        const suffix = hover ? ' hov' : '';
+        const suffix = hover ? ' hov arming' : '';
         const btn = document.createElement('span');
         btn.className = 'ask askr' + suffix;
         btn.textContent = '+';
@@ -697,13 +700,15 @@ enum DiffHTMLBuilder {
         rows.forEach((el) => el.classList.add('hsel'));
         first.classList.add('hsel-first');
         rows[rows.length - 1].classList.add('hsel-last');
-        // The corner buttons overlay the first row's number gutter, where a
-        // click means "select this line" — appearing the instant the pointer
+        // The corner buttons overlay the first row, where a click means
+        // "select this line" — accepting clicks the instant the pointer
         // enters the hunk would let that click land on Stage instead. The
-        // frame shows immediately; the buttons wait out a short dwell.
+        // buttons show immediately but stay click-through ("arming", clicks
+        // fall through to the line) until a short dwell passes.
+        frameButtons(rows, true);
         hoverButtonTimer = setTimeout(() => {
             hoverButtonTimer = null;
-            frameButtons(rows, true);
+            document.querySelectorAll('.askr.hov, .selbar.hov').forEach((el) => el.classList.remove('arming'));
         }, 350);
     });
     document.documentElement.addEventListener('mouseleave', () => clearHover());
