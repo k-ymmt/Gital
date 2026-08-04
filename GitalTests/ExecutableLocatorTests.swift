@@ -70,6 +70,7 @@ struct ExecutableLocatorTests {
     }
 }
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct SubprocessKillEscalationTests {
     // Interactive shells ignore SIGTERM, so cancellation must escalate to

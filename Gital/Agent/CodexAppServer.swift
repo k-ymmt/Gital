@@ -75,6 +75,10 @@ actor CodexAppServer {
     /// handler dictionary invited drift between the two).
     private var activeTurns: [UUID: TurnRecord] = [:]
     private var lineBuffer = NewlineBuffer()
+    /// Bumped on every process replacement; stamps stdout drains so a
+    /// straggling flush from a previous process's pipe cannot feed the new
+    /// process's line buffer.
+    private var pipeGeneration = 0
     private var initTask: Task<Void, Error>?
     /// Bumped whenever `initTask` is replaced; lets awaiting callers detect
     /// that the task they waited on is no longer the current one.
@@ -292,23 +296,26 @@ actor CodexAppServer {
 
     private func launchProcess() async throws {
         // Replace any previous (dead or stale) process WITHOUT sweeping
-        // `activeTurns`: a first turn registers itself there before setup
-        // reaches this point, and the full `shutdown()` that used to run
-        // here failed that fresh turn with "exited unexpectedly" on every
-        // launch — while codex itself came up fine underneath. Pending
-        // requests belong to the old process and can never be answered
-        // (reachable states have none left: a dead process already failed
-        // them on exit), so they are failed defensively; thread IDs die
-        // with the old process either way.
+        // turns still in setup: a first turn registers itself in
+        // `activeTurns` before setup reaches this point, and the full
+        // `shutdown()` that used to run here failed that fresh turn with
+        // "exited unexpectedly" on every launch — while codex itself came
+        // up fine underneath. Everything owned by the OLD process is swept:
+        // its pending requests and started turns (normally already failed by
+        // `processDidExit`, but that sweep is skipped when the exit races a
+        // relaunch past the identity guard — without this, such turns leak
+        // as spinners that never finish), its buffered partial output (a
+        // half-line from a crashed codex would glue onto the new process's
+        // first response and hang `initialize` forever), and the thread-ID
+        // map.
         let old = process
         process = nil
         stdinHandle = nil
         threadIDsByConversation = [:]
-        let stale = pendingRequests
-        pendingRequests = [:]
-        for continuation in stale.values {
-            continuation.resume(throwing: CodexError.terminated)
-        }
+        lineBuffer = NewlineBuffer()
+        pipeGeneration += 1
+        failPendingRequests(with: CodexError.terminated)
+        failStartedTurns(with: CodexError.terminated)
         old?.terminationHandler = nil
         old?.terminate()
 
@@ -326,8 +333,12 @@ actor CodexAppServer {
         // The captured shell PATH rides along: codex itself may be a
         // PATH-dependent launcher (an npm install is `#!/usr/bin/env node`),
         // and the agent spawns git/editors/helpers that should resolve the
-        // way they do in the user's terminal.
-        process.environment = await ExecutableLocator.shared.toolEnvironment()
+        // way they do in the user's terminal. Overridden launches (tests)
+        // skip the capture — a unit test must not source the developer's
+        // interactive shell profile.
+        if executableOverride == nil {
+            process.environment = await ExecutableLocator.shared.toolEnvironment()
+        }
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -336,6 +347,11 @@ actor CodexAppServer {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        // The generation stamp keeps a straggling drain of the OLD pipe
+        // (its handler can still be flushing when the replacement above has
+        // already reset the line buffer) from corrupting the new process's
+        // stream.
+        let generation = pipeGeneration
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
@@ -345,7 +361,7 @@ actor CodexAppServer {
                 return
             }
             Task { [weak self] in
-                await self?.consume(data)
+                await self?.consume(data, generation: generation)
             }
         }
         // stderr must be drained too: a chatty codex blocks after ~64KB of
@@ -378,20 +394,46 @@ actor CodexAppServer {
         stdinHandle = nil
         initTask = nil
         threadIDsByConversation = [:]
-        failEverything(with: CodexError.terminated)
+        lineBuffer = NewlineBuffer()
+        failPendingRequests(with: CodexError.terminated)
+        // Only turns already attached to a codex thread die with the
+        // process. A turn still in setup rides on the launch/request
+        // continuations — if it was waiting on this process, the request
+        // failure above reaches it through its own throw path, and if it
+        // had not sent anything yet it simply relaunches. Sweeping it here
+        // reintroduced the launch-kills-fresh-turn bug through the
+        // death-races-relaunch ordering.
+        failStartedTurns(with: CodexError.terminated)
     }
 
     /// Fails every pending request and finishes every active turn stream —
     /// nothing may be left waiting on a process that no longer exists.
+    /// Reserved for `shutdown()` (repo close), where even setup-phase turns
+    /// must die; process replacement and exit use the narrower sweeps.
     private func failEverything(with error: Error) {
+        failPendingRequests(with: error)
+        let turns = activeTurns
+        activeTurns = [:]
+        for record in turns.values {
+            record.completed = true
+            record.continuation.finish(throwing: error)
+        }
+    }
+
+    private func failPendingRequests(with error: Error) {
         let pending = pendingRequests
         pendingRequests = [:]
         for continuation in pending.values {
             continuation.resume(throwing: error)
         }
-        let turns = activeTurns
-        activeTurns = [:]
-        for record in turns.values {
+    }
+
+    /// Finishes the turns already attached to a codex thread (non-empty
+    /// `threadID`), sparing turns still in setup — the launch a setup turn
+    /// itself triggered must never kill it.
+    private func failStartedTurns(with error: Error) {
+        for (id, record) in activeTurns where !record.threadID.isEmpty {
+            activeTurns.removeValue(forKey: id)
             record.completed = true
             record.continuation.finish(throwing: error)
         }
@@ -429,7 +471,8 @@ actor CodexAppServer {
         }
     }
 
-    private func consume(_ data: Data) {
+    private func consume(_ data: Data, generation: Int) {
+        guard generation == pipeGeneration else { return }  // old process's pipe
         for lineData in lineBuffer.append(data) {
             guard let message = CodexServerMessage.parse(lineData) else {
                 // Never drop a line silently — an unexpected shape here is

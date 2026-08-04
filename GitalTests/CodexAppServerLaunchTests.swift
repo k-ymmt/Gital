@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Gital
 
+@Suite(.timeLimit(.minutes(1)))
 @MainActor
 struct CodexAppServerLaunchTests {
     /// Writes a fake `codex app-server` that answers the handshake and one
