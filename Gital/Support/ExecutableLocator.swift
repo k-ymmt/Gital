@@ -27,6 +27,13 @@ actor ExecutableLocator {
             "/usr/local/bin",
             NSHomeDirectory() + "/.local/bin",
             NSHomeDirectory() + "/bin",
+            // Version-manager shim directories. These are commonly wired up
+            // in .zshrc only, which the `zsh -lc` fallback below never
+            // sources — so they must be probed directly. The shims are
+            // self-contained executables and run fine without the manager's
+            // environment.
+            NSHomeDirectory() + "/.local/share/mise/shims",
+            NSHomeDirectory() + "/.asdf/shims",
         ]
 
         let fileManager = FileManager.default
