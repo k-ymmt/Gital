@@ -273,6 +273,13 @@ actor CodexAppServer {
         _ = try await sendRequest(method: "initialize", params: [
             "clientInfo": ["name": "gital", "title": "Gital", "version": version],
         ])
+        // Newer codex releases (observed on 0.145.0) queue every subsequent
+        // request until the client confirms the handshake with this
+        // notification — without it, thread/start never gets an answer.
+        try write([
+            "jsonrpc": "2.0",
+            "method": "initialized",
+        ])
     }
 
     private func launchProcess() async throws {
