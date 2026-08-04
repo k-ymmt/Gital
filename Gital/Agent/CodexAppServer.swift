@@ -58,6 +58,14 @@ actor CodexAppServer {
 
     private static let logger = Logger(subsystem: "app.kymmt.Gital", category: "CodexAppServer")
 
+    /// Test hook: bypasses the locator so the launch/turn plumbing can run
+    /// against a scripted fake instead of a real codex install.
+    private let executableOverride: URL?
+
+    init(executableOverride: URL? = nil) {
+        self.executableOverride = executableOverride
+    }
+
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var nextRequestID = 10
@@ -283,9 +291,33 @@ actor CodexAppServer {
     }
 
     private func launchProcess() async throws {
-        shutdown()
+        // Replace any previous (dead or stale) process WITHOUT sweeping
+        // `activeTurns`: a first turn registers itself there before setup
+        // reaches this point, and the full `shutdown()` that used to run
+        // here failed that fresh turn with "exited unexpectedly" on every
+        // launch — while codex itself came up fine underneath. Pending
+        // requests belong to the old process and can never be answered
+        // (reachable states have none left: a dead process already failed
+        // them on exit), so they are failed defensively; thread IDs die
+        // with the old process either way.
+        let old = process
+        process = nil
+        stdinHandle = nil
+        threadIDsByConversation = [:]
+        let stale = pendingRequests
+        pendingRequests = [:]
+        for continuation in stale.values {
+            continuation.resume(throwing: CodexError.terminated)
+        }
+        old?.terminationHandler = nil
+        old?.terminate()
 
-        guard let codexURL = await ExecutableLocator.shared.find("codex") else {
+        let codexURL: URL
+        if let executableOverride {
+            codexURL = executableOverride
+        } else if let found = await ExecutableLocator.shared.find("codex") {
+            codexURL = found
+        } else {
             throw CodexError.notInstalled
         }
         let process = Process()
