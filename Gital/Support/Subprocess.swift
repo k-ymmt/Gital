@@ -53,6 +53,12 @@ enum Subprocess {
     /// caller forever.
     static let drainGracePeriod: TimeInterval = 2.0
 
+    /// How long the cancellation SIGTERM gets before escalating to SIGKILL.
+    /// Interactive shells (zsh, bash) ignore SIGTERM outright — without the
+    /// escalation, cancelling a shell that is stuck in its profile would
+    /// leave it alive forever and the awaiting caller stuck with it.
+    static let terminateGracePeriod: TimeInterval = 2.0
+
     /// Spawns the process and returns its exit status with fully drained
     /// stdout/stderr. Throws only when the process cannot be launched at all.
     ///
@@ -166,8 +172,15 @@ enum Subprocess {
             // A cancelled caller has no use for the output; kill the child so
             // a long-running command (e.g. a network fetch) stops occupying
             // its caller's queue. Death by signal reaches the caller as a
-            // non-zero status through the normal termination path.
+            // non-zero status through the normal termination path. SIGTERM
+            // first so a well-behaved child can clean up, SIGKILL for the
+            // ones that ignore it (see terminateGracePeriod).
             process.terminate()
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + terminateGracePeriod) {
+                if process.isRunning {
+                    kill(process.processIdentifier, SIGKILL)
+                }
+            }
         }
     }
 }

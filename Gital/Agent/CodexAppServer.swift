@@ -291,6 +291,11 @@ actor CodexAppServer {
         let process = Process()
         process.executableURL = codexURL
         process.arguments = ["app-server"]
+        // The captured shell PATH rides along: codex itself may be a
+        // PATH-dependent launcher (an npm install is `#!/usr/bin/env node`),
+        // and the agent spawns git/editors/helpers that should resolve the
+        // way they do in the user's terminal.
+        process.environment = await ExecutableLocator.shared.toolEnvironment()
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()

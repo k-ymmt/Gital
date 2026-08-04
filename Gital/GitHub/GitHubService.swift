@@ -456,6 +456,7 @@ struct GitHubService {
                 executable: ghURL,
                 arguments: arguments,
                 currentDirectory: repoRoot,
+                environment: await ExecutableLocator.shared.toolEnvironment(),
                 stdin: stdin
             )
         } catch {
