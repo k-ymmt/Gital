@@ -42,17 +42,29 @@ struct ContentView: View {
                 .help("Pull (behind \(model.status.behind))")
                 .disabled(model.isSyncing)
 
+                // Push is a plain Button + a separate options Menu, not a
+                // single Menu with primaryAction: on the split control the
+                // badge lands on the chevron segment, and moving it onto the
+                // label gets dropped entirely (toolbar Menu labels render
+                // icon-only on macOS 27 beta).
+                Button {
+                    model.push()
+                } label: {
+                    Label("Push", systemImage: "arrow.up.to.line")
+                }
+                .badge(model.status.ahead)
+                .help("Push (ahead \(model.status.ahead))")
+                .disabled(model.isSyncing)
+
                 Menu {
                     Button("Force Push (with Lease)…") {
                         model.pendingForcePush = true
                     }
                 } label: {
-                    Label("Push", systemImage: "arrow.up.to.line")
-                } primaryAction: {
-                    model.push()
+                    Label("Push Options", systemImage: "chevron.down")
                 }
-                .badge(model.status.ahead)
-                .help("Push (ahead \(model.status.ahead))")
+                .menuIndicator(.hidden)
+                .help("Push options")
                 .disabled(model.isSyncing)
             }
 
