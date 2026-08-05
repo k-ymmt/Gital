@@ -166,6 +166,12 @@ struct SidebarPullRequestsSection: View {
                 .onTapGesture {
                     model.prs.selectItem(.commit(hash: commit.hash), in: detail.number)
                 }
+                .contextMenu {
+                    Button("Copy Commit SHA") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(commit.fullHash, forType: .string)
+                    }
+                }
             }
         }
 

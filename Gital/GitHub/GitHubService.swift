@@ -35,6 +35,7 @@ struct PullRequestDetail: Hashable {
 
     struct CommitInfo: Hashable, Identifiable {
         let hash: String
+        let fullHash: String
         let message: String
         let author: String
         var id: String { hash }
@@ -220,6 +221,7 @@ struct GitHubService {
             commits: (row.commits ?? []).map {
                 PullRequestDetail.CommitInfo(
                     hash: String($0.oid.prefix(7)),
+                    fullHash: $0.oid,
                     message: $0.messageHeadline,
                     author: $0.authors?.first?.name ?? $0.authors?.first?.login ?? ""
                 )

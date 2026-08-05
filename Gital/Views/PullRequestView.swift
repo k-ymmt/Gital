@@ -613,6 +613,12 @@ struct PullRequestDetailView: View {
                 .onTapGesture {
                     model.prs.selectItem(.commit(hash: commit.hash), in: detail.number)
                 }
+                .contextMenu {
+                    Button("Copy Commit SHA") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(commit.fullHash, forType: .string)
+                    }
+                }
                 .help("Click to show this commit's diff")
                 if commit.id != detail.commits.last?.id {
                     Divider()
