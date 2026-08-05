@@ -87,11 +87,8 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func tabIcon(for tab: NavTab) -> some View {
-        if tab.usesCustomSymbol {
-            Image(tab.symbol)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 15, height: 15)
+        if let kind = GitGlyph.Kind(rawValue: tab.symbol) {
+            GitGlyph(kind: kind)
         } else {
             Image(systemName: tab.symbol)
                 .font(.system(size: 14, weight: .medium))

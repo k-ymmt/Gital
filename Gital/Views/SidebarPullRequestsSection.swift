@@ -109,8 +109,7 @@ struct SidebarPullRequestsSection: View {
             .buttonStyle(.plain)
             .padding(.top, 4)
 
-            Image(systemName: "arrow.triangle.pull")
-                .font(.system(size: 12))
+            GitGlyph(kind: .pullRequest, size: 13)
                 .foregroundStyle(DesignStyle.prStateColor(state: pr.state, isDraft: pr.isDraft))
                 .padding(.top, 2)
 

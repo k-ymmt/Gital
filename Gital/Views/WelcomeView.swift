@@ -6,8 +6,7 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 28) {
             VStack(spacing: 10) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 44, weight: .medium))
+                GitGlyph(kind: .branch, size: 47)
                     .foregroundStyle(.tint)
                     .frame(width: 92, height: 92)
                     .glassEffect(in: .circle)

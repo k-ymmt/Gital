@@ -14,8 +14,7 @@ struct PullRequestView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 VStack(spacing: 10) {
-                    Image(systemName: "arrow.triangle.pull")
-                        .font(.system(size: 34))
+                    GitGlyph(kind: .pullRequest, size: 36)
                         .foregroundStyle(.secondary)
                     Text(model.prs.loadError ?? "Select a pull request")
                         .foregroundStyle(.secondary)
@@ -434,7 +433,7 @@ struct PullRequestDetailView: View {
     }
 
     private var statusChip: some View {
-        Label(detail.statusLabel, systemImage: "arrow.triangle.pull")
+        Label { Text(detail.statusLabel) } icon: { GitGlyph(kind: .pullRequest, size: 13) }
             .font(.system(size: 12, weight: .semibold))
             .foregroundStyle(.white)
             .padding(.horizontal, 12)

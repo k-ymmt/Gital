@@ -91,7 +91,7 @@ struct ContentView: View {
                 Button {
                     model.isCreatingBranch = true
                 } label: {
-                    Label("Branch", systemImage: "arrow.triangle.branch")
+                    Label { Text("Branch") } icon: { GitGlyph(kind: .branch) }
                 }
                 .help("Create a new branch")
                 .popover(isPresented: $model.isCreatingBranch, arrowEdge: .bottom) {

@@ -132,6 +132,27 @@ extension View {
     }
 }
 
+/// Custom SVG glyph for git concepts (asset-catalog template images), used
+/// everywhere the app previously showed the arrow.triangle.branch/.pull
+/// SF Symbols. `size` is the glyph's point size, sized like an SF Symbol at
+/// roughly the same font size; tint with `foregroundStyle` as usual.
+struct GitGlyph: View {
+    enum Kind: String {
+        case branch = "TabBranches"
+        case pullRequest = "TabPullRequests"
+    }
+
+    let kind: Kind
+    var size: CGFloat = 15
+
+    var body: some View {
+        Image(kind.rawValue)
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+    }
+}
+
 /// Multi-line text input with the app's rounded-border chrome and a
 /// placeholder overlay; shared by the commit and agent composers.
 struct PlaceholderTextEditor: View {

@@ -80,8 +80,7 @@ struct SidebarBranchesSection: View {
 
     private func localBranchRow(_ branch: Branch, displayName: String, depth: Int, visibleNames: [String]) -> some View {
         HStack(spacing: 9) {
-            Image(systemName: "arrow.triangle.branch")
-                .font(.system(size: 12))
+            GitGlyph(kind: .branch, size: 13)
                 .foregroundStyle(branch.isCurrent ? Color.accentColor : Color.secondary)
             Text(displayName)
                 .font(.system(size: 12.5))
