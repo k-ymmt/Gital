@@ -76,11 +76,6 @@ struct ContentView: View {
             // fuse into the switcher's glass capsule despite the flexible
             // spacer between them.
             ToolbarItemGroup(placement: .primaryAction) {
-                if model.isSyncing {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-
                 Button {
                     model.isCreatingBranch = true
                 } label: {
@@ -191,6 +186,14 @@ private struct RepositorySwitcher: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Switch repository")
+
+            // Sync spinner lives at the trailing edge of the switcher
+            // capsule (Xcode-style activity placement), not among the
+            // trailing toolbar buttons.
+            if model.isSyncing {
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
         // minWidth gives the control an Xcode-like wide footprint even for
         // short names (content stays centered inside). fixedSize is
