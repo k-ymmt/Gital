@@ -442,9 +442,21 @@ struct PullRequestDetailView: View {
     }
 
     private var mergeSummaryLine: some View {
-        Text("\(detail.author) wants to merge \(Text("\(detail.commits.count) commits").foregroundStyle(.primary)) into \(refText(detail.base)) from \(refText(detail.head))")
-            .font(.system(size: 13))
-            .foregroundStyle(.secondary)
+        HStack(spacing: 5) {
+            Text("\(detail.author) wants to merge \(Text("\(detail.commits.count) commits").foregroundStyle(.primary)) into")
+            refChip(detail.base)
+            Text("from")
+            refChip(detail.head)
+        }
+        .font(.system(size: 13))
+        .foregroundStyle(.secondary)
+    }
+
+    private func refChip(_ name: String) -> some View {
+        HStack(spacing: 3) {
+            refText(name)
+            BranchCopyButton(name: name)
+        }
     }
 
     private func refText(_ name: String) -> Text {
@@ -701,6 +713,29 @@ struct PullRequestDetailView: View {
 
 /// A draft review comment shown inline under its anchor line. Drafts stay
 /// pending until the review is submitted.
+struct BranchCopyButton: View {
+    let name: String
+    @State private var copied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(name, forType: .string)
+            copied = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                copied = false
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 10))
+                .foregroundStyle(copied ? AnyShapeStyle(DesignStyle.addition) : AnyShapeStyle(.secondary))
+        }
+        .buttonStyle(.plain)
+        .help("Copy branch name")
+    }
+}
+
 struct PendingReviewCommentCard: View {
     var model: RepoViewModel
     let comment: PendingReviewComment
