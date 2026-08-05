@@ -8,9 +8,18 @@ enum NavTab: String, CaseIterable, Identifiable {
     var symbol: String {
         switch self {
         case .changes: "doc.text"
-        case .branches: "arrow.triangle.branch"
-        case .pullRequests: "arrow.triangle.pull"
+        case .branches: "TabBranches"
+        case .pullRequests: "TabPullRequests"
         case .stashes: "archivebox"
+        }
+    }
+
+    /// True when `symbol` names an asset-catalog image (custom SVG) instead
+    /// of an SF Symbol.
+    var usesCustomSymbol: Bool {
+        switch self {
+        case .branches, .pullRequests: true
+        case .changes, .stashes: false
         }
     }
 

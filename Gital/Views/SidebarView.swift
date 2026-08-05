@@ -52,8 +52,7 @@ struct SidebarView: View {
                 Button {
                     model.navTab = tab
                 } label: {
-                    Image(systemName: tab.symbol)
-                        .font(.system(size: 14, weight: .medium))
+                    tabIcon(for: tab)
                         .frame(maxWidth: .infinity)
                         .frame(height: 30)
                         .contentShape(RoundedRectangle(cornerRadius: 7))
@@ -84,5 +83,18 @@ struct SidebarView: View {
         .padding(.horizontal, 10)
         .padding(.top, 10)
         .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private func tabIcon(for tab: NavTab) -> some View {
+        if tab.usesCustomSymbol {
+            Image(tab.symbol)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 15, height: 15)
+        } else {
+            Image(systemName: tab.symbol)
+                .font(.system(size: 14, weight: .medium))
+        }
     }
 }
