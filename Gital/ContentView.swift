@@ -186,14 +186,6 @@ private struct RepositorySwitcher: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Switch repository")
-
-            // Sync spinner lives at the trailing edge of the switcher
-            // capsule (Xcode-style activity placement), not among the
-            // trailing toolbar buttons.
-            if model.isSyncing {
-                ProgressView()
-                    .controlSize(.small)
-            }
         }
         // minWidth gives the control an Xcode-like wide footprint even for
         // short names (content stays centered inside). fixedSize is
@@ -204,6 +196,17 @@ private struct RepositorySwitcher: View {
         // overlong names are ellipsized in the string itself instead.
         .frame(minWidth: 320)
         .padding(.vertical, 5)
+        // Sync spinner at the trailing edge of the switcher capsule
+        // (Xcode-style activity placement). An overlay, not an HStack
+        // member, so appearing/disappearing never re-lays-out the
+        // centered name/branch texts.
+        .overlay(alignment: .trailing) {
+            if model.isSyncing {
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.trailing, 10)
+            }
+        }
         // Own capsule: the item opts out of the toolbar's shared glass
         // background (sharedBackgroundVisibility(.hidden) in ContentView).
         .glassEffect(.regular, in: .capsule)
