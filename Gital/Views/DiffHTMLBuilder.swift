@@ -38,8 +38,10 @@ enum DiffHTMLBuilder {
     /// (native review cards interleave between chunks, so the outer SwiftUI
     /// ScrollView scrolls), plus — when `commentable` is non-nil — a hover
     /// "+" on lines that can take a review comment, posting `commentLine`
-    /// with the line's ID. No other Working Copy interactivity (line
-    /// selection, frames, hunk buttons) applies to a PR diff.
+    /// with the line's ID, and the Working Copy's text-selection frame, whose
+    /// corner "+" posts `commentRange` for a multi-line comment. No other
+    /// Working Copy interactivity (line staging, hover-hunk frames, hunk
+    /// buttons) applies to a PR diff.
     static func reviewUnifiedPage(items: [UnifiedItem], language: String?, commentable: ((DiffLine) -> Bool)?) -> String {
         var body = ""
         for item in items {
@@ -55,8 +57,8 @@ enum DiffHTMLBuilder {
             bodyClass: "",
             interactive: false,
             reportsHeight: true,
-            extraCSS: commentable != nil ? commentCSS : "",
-            extraScript: commentable != nil ? commentScript : "",
+            extraCSS: commentable != nil ? commentCSS + commentSelectionCSS : "",
+            extraScript: commentable != nil ? commentScript + commentSelectionScript : "",
             language: language
         )
     }
@@ -503,6 +505,100 @@ enum DiffHTMLBuilder {
     document.addEventListener('click', (e) => {
         const btn = e.target.closest('.cmtbtn');
         if (btn) { post({type: 'commentLine', id: btn.closest('.line').dataset.id}); }
+    });
+    """
+
+    /// The Working Copy's text-selection frame, review-page flavor: rows the
+    /// selection spans get the accent box (`.tsel`, same look as the
+    /// interactive pages), and the frame's corner "+" (`.askr`) composes one
+    /// comment for the whole range. `.askr` copies `.cmtbtn`'s look but is a
+    /// distinct class — it must not trip the per-line `commentLine` click
+    /// handler, and the per-line hover "+" hides on framed rows so the two
+    /// buttons never stack on the frame's corner.
+    private static let commentSelectionCSS = """
+    .tsel { position: relative; }
+    .tsel::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        border: 0 solid rgb(47, 111, 237);
+        border-left-width: 1.5px;
+        border-right-width: 1.5px;
+    }
+    .tsel-first::after { border-top-width: 1.5px; }
+    .tsel-last::after { border-bottom-width: 1.5px; }
+    .askr {
+        position: absolute;
+        left: 3px;
+        top: 1px;
+        width: 17px;
+        height: 17px;
+        border-radius: 4px;
+        background: rgb(47, 111, 237);
+        color: white;
+        font: 700 11px/17px -apple-system, system-ui;
+        text-align: center;
+        cursor: pointer;
+        -webkit-user-select: none;
+        user-select: none;
+        z-index: 3;
+    }
+    .line.tsel .cmtbtn { display: none; }
+    @supports (color: AccentColor) {
+        .tsel::after { border-color: AccentColor; }
+        .askr { background: AccentColor; }
+    }
+    """
+
+    /// Selection tracking for review pages — a trimmed copy of the bridge
+    /// script's frame logic (unified rows only, no hover-hunk frame, no
+    /// capsule buttons). The "+" only appears when the selection is one
+    /// contiguous run of rows with line IDs: GitHub takes a single start/end
+    /// pair per comment and rejects ranges that cross hunks.
+    private static let commentSelectionScript = """
+    document.addEventListener('mousedown', (e) => {
+        // Clicking the frame's "+" must not collapse the text selection that
+        // defines its range.
+        if (e.target.closest('.askr')) { e.preventDefault(); }
+    });
+    document.addEventListener('click', (e) => {
+        const askr = e.target.closest('.askr');
+        if (askr) { post({type: 'commentRange', start: askr.dataset.start, end: askr.dataset.end}); }
+    });
+    const selectsTextIn = (range, el) => {
+        const bounds = document.createRange();
+        bounds.selectNodeContents(el);
+        const r = range.cloneRange();
+        if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
+        if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
+        return r.toString().length > 0;
+    };
+    document.addEventListener('selectionchange', () => {
+        document.querySelectorAll('.askr').forEach((el) => el.remove());
+        document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
+        const sel = window.getSelection();
+        if (!sel.rangeCount || sel.isCollapsed) { return; }
+        const range = sel.getRangeAt(0);
+        const hits = [...document.querySelectorAll('.line')]
+            .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+        hits.forEach((el, i) => {
+            el.classList.add('tsel');
+            if (i === 0 || el.previousElementSibling !== hits[i - 1]) { el.classList.add('tsel-first'); }
+            if (i === hits.length - 1 || hits[i + 1].previousElementSibling !== el) { el.classList.add('tsel-last'); }
+        });
+        if (!hits.length) { return; }
+        const first = hits[0];
+        const last = hits[hits.length - 1];
+        const contiguous = hits.every((el, i) => i === 0 || el.previousElementSibling === hits[i - 1]);
+        if (!contiguous || !first.dataset.id || !last.dataset.id) { return; }
+        const btn = document.createElement('span');
+        btn.className = 'askr';
+        btn.textContent = '+';
+        btn.title = 'Comment on the selected lines';
+        btn.dataset.start = first.dataset.id;
+        btn.dataset.end = last.dataset.id;
+        first.appendChild(btn);
     });
     """
 

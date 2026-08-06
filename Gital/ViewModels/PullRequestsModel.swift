@@ -355,6 +355,11 @@ final class PullRequestsModel {
     /// Content of the anchored diff line, captured when the composer opens;
     /// stored on the draft for display matching and submit-time re-anchoring.
     var reviewComposerLineText = ""
+    /// First line of the composer's range for a multi-line comment (the main
+    /// anchor is the range's last line); nil while composing a single-line
+    /// comment.
+    var reviewComposerStartAnchor: ReviewCommentAnchor?
+    var reviewComposerStartLineText: String?
     var reviewComposerText = ""
     /// Save-time validation failure shown inside the composer.
     var reviewComposerError: String?
@@ -372,8 +377,13 @@ final class PullRequestsModel {
         pendingComments(for: number).filter { $0.isAnchored(to: line, path: path) }
     }
 
-    func openReviewComposer(at anchor: ReviewCommentAnchor, lineText: String) {
-        if reviewComposerAnchor == anchor && editingCommentID == nil { return }
+    func openReviewComposer(
+        at anchor: ReviewCommentAnchor,
+        lineText: String,
+        startAnchor: ReviewCommentAnchor? = nil,
+        startLineText: String? = nil
+    ) {
+        if reviewComposerAnchor == anchor && reviewComposerStartAnchor == startAnchor && editingCommentID == nil { return }
         // Unsaved new-comment text travels to the new anchor instead of
         // being silently discarded; an edit in progress is dropped — its
         // draft still holds the saved body.
@@ -383,12 +393,16 @@ final class PullRequestsModel {
         editingCommentID = nil
         reviewComposerAnchor = anchor
         reviewComposerLineText = lineText
+        reviewComposerStartAnchor = startAnchor
+        reviewComposerStartLineText = startLineText
         reviewComposerError = nil
     }
 
     func editComment(_ comment: PendingReviewComment) {
         reviewComposerAnchor = comment.anchor
         reviewComposerLineText = comment.lineText
+        reviewComposerStartAnchor = comment.startAnchor
+        reviewComposerStartLineText = comment.startLineText
         reviewComposerText = comment.body
         reviewComposerError = nil
         editingCommentID = comment.id
@@ -397,6 +411,8 @@ final class PullRequestsModel {
     func closeReviewComposer() {
         reviewComposerAnchor = nil
         reviewComposerLineText = ""
+        reviewComposerStartAnchor = nil
+        reviewComposerStartLineText = nil
         reviewComposerText = ""
         reviewComposerError = nil
         editingCommentID = nil
@@ -416,8 +432,14 @@ final class PullRequestsModel {
         if let id = editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
             comments[index].body = body
         } else {
-            let comment = PendingReviewComment(anchor: anchor, lineText: reviewComposerLineText, body: body)
-            if let diffs = diffsCache[number], comment.resolvedAnchor(in: diffs) == nil {
+            let comment = PendingReviewComment(
+                anchor: anchor,
+                lineText: reviewComposerLineText,
+                startAnchor: reviewComposerStartAnchor,
+                startLineText: reviewComposerStartLineText,
+                body: body
+            )
+            if let diffs = diffsCache[number], comment.resolved(in: diffs) == nil {
                 reviewComposerError = "This line isn't part of the pull request's final diff, so GitHub can't accept a comment here."
                 return
             }
@@ -461,11 +483,11 @@ final class PullRequestsModel {
                 diffsCache[number] = nil
                 let diffs = try await wholeDiff(for: number)
                 for draft in drafts {
-                    guard let anchor = draft.resolvedAnchor(in: diffs) else {
+                    guard let resolvedDraft = draft.resolved(in: diffs) else {
                         reviewSubmitError = "The draft on \(draft.anchor.path) line \(draft.anchor.line) no longer matches the pull request diff (the code changed since it was written). Edit or delete that comment, then submit again."
                         return false
                     }
-                    resolved.append(PendingReviewComment(id: draft.id, anchor: anchor, lineText: draft.lineText, body: draft.body))
+                    resolved.append(resolvedDraft)
                 }
             }
             try await github.submitReview(number: number, event: event, body: body, comments: resolved)

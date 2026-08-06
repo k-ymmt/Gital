@@ -119,6 +119,79 @@ struct PRReviewTests {
                 "content appearing on several lines cannot be re-anchored unambiguously")
     }
 
+    @Test func submitRangeResolution() {
+        let prDiff = [FileDiff(
+            path: "a.swift",
+            oldPath: nil,
+            isBinary: false,
+            hunks: [DiffHunk(id: "a.swift@0", header: "@@ -40,3 +40,4 @@", oldStart: 40, newStart: 40, lines: [
+                DiffLine(id: "a.swift@0", kind: .context, text: "ctx", oldNumber: 40, newNumber: 44),
+                DiffLine(id: "a.swift@1", kind: .addition, text: "let x = 1", oldNumber: nil, newNumber: 45),
+                DiffLine(id: "a.swift@2", kind: .deletion, text: "removed", oldNumber: 41, newNumber: nil),
+            ])]
+        )]
+
+        let exact = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            lineText: "let x = 1",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 44),
+            startLineText: "ctx",
+            body: "b"
+        )
+        #expect(exact.resolved(in: prDiff) == exact,
+                "a range draft already in PR coordinates resolves to itself, id and range intact")
+
+        let shifted = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 41),
+            lineText: "let x = 1",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 40),
+            startLineText: "ctx",
+            body: "b"
+        )
+        let resolvedShifted = shifted.resolved(in: prDiff)
+        #expect(resolvedShifted?.anchor == ReviewCommentAnchor(path: "a.swift", side: .right, line: 45)
+                && resolvedShifted?.startAnchor == ReviewCommentAnchor(path: "a.swift", side: .right, line: 44),
+                "both ends of a commit-diff range re-anchor to the PR-diff lines with the same content")
+
+        let inverted = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 44),
+            lineText: "ctx",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            startLineText: "let x = 1",
+            body: "b"
+        )
+        #expect(inverted.resolved(in: prDiff) == nil,
+                "a range whose resolved start no longer precedes its end fails instead of sending an inverted range")
+
+        let vanishedStart = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            lineText: "let x = 1",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 40),
+            startLineText: "overwritten by a later commit",
+            body: "b"
+        )
+        #expect(vanishedStart.resolved(in: prDiff) == nil,
+                "a range whose start line is gone from the PR diff fails resolution")
+
+        let singleLine = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            lineText: "let x = 1",
+            body: "b"
+        )
+        #expect(singleLine.resolved(in: prDiff)?.startAnchor == nil,
+                "a single-line draft stays single-line through resolution")
+    }
+
+    @Test func draftsSavedBeforeRangesStillDecode() throws {
+        let json = Data("""
+        {"id":"00000000-0000-0000-0000-000000000000","anchor":{"path":"a.swift","side":"RIGHT","line":12},"lineText":"let x = 1","body":"draft"}
+        """.utf8)
+        let comment = try JSONDecoder().decode(PendingReviewComment.self, from: json)
+        #expect(comment.startAnchor == nil && comment.startLineText == nil,
+                "drafts persisted before ranges existed decode as single-line comments")
+        #expect(comment.anchor.line == 12 && comment.body == "draft", "the rest of the draft survives")
+    }
+
     @Test func reviewSubmissionBodyJSON() throws {
         let comments = [
             PendingReviewComment(
@@ -143,7 +216,29 @@ struct PRReviewTests {
                 && sent[0]["line"] as? Int == 12 && sent[0]["body"] as? String == "Nit: rename this",
                 "comment payload carries path, side, line, and body")
         #expect(sent[0]["lineText"] == nil, "the local lineText bookkeeping never reaches the API")
+        #expect(sent[0]["start_line"] == nil && sent[0]["start_side"] == nil,
+                "single-line comments omit the range-start fields entirely")
         #expect(sent[1]["side"] as? String == "LEFT", "old-side comments are sent as LEFT")
+    }
+
+    @Test func reviewSubmissionBodyMultiLineJSON() throws {
+        let comments = [
+            PendingReviewComment(
+                anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 12),
+                lineText: "let x = 1",
+                startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 9),
+                startLineText: "let start = 0",
+                body: "Range comment"
+            ),
+        ]
+        let data = try GitHubService.reviewSubmissionBody(event: .comment, body: "sum", comments: comments)
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let sent = try #require(json["comments"] as? [[String: Any]])
+        #expect(sent[0]["start_line"] as? Int == 9 && sent[0]["start_side"] as? String == "RIGHT",
+                "multi-line comments carry the range start in the API's snake_case spelling")
+        #expect(sent[0]["line"] as? Int == 12 && sent[0]["side"] as? String == "RIGHT",
+                "the range's last line stays the main line/side pair")
+        #expect(sent[0]["startLineText"] == nil, "the local start-line bookkeeping never reaches the API")
     }
 
     @Test func reviewSubmissionBodyOmitsEmptyFields() throws {
@@ -162,11 +257,20 @@ struct PRReviewTests {
         let repoRoot = URL(fileURLWithPath: "/tmp/repo")
 
         let drafts: [Int: [PendingReviewComment]] = [
-            7: [PendingReviewComment(
-                anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 12),
-                lineText: "let x = 1",
-                body: "draft body"
-            )],
+            7: [
+                PendingReviewComment(
+                    anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 12),
+                    lineText: "let x = 1",
+                    body: "draft body"
+                ),
+                PendingReviewComment(
+                    anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 20),
+                    lineText: "end line",
+                    startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 18),
+                    startLineText: "start line",
+                    body: "range draft"
+                ),
+            ],
         ]
         let store = PendingReviewStore(repoRoot: repoRoot, fileURL: fileURL)
         store.save(drafts)

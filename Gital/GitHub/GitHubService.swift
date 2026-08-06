@@ -260,7 +260,17 @@ struct GitHubService {
             let path: String
             let side: String
             let line: Int
+            /// Multi-line comments send the range's first line too; nil (and
+            /// therefore omitted) for single-line comments.
+            let startSide: String?
+            let startLine: Int?
             let body: String
+
+            enum CodingKeys: String, CodingKey {
+                case path, side, line, body
+                case startSide = "start_side"
+                case startLine = "start_line"
+            }
         }
         struct Payload: Encodable {
             let event: String
@@ -273,7 +283,14 @@ struct GitHubService {
             event: event.rawValue,
             body: trimmed.isEmpty ? nil : trimmed,
             comments: comments.isEmpty ? nil : comments.map {
-                CommentPayload(path: $0.anchor.path, side: $0.anchor.side.rawValue, line: $0.anchor.line, body: $0.body)
+                CommentPayload(
+                    path: $0.anchor.path,
+                    side: $0.anchor.side.rawValue,
+                    line: $0.anchor.line,
+                    startSide: $0.startAnchor?.side.rawValue,
+                    startLine: $0.startAnchor?.line,
+                    body: $0.body
+                )
             }
         )
         let encoder = JSONEncoder()

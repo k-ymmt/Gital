@@ -116,6 +116,29 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains("type: 'height'"), "height reporting stays")
     }
 
+    // Mouse text selection frames the rows it spans like the Working Copy,
+    // and the frame's corner "+" composes one review comment for the whole
+    // range. The hover-hunk frame stays Working-Copy-only.
+    @Test func reviewUnifiedFramesSelectionForRangeComments() {
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: { _ in true }
+        )
+        #expect(page.contains("selectionchange") && page.contains(".tsel::after"), "selection frame machinery included")
+        #expect(page.contains("tsel-first") && page.contains("tsel-last"), "run edges draw top/bottom borders")
+        #expect(page.contains("type: 'commentRange'"), "the frame's + posts the selected range")
+        #expect(!page.contains("hsel"), "no hover-hunk frame on review pages")
+        #expect(!page.contains("askRange"), "the range + composes a comment, not an agent ask")
+
+        let inert = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: nil
+        )
+        #expect(!inert.contains("selectionchange") && !inert.contains("commentRange"), "closed PRs get no selection frame")
+    }
+
     @Test func reviewSplitRendersRowsAndHeaders() {
         let page = DiffHTMLBuilder.reviewSplitPage(rows: SplitDiffRow.rows(for: diff.hunks), language: nil)
         #expect(page.contains("@@ -10,3 +10,4 @@ func f()"), "header row renders as a hunk header")

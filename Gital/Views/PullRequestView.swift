@@ -176,14 +176,40 @@ struct PullRequestItemDiffView: View {
             && model.prs.reviewComposerLineText == line.text
     }
 
-    /// A `commentLine` post from a chunk's hover "+": open the composer at
-    /// that line. The only bridge action a PR page emits (height reports are
-    /// consumed by the chunk itself).
+    /// Bridge actions a PR page emits (height reports are consumed by the
+    /// chunk itself): `commentLine` from a line's hover "+" opens the
+    /// composer at that line, and `commentRange` from the selection frame's
+    /// corner "+" opens it for the whole selected range — the composer (and
+    /// the eventual comment) anchors to the range's LAST line, GitHub-style,
+    /// with the first line carried as the range start.
     private func handleReview(_ action: WebDiffAction, in diff: FileDiff) {
-        guard case .hunk(let act, let id) = action, act == "commentLine",
-              let line = diff.hunks.lazy.flatMap(\.lines).first(where: { $0.id == id }),
-              let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line) else { return }
-        model.prs.openReviewComposer(at: anchor, lineText: line.text)
+        switch action {
+        case .hunk(let act, let id) where act == "commentLine":
+            guard let line = line(id, in: diff),
+                  let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line) else { return }
+            model.prs.openReviewComposer(at: anchor, lineText: line.text)
+        case .lines(let act, let startID, let endID) where act == "commentRange":
+            guard let end = line(endID, in: diff),
+                  let endAnchor = ReviewCommentAnchor(path: diff.path, diffLine: end) else { return }
+            guard startID != endID else {
+                model.prs.openReviewComposer(at: endAnchor, lineText: end.text)
+                return
+            }
+            guard let start = line(startID, in: diff),
+                  let startAnchor = ReviewCommentAnchor(path: diff.path, diffLine: start) else { return }
+            model.prs.openReviewComposer(
+                at: endAnchor,
+                lineText: end.text,
+                startAnchor: startAnchor,
+                startLineText: start.text
+            )
+        default:
+            break
+        }
+    }
+
+    private func line(_ id: String, in diff: FileDiff) -> DiffLine? {
+        diff.hunks.lazy.flatMap(\.lines).first { $0.id == id }
     }
 
     // MARK: - Web chunk segmentation
@@ -747,6 +773,12 @@ struct PendingReviewCommentCard: View {
     let comment: PendingReviewComment
     let number: Int
 
+    private var lineLabel: String {
+        let end = "\(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")"
+        guard let start = comment.startAnchor else { return "Line \(end)" }
+        return "Lines \(start.line)\(start.side == .left ? " (old)" : "")–\(end)"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -756,7 +788,7 @@ struct PendingReviewCommentCard: View {
                     .padding(.vertical, 2)
                     .background(DesignStyle.tagAmber.opacity(0.18), in: Capsule())
                     .foregroundStyle(DesignStyle.tagAmber)
-                Text("Line \(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")")
+                Text(lineLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -802,6 +834,11 @@ struct ReviewCommentComposerView: View {
     var body: some View {
         @Bindable var prs = model.prs
         VStack(alignment: .leading, spacing: 8) {
+            if let start = model.prs.reviewComposerStartAnchor, let end = model.prs.reviewComposerAnchor {
+                Text("Commenting on lines \(start.line)\(start.side == .left ? " (old)" : "")–\(end.line)\(end.side == .left ? " (old)" : "")")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
             PlaceholderTextEditor(text: $prs.reviewComposerText, placeholder: "Leave a review comment")
                 .focused($focused)
             if let error = model.prs.reviewComposerError {

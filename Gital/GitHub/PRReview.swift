@@ -79,14 +79,31 @@ struct ReviewCommentAnchor: Hashable, Codable {
 /// PR's whole diff.
 struct PendingReviewComment: Identifiable, Hashable, Codable {
     let id: UUID
+    /// For a multi-line comment this is the LAST line of the range — the line
+    /// GitHub hangs the published comment under, and the one the draft card
+    /// and composer anchor to locally.
     let anchor: ReviewCommentAnchor
     let lineText: String
+    /// First line of a multi-line range (GitHub's `start_line`/`start_side`),
+    /// nil for a single-line comment. Optional so drafts persisted before
+    /// ranges existed still decode.
+    let startAnchor: ReviewCommentAnchor?
+    let startLineText: String?
     var body: String
 
-    init(id: UUID = UUID(), anchor: ReviewCommentAnchor, lineText: String, body: String) {
+    init(
+        id: UUID = UUID(),
+        anchor: ReviewCommentAnchor,
+        lineText: String,
+        startAnchor: ReviewCommentAnchor? = nil,
+        startLineText: String? = nil,
+        body: String
+    ) {
         self.id = id
         self.anchor = anchor
         self.lineText = lineText
+        self.startAnchor = startAnchor
+        self.startLineText = startLineText
         self.body = body
     }
 
@@ -108,6 +125,35 @@ struct PendingReviewComment: Identifiable, Hashable, Codable {
     /// nil when the line can't be found — submitting then would either 422
     /// or silently attach the comment to the wrong line.
     func resolvedAnchor(in diffs: [FileDiff]) -> ReviewCommentAnchor? {
+        Self.resolve(anchor, lineText: lineText, in: diffs)
+    }
+
+    /// The whole draft resolved against the PR's whole diff: the end anchor
+    /// always, plus — for a multi-line draft — the start anchor, which must
+    /// still precede the end in diff order (GitHub rejects inverted ranges).
+    /// nil when any line can't be found, same contract as `resolvedAnchor`.
+    func resolved(in diffs: [FileDiff]) -> PendingReviewComment? {
+        guard let anchor = resolvedAnchor(in: diffs) else { return nil }
+        guard let startAnchor, let startLineText else {
+            return PendingReviewComment(id: id, anchor: anchor, lineText: lineText, body: body)
+        }
+        guard let start = Self.resolve(startAnchor, lineText: startLineText, in: diffs),
+              let file = diffs.first(where: { $0.path == anchor.path }) else { return nil }
+        let lines = file.hunks.flatMap(\.lines)
+        guard let startIndex = lines.firstIndex(where: { start.matches($0) }),
+              let endIndex = lines.firstIndex(where: { anchor.matches($0) }),
+              startIndex < endIndex else { return nil }
+        return PendingReviewComment(
+            id: id,
+            anchor: anchor,
+            lineText: lineText,
+            startAnchor: start,
+            startLineText: startLineText,
+            body: body
+        )
+    }
+
+    private static func resolve(_ anchor: ReviewCommentAnchor, lineText: String, in diffs: [FileDiff]) -> ReviewCommentAnchor? {
         guard let file = diffs.first(where: { $0.path == anchor.path }) else { return nil }
         let lines = file.hunks.flatMap(\.lines)
         if lines.contains(where: { anchor.matches($0) && $0.text == lineText }) {
