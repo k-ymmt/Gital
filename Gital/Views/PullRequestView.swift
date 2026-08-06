@@ -37,6 +37,9 @@ struct PullRequestItemDiffView: View {
     @Bindable var model: RepoViewModel
     let item: PullRequestsModel.ItemSelection
 
+    /// Collapses the lower commit-details pane down to its header row.
+    @State private var commitInfoCollapsed = false
+
     var body: some View {
         VStack(spacing: 0) {
             PaneHeader(horizontalPadding: 14, verticalPadding: 10) {
@@ -73,12 +76,19 @@ struct PullRequestItemDiffView: View {
             // A commit shows History-style: the changed files' diff on top
             // and a pane with just the commit's details below. Files (and a
             // commit whose details couldn't load) keep the full-height diff.
+            // Collapsed, only the pane's header row stays — outside the
+            // split, so the divider can't drag a hidden pane open.
             if case .commit = item, let commit = model.prs.itemCommitDetail {
-                VSplitView {
+                if commitInfoCollapsed {
                     diffContent
-                        .frame(minHeight: 220)
-                    commitInfoPane(commit)
-                        .frame(minHeight: 110, idealHeight: 190)
+                    commitInfoHeader(commit)
+                } else {
+                    VSplitView {
+                        diffContent
+                            .frame(minHeight: 220)
+                        commitInfoPane(commit)
+                            .frame(minHeight: 110, idealHeight: 190)
+                    }
                 }
             } else {
                 diffContent
@@ -402,38 +412,57 @@ struct PullRequestItemDiffView: View {
     /// since gh's PR detail only carries each commit's headline.
     private func commitInfoPane(_ commit: CommitDetail) -> some View {
         VStack(spacing: 0) {
-            Divider()
+            commitInfoHeader(commit)
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top, spacing: 11) {
-                        AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("\(commit.author) <\(commit.authorEmail)>")
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .textSelection(.enabled)
-                            Text(commit.authorDate)
-                                .font(.system(size: 12))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(commit.hash)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    Divider()
-                    Text(commit.message)
-                        .font(.system(size: 12.5))
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(16)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Text(commit.message)
+                    .font(.system(size: 12.5))
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
             }
+        }
+    }
+
+    /// The pane's header row — avatar, author line, hash, and the collapse
+    /// toggle. This is what remains on screen while the pane is collapsed.
+    private func commitInfoHeader(_ commit: CommitDetail) -> some View {
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 11) {
+                AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(commit.author) <\(commit.authorEmail)>")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .textSelection(.enabled)
+                    Text(commit.authorDate)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(commit.hash)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Button {
+                    commitInfoCollapsed.toggle()
+                } label: {
+                    Image(systemName: commitInfoCollapsed ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(commitInfoCollapsed ? "Expand commit details" : "Collapse commit details")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(.quaternary.opacity(0.25))
+            Divider()
         }
     }
 }
