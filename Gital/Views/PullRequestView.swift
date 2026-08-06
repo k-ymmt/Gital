@@ -436,7 +436,10 @@ struct PullRequestItemDiffView: View {
             Color.clear
                 .contentShape(Rectangle())
                 .gesture(
-                    DragGesture(minimumDistance: 1)
+                    // Global space: the handle itself moves with every height
+                    // change, so a local-space translation would be measured
+                    // against a moving origin and lag the cursor.
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
                         .onChanged { value in
                             let base = commitInfoDragBase ?? commitInfoHeight
                             commitInfoDragBase = base
