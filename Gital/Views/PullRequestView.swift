@@ -6,7 +6,20 @@ struct PullRequestView: View {
     var body: some View {
         Group {
             if let item = model.prs.selectedItem {
-                PullRequestItemDiffView(model: model, item: item)
+                // A commit selection mirrors the History tab: the overview
+                // (with its commit list) stays on top and the commit's detail
+                // opens in the lower pane. Until the detail has loaded there
+                // is no overview to split against, so the diff runs full-pane.
+                if case .commit = item, let detail = model.prs.detail {
+                    VSplitView {
+                        PullRequestDetailView(model: model, detail: detail)
+                            .frame(minHeight: 160)
+                        PullRequestItemDiffView(model: model, item: item)
+                            .frame(minHeight: 240, idealHeight: 440)
+                    }
+                } else {
+                    PullRequestItemDiffView(model: model, item: item)
+                }
             } else if let detail = model.prs.detail {
                 PullRequestDetailView(model: model, detail: detail)
             } else if model.prs.selectedNumber != nil {
@@ -88,6 +101,9 @@ struct PullRequestItemDiffView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
+                        if let commit = model.prs.itemCommitDetail {
+                            commitHeader(commit)
+                        }
                         ForEach(model.prs.itemDiffs) { diff in
                             Section {
                                 if let number = model.prs.selectedNumber, !diff.isBinary, !diff.hunks.isEmpty {
@@ -326,12 +342,13 @@ struct PullRequestItemDiffView: View {
     private var itemTitle: some View {
         switch item {
         case .commit(let hash):
+            // Identity only — the full message lives in the header card at
+            // the top of the diff, where it isn't squeezed to one line.
             Image(systemName: "circle")
                 .font(.system(size: 8))
                 .foregroundStyle(.secondary)
-            Text(commitMessage(for: hash) ?? "Commit")
+            Text("Commit")
                 .font(.system(size: 13, weight: .semibold))
-                .lineLimit(1)
             Text(hash)
                 .font(.system(size: 11.5, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -378,9 +395,47 @@ struct PullRequestItemDiffView: View {
         }
     }
 
-    private func commitMessage(for hash: String) -> String? {
-        guard let number = model.prs.selectedNumber else { return nil }
-        return model.prs.detailsCache[number]?.commits.first { $0.hash == hash }?.message
+    /// Header card above a commit's diff, History-style: avatar, the FULL
+    /// commit message (subject and body, however long — it scrolls with the
+    /// diff), author line, and the hash. Sourced from local git, since gh's
+    /// PR detail only carries each commit's headline.
+    private func commitHeader(_ commit: CommitDetail) -> some View {
+        let parts = commit.message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+        let subject = parts.first.map(String.init) ?? commit.message
+        let body = parts.count > 1
+            ? parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            : ""
+        return VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 11) {
+                AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(subject)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .textSelection(.enabled)
+                    if !body.isEmpty {
+                        Text(body)
+                            .font(.system(size: 12.5))
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                    }
+                    Text("\(commit.author) <\(commit.authorEmail)> · \(commit.authorDate)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text(commit.shortHash)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(.quaternary.opacity(0.25))
+            Divider()
+        }
     }
 }
 
@@ -612,6 +667,7 @@ struct PullRequestDetailView: View {
         VStack(spacing: 0) {
             ForEach(detail.commits) { commit in
                 let viewed = model.prs.isCommitViewed(commit.hash, in: detail.number)
+                let isOpen = model.prs.selectedItem == .commit(hash: commit.hash)
                 HStack(spacing: 10) {
                     HStack(spacing: 10) {
                         Image(systemName: "circle")
@@ -635,6 +691,8 @@ struct PullRequestDetailView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
+                // Marks the commit whose detail is open in the lower pane.
+                .background(isOpen ? Color.accentColor.opacity(0.22) : .clear)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     model.prs.selectItem(.commit(hash: commit.hash), in: detail.number)

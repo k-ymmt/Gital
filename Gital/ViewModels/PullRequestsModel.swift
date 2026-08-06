@@ -140,6 +140,10 @@ final class PullRequestsModel {
         }
     }
     var itemDiffs: [FileDiff] = []
+    /// Full commit info (message body, author, date) for a `.commit`
+    /// selection, loaded from local git alongside the diffs — gh's PR detail
+    /// only carries each commit's headline. Nil for `.file` selections.
+    var itemCommitDetail: CommitDetail?
     var itemLoadError: String?
     /// Parsed `gh pr diff` output per PR, so switching between files of the
     /// same PR doesn't re-run gh each time.
@@ -283,33 +287,40 @@ final class PullRequestsModel {
     func loadItemDiffs() async {
         guard let item = selectedItem, let number = selectedNumber else {
             itemDiffs = []
+            itemCommitDetail = nil
             itemLoadError = nil
             itemDiffsLoader.invalidate()
             return
         }
         itemDiffs = []
+        itemCommitDetail = nil
         itemLoadError = nil
-        let result = await itemDiffsLoader.run { [repository] in
+        let result = await itemDiffsLoader.run { [repository] () async throws -> (diffs: [FileDiff], commit: CommitDetail?) in
             switch item {
             case .commit(let hash):
                 // PR commits live in the local object store once the remote
                 // branch has been fetched. When the object is missing (fork
                 // PRs, never-fetched branches), pull it in via the PR head
                 // ref and retry once.
+                let diffs: [FileDiff]
                 do {
-                    return try await repository.diffCommit(hash)
+                    diffs = try await repository.diffCommit(hash)
                 } catch {
                     try await repository.fetchPullRequestHead(number: number)
-                    return try await repository.diffCommit(hash)
+                    diffs = try await repository.diffCommit(hash)
                 }
+                // Best-effort: a failure here only loses the header card,
+                // never the diffs.
+                return (diffs, try? await repository.commitDetail(hash))
             case .file(let path):
-                return try await self.wholeDiff(for: number).filter { $0.path == path }
+                return (try await self.wholeDiff(for: number).filter { $0.path == path }, nil)
             }
         }
         switch result {
-        case .success(let diffs):
-            itemDiffs = diffs
-            if diffs.isEmpty {
+        case .success(let loaded):
+            itemDiffs = loaded.diffs
+            itemCommitDetail = loaded.commit
+            if loaded.diffs.isEmpty {
                 itemLoadError = "No changes found for this item."
             }
         case .failure(let error):
