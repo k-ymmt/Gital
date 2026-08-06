@@ -383,7 +383,15 @@ final class PullRequestsModel {
         startAnchor: ReviewCommentAnchor? = nil,
         startLineText: String? = nil
     ) {
-        if reviewComposerAnchor == anchor && reviewComposerStartAnchor == startAnchor && editingCommentID == nil { return }
+        // "Already open here" must compare the line TEXTS too, not just the
+        // coordinates: the composer renders only where coordinates AND
+        // content match (`composerIsOpen`), so an early return on stale
+        // state from a same-numbered line of another diff (commit vs
+        // whole-PR numbering) would leave the composer invisible and the
+        // click dead.
+        if reviewComposerAnchor == anchor && reviewComposerLineText == lineText
+            && reviewComposerStartAnchor == startAnchor && reviewComposerStartLineText == startLineText
+            && editingCommentID == nil { return }
         // Unsaved new-comment text travels to the new anchor instead of
         // being silently discarded; an edit in progress is dropped — its
         // draft still holds the saved body.

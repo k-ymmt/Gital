@@ -142,7 +142,7 @@ struct PullRequestItemDiffView: View {
                         ReviewThreadCard(model: model, thread: thread, number: number)
                     }
                     ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
-                        PendingReviewCommentCard(model: model, comment: comment, number: number)
+                        PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
                     }
                     if canComment, composerIsOpen(at: line, in: diff) {
                         ReviewCommentComposerView(model: model, number: number)
@@ -165,7 +165,7 @@ struct PullRequestItemDiffView: View {
                     ReviewThreadCard(model: model, thread: thread, number: number)
                 }
                 ForEach(segment.comments) { comment in
-                    PendingReviewCommentCard(model: model, comment: comment, number: number)
+                    PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
                 }
             }
         }
@@ -780,16 +780,31 @@ func reviewRangeText(start: ReviewCommentAnchor, end: ReviewCommentAnchor) -> St
     return "\(start.line)\(mark(start))–\(end.line)\(mark(end))"
 }
 
+/// Label for a draft card rendered under `diff`. The card hangs under its
+/// END line, which matched the displayed diff (coordinates + content) or the
+/// card wouldn't render — but the START carries drafting-time numbering,
+/// which a differently-numbered diff (commit vs whole-PR) may not share. A
+/// range label only shows when the start also matches the displayed diff;
+/// otherwise it falls back to the end line rather than pairing numbers from
+/// two coordinate systems.
+func pendingCommentLineLabel(for comment: PendingReviewComment, in diff: FileDiff) -> String {
+    guard let start = comment.startAnchor, let startText = comment.startLineText,
+          diff.hunks.contains(where: { $0.lines.contains { start.matches($0) && $0.text == startText } })
+    else {
+        return "Line \(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")"
+    }
+    return "Lines \(reviewRangeText(start: start, end: comment.anchor))"
+}
+
 struct PendingReviewCommentCard: View {
     var model: RepoViewModel
     let comment: PendingReviewComment
+    /// The diff the card renders under; see `pendingCommentLineLabel`.
+    let diff: FileDiff
     let number: Int
 
     private var lineLabel: String {
-        guard let start = comment.startAnchor else {
-            return "Line \(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")"
-        }
-        return "Lines \(reviewRangeText(start: start, end: comment.anchor))"
+        pendingCommentLineLabel(for: comment, in: diff)
     }
 
     var body: some View {

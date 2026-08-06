@@ -202,6 +202,51 @@ struct PRReviewTests {
                 "a single-line draft stays single-line through resolution")
     }
 
+    // A draft card's range label pairs the start's drafting-time number with
+    // the displayed diff — legitimate only when that diff actually has the
+    // start line at those coordinates. On a differently-numbered diff
+    // (commit vs whole-PR) the label falls back to the end line the card
+    // hangs under instead of mixing two coordinate systems.
+    @Test func rangeLabelFallsBackWhenStartMissesTheDisplayedDiff() {
+        let diff = FileDiff(
+            path: "a.swift",
+            oldPath: nil,
+            isBinary: false,
+            hunks: [DiffHunk(id: "a.swift@0", header: "@@", oldStart: 40, newStart: 44, lines: [
+                DiffLine(id: "a.swift@0", kind: .context, text: "ctx", oldNumber: 40, newNumber: 44),
+                DiffLine(id: "a.swift@1", kind: .addition, text: "let x = 1", oldNumber: nil, newNumber: 45),
+            ])]
+        )
+
+        let matching = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            lineText: "let x = 1",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 44),
+            startLineText: "ctx",
+            body: "b"
+        )
+        #expect(pendingCommentLineLabel(for: matching, in: diff) == "Lines 44–45",
+                "a start present in the displayed diff labels the full range")
+
+        let foreignStart = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            lineText: "let x = 1",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 40),
+            startLineText: "ctx",
+            body: "b"
+        )
+        #expect(pendingCommentLineLabel(for: foreignStart, in: diff) == "Line 45",
+                "a start numbered by another diff falls back to the end line")
+
+        let single = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .left, line: 40),
+            lineText: "ctx",
+            body: "b"
+        )
+        #expect(pendingCommentLineLabel(for: single, in: diff) == "Line 40 (old)",
+                "single-line drafts keep the plain line label")
+    }
+
     // Old and new line numbers aren't comparable, so a range crossing sides
     // (e.g. new 44 down to old 41) must name each end's side — a bare
     // "44–41" reads as an inverted range anchored on the wrong lines.
