@@ -534,9 +534,11 @@ struct PullRequestItemDiffView: View {
                     commitInfoCollapsed.toggle()
                 }
             } label: {
-                Image(systemName: commitInfoCollapsed ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                // The Xcode/Fork bottom-panel toggle: one fixed glyph whose
+                // tint carries the state, not a direction-flipping chevron.
+                Image(systemName: "rectangle.bottomthird.inset.filled")
+                    .font(.system(size: 13))
+                    .foregroundStyle(commitInfoCollapsed ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
                     .frame(width: 20, height: 20)
                     .contentShape(Rectangle())
             }
