@@ -40,10 +40,19 @@ struct PullRequestItemDiffView: View {
     /// Collapses the lower commit-details pane down to its header row.
     @State private var commitInfoCollapsed = false
     /// Height of the expanded message area, adjusted by dragging the pane's
-    /// top divider.
+    /// top divider. Display and drag both clamp it to the window (see
+    /// `commitInfoPane`), so a tall setting can't starve the diff.
     @State private var commitInfoHeight: CGFloat = 150
     /// Height when the current resize drag started; nil outside a drag.
     @State private var commitInfoDragBase: CGFloat?
+    /// Whether the resize cursor is currently pushed — onHover alone can't
+    /// guarantee the pop when the handle leaves the hierarchy mid-hover.
+    @State private var resizeCursorPushed = false
+
+    /// Vertical space reserved for everything that isn't the pane's message
+    /// area: a usable diff (matching the old VSplitView minimum) plus the
+    /// handle and header rows.
+    private static let commitInfoReservedHeight: CGFloat = 280
 
     var body: some View {
         VStack(spacing: 0) {
@@ -85,8 +94,15 @@ struct PullRequestItemDiffView: View {
             // divider keeps the diff's identity stable across collapse
             // toggles and lets the collapse animate.
             if case .commit = item, let commit = model.prs.itemCommitDetail {
-                diffContent
-                commitInfoPane(commit)
+                // The geometry clamp keeps the pane from starving the diff:
+                // a height dragged tall in a big window (or the 150 default
+                // in a tiny one) caps to what the window can actually spare.
+                GeometryReader { geo in
+                    VStack(spacing: 0) {
+                        diffContent
+                        commitInfoPane(commit, maxBodyHeight: max(60, geo.size.height - Self.commitInfoReservedHeight))
+                    }
+                }
             } else {
                 diffContent
             }
@@ -108,8 +124,18 @@ struct PullRequestItemDiffView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.prs.itemDiffs.isEmpty {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Details loaded with no diffs = a genuinely empty commit
+            // (--allow-empty, or a merge empty against its first parent) —
+            // a plain note, not the error triangle and not a stuck spinner.
+            if model.prs.itemCommitDetail != nil {
+                Text("No changes in this commit.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             ScrollView {
                 LazyVStack(spacing: 0, pinnedViews: .sectionHeaders) {
@@ -407,22 +433,25 @@ struct PullRequestItemDiffView: View {
     /// author line, hash, and the FULL commit message (subject and body) —
     /// the one-line toolbar title can't show either. Sourced from local git,
     /// since gh's PR detail only carries each commit's headline.
-    private func commitInfoPane(_ commit: CommitDetail) -> some View {
+    private func commitInfoPane(_ commit: CommitDetail, maxBodyHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
-            resizeHandle
+            resizeHandle(cap: maxBodyHeight)
             commitInfoHeader(commit)
-            Divider()
             // Collapsing squeezes the message area to zero height instead of
-            // removing it, which is what makes the toggle animatable.
-            ScrollView {
-                Text(commit.message)
-                    .font(.system(size: 12.5))
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(16)
+            // removing it, which is what makes the toggle animatable. The
+            // divider lives inside so it disappears along with the area.
+            VStack(spacing: 0) {
+                Divider()
+                ScrollView {
+                    Text(commit.message)
+                        .font(.system(size: 12.5))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
+                }
             }
-            .frame(height: commitInfoCollapsed ? 0 : commitInfoHeight)
+            .frame(height: commitInfoCollapsed ? 0 : min(commitInfoHeight, maxBodyHeight))
             .clipped()
         }
     }
@@ -430,7 +459,7 @@ struct PullRequestItemDiffView: View {
     /// The pane's top divider, doubling as its resize handle — a slim drag
     /// band replacing the VSplitView divider. Inert while collapsed, so the
     /// hidden message area can't be dragged open.
-    private var resizeHandle: some View {
+    private func resizeHandle(cap: CGFloat) -> some View {
         ZStack {
             Divider()
             Color.clear
@@ -441,22 +470,37 @@ struct PullRequestItemDiffView: View {
                     // against a moving origin and lag the cursor.
                     DragGesture(minimumDistance: 1, coordinateSpace: .global)
                         .onChanged { value in
-                            let base = commitInfoDragBase ?? commitInfoHeight
+                            let base = commitInfoDragBase ?? min(commitInfoHeight, cap)
                             commitInfoDragBase = base
-                            commitInfoHeight = min(max(base - value.translation.height, 60), 600)
+                            commitInfoHeight = min(max(base - value.translation.height, 60), cap)
                         }
                         .onEnded { _ in commitInfoDragBase = nil }
                 )
-                .onHover { inside in
-                    if inside {
-                        NSCursor.resizeUpDown.push()
-                    } else {
-                        NSCursor.pop()
-                    }
-                }
+                .onHover { setResizeCursor($0) }
         }
         .frame(height: 7)
         .allowsHitTesting(!commitInfoCollapsed)
+        // onHover's exit callback isn't delivered when the handle leaves the
+        // hierarchy (or stops hit-testing) mid-hover, which would leave the
+        // resize cursor pushed over the whole app.
+        .onDisappear {
+            setResizeCursor(false)
+            commitInfoDragBase = nil
+        }
+        .onChange(of: commitInfoCollapsed) { _, collapsed in
+            if collapsed { setResizeCursor(false) }
+        }
+    }
+
+    /// Push/pop tracked through one flag so the two can never run unpaired.
+    private func setResizeCursor(_ pushed: Bool) {
+        guard pushed != resizeCursorPushed else { return }
+        resizeCursorPushed = pushed
+        if pushed {
+            NSCursor.resizeUpDown.push()
+        } else {
+            NSCursor.pop()
+        }
     }
 
     /// The pane's header row — avatar, author line, hash, and the collapse
@@ -467,14 +511,19 @@ struct PullRequestItemDiffView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("\(commit.author) <\(commit.authorEmail)>")
                     .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .textSelection(.enabled)
                 Text(commit.authorDate)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer()
             Text(commit.hash)
                 .font(.system(size: 11.5, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))

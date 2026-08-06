@@ -135,6 +135,12 @@ final class PullRequestsModel {
                 // under an unrelated line that shares its coordinates.
                 closeReviewComposer()
                 closeReply()
+                // Reset synchronously, not in the spawned task — otherwise a
+                // frame committed before its first slice runs would pair the
+                // new selection's header with the old item's diffs/details.
+                itemDiffs = []
+                itemCommitDetail = nil
+                itemLoadError = nil
                 Task { await loadItemDiffs() }
             }
         }
@@ -297,7 +303,13 @@ final class PullRequestsModel {
         itemLoadError = nil
         let result = await itemDiffsLoader.run { [repository] () async throws -> (diffs: [FileDiff], commit: CommitDetail?) in
             switch item {
-            case .commit(let hash):
+            case .commit(let shortHash):
+                // gh's commit rows carry a 7-char abbreviation; resolve it to
+                // the full OID before hitting git — a short prefix can be
+                // ambiguous (or silently match a different object) in a
+                // large object store.
+                let hash = self.detailsCache[number]?.commits
+                    .first { $0.hash == shortHash }?.fullHash ?? shortHash
                 // PR commits live in the local object store once the remote
                 // branch has been fetched. When the object is missing (fork
                 // PRs, never-fetched branches), pull it in via the PR head
@@ -320,7 +332,9 @@ final class PullRequestsModel {
         case .success(let loaded):
             itemDiffs = loaded.diffs
             itemCommitDetail = loaded.commit
-            if loaded.diffs.isEmpty {
+            // A commit with loaded details and no patch is a genuinely empty
+            // commit, not a failure — the view shows a plain note for it.
+            if loaded.diffs.isEmpty, loaded.commit == nil {
                 itemLoadError = "No changes found for this item."
             }
         case .failure(let error):
