@@ -536,7 +536,7 @@ struct PullRequestItemDiffView: View {
             } label: {
                 // The Xcode/Fork bottom-panel toggle: one fixed glyph whose
                 // tint carries the state, not a direction-flipping chevron.
-                Image(systemName: "rectangle.portrait.bottomthird.inset.filled")
+                Image(systemName: "inset.filled.bottomthird.square")
                     .font(.system(size: 13))
                     .foregroundStyle(commitInfoCollapsed ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
                     .frame(width: 20, height: 20)
