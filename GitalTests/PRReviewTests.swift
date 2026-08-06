@@ -124,11 +124,17 @@ struct PRReviewTests {
             path: "a.swift",
             oldPath: nil,
             isBinary: false,
-            hunks: [DiffHunk(id: "a.swift@0", header: "@@ -40,3 +40,4 @@", oldStart: 40, newStart: 40, lines: [
-                DiffLine(id: "a.swift@0", kind: .context, text: "ctx", oldNumber: 40, newNumber: 44),
-                DiffLine(id: "a.swift@1", kind: .addition, text: "let x = 1", oldNumber: nil, newNumber: 45),
-                DiffLine(id: "a.swift@2", kind: .deletion, text: "removed", oldNumber: 41, newNumber: nil),
-            ])]
+            hunks: [
+                DiffHunk(id: "a.swift@0", header: "@@ -40,3 +40,4 @@", oldStart: 40, newStart: 40, lines: [
+                    DiffLine(id: "a.swift@0", kind: .context, text: "ctx", oldNumber: 40, newNumber: 44),
+                    DiffLine(id: "a.swift@1", kind: .addition, text: "let x = 1", oldNumber: nil, newNumber: 45),
+                    DiffLine(id: "a.swift@2", kind: .deletion, text: "removed", oldNumber: 41, newNumber: nil),
+                ]),
+                DiffHunk(id: "a.swift@1", header: "@@ -60,2 +64,3 @@", oldStart: 60, newStart: 64, lines: [
+                    DiffLine(id: "a.swift@3", kind: .context, text: "later ctx", oldNumber: 60, newNumber: 64),
+                    DiffLine(id: "a.swift@4", kind: .addition, text: "let y = 2", oldNumber: nil, newNumber: 65),
+                ]),
+            ]
         )]
 
         let exact = PendingReviewComment(
@@ -173,6 +179,20 @@ struct PRReviewTests {
         #expect(vanishedStart.resolved(in: prDiff) == nil,
                 "a range whose start line is gone from the PR diff fails resolution")
 
+        // GitHub rejects ranges whose ends sit in different hunks — a range
+        // drafted as one contiguous hunk on a commit diff can straddle a
+        // hunk boundary of the whole-PR diff, so resolution must catch it
+        // here instead of letting the whole submission 422.
+        let crossHunk = PendingReviewComment(
+            anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 65),
+            lineText: "let y = 2",
+            startAnchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
+            startLineText: "let x = 1",
+            body: "b"
+        )
+        #expect(crossHunk.resolved(in: prDiff) == nil,
+                "a range spanning two hunks of the PR diff fails resolution instead of poisoning the submission")
+
         let singleLine = PendingReviewComment(
             anchor: ReviewCommentAnchor(path: "a.swift", side: .right, line: 45),
             lineText: "let x = 1",
@@ -180,6 +200,24 @@ struct PRReviewTests {
         )
         #expect(singleLine.resolved(in: prDiff)?.startAnchor == nil,
                 "a single-line draft stays single-line through resolution")
+    }
+
+    // Old and new line numbers aren't comparable, so a range crossing sides
+    // (e.g. new 44 down to old 41) must name each end's side — a bare
+    // "44–41" reads as an inverted range anchored on the wrong lines.
+    @Test func rangeLabelsMarkBothSidesWhenMixed() {
+        let right40 = ReviewCommentAnchor(path: "a.swift", side: .right, line: 40)
+        let right44 = ReviewCommentAnchor(path: "a.swift", side: .right, line: 44)
+        #expect(reviewRangeText(start: right40, end: right44) == "40–44",
+                "same-side new ranges carry no side markers")
+
+        let left39 = ReviewCommentAnchor(path: "a.swift", side: .left, line: 39)
+        let left41 = ReviewCommentAnchor(path: "a.swift", side: .left, line: 41)
+        #expect(reviewRangeText(start: left39, end: left41) == "39–41 (old)",
+                "same-side old ranges mark the side once")
+
+        #expect(reviewRangeText(start: right44, end: left41) == "44 (new)–41 (old)",
+                "cross-side ranges mark both ends so the numbers can't read as inverted")
     }
 
     @Test func draftsSavedBeforeRangesStillDecode() throws {

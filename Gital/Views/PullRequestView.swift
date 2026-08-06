@@ -768,15 +768,28 @@ struct BranchCopyButton: View {
     }
 }
 
+/// Number span of a review comment range: "40–44", "39–41 (old)" when both
+/// ends sit on the old side, or "44 (new)–41 (old)" when the range crosses
+/// sides — old and new numbers aren't comparable, so a cross-side range can
+/// read numerically backwards unless each end names its side.
+func reviewRangeText(start: ReviewCommentAnchor, end: ReviewCommentAnchor) -> String {
+    guard start.side != end.side else {
+        return "\(start.line)–\(end.line)\(end.side == .left ? " (old)" : "")"
+    }
+    func mark(_ anchor: ReviewCommentAnchor) -> String { anchor.side == .left ? " (old)" : " (new)" }
+    return "\(start.line)\(mark(start))–\(end.line)\(mark(end))"
+}
+
 struct PendingReviewCommentCard: View {
     var model: RepoViewModel
     let comment: PendingReviewComment
     let number: Int
 
     private var lineLabel: String {
-        let end = "\(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")"
-        guard let start = comment.startAnchor else { return "Line \(end)" }
-        return "Lines \(start.line)\(start.side == .left ? " (old)" : "")–\(end)"
+        guard let start = comment.startAnchor else {
+            return "Line \(comment.anchor.line)\(comment.anchor.side == .left ? " (old)" : "")"
+        }
+        return "Lines \(reviewRangeText(start: start, end: comment.anchor))"
     }
 
     var body: some View {
@@ -835,7 +848,7 @@ struct ReviewCommentComposerView: View {
         @Bindable var prs = model.prs
         VStack(alignment: .leading, spacing: 8) {
             if let start = model.prs.reviewComposerStartAnchor, let end = model.prs.reviewComposerAnchor {
-                Text("Commenting on lines \(start.line)\(start.side == .left ? " (old)" : "")–\(end.line)\(end.side == .left ? " (old)" : "")")
+                Text("Commenting on lines \(reviewRangeText(start: start, end: end))")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

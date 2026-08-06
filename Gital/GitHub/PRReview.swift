@@ -130,18 +130,22 @@ struct PendingReviewComment: Identifiable, Hashable, Codable {
 
     /// The whole draft resolved against the PR's whole diff: the end anchor
     /// always, plus — for a multi-line draft — the start anchor, which must
-    /// still precede the end in diff order (GitHub rejects inverted ranges).
-    /// nil when any line can't be found, same contract as `resolvedAnchor`.
+    /// still precede the end within the SAME hunk of that diff. GitHub
+    /// rejects both inverted ranges and ranges whose ends sit in different
+    /// hunks — and a range drafted as one hunk on a commit diff can straddle
+    /// a hunk boundary of the whole-PR diff, so hunk membership must be
+    /// checked here, not just at drafting time. nil when any line can't be
+    /// found, same contract as `resolvedAnchor`.
     func resolved(in diffs: [FileDiff]) -> PendingReviewComment? {
         guard let anchor = resolvedAnchor(in: diffs) else { return nil }
         guard let startAnchor, let startLineText else {
             return PendingReviewComment(id: id, anchor: anchor, lineText: lineText, body: body)
         }
         guard let start = Self.resolve(startAnchor, lineText: startLineText, in: diffs),
-              let file = diffs.first(where: { $0.path == anchor.path }) else { return nil }
-        let lines = file.hunks.flatMap(\.lines)
-        guard let startIndex = lines.firstIndex(where: { start.matches($0) }),
-              let endIndex = lines.firstIndex(where: { anchor.matches($0) }),
+              let file = diffs.first(where: { $0.path == anchor.path }),
+              let hunk = file.hunks.first(where: { $0.lines.contains(where: { anchor.matches($0) }) }),
+              let startIndex = hunk.lines.firstIndex(where: { start.matches($0) }),
+              let endIndex = hunk.lines.firstIndex(where: { anchor.matches($0) }),
               startIndex < endIndex else { return nil }
         return PendingReviewComment(
             id: id,
