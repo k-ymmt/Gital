@@ -39,6 +39,11 @@ struct PullRequestItemDiffView: View {
 
     /// Collapses the lower commit-details pane down to its header row.
     @State private var commitInfoCollapsed = false
+    /// Height of the expanded message area, adjusted by dragging the pane's
+    /// top divider.
+    @State private var commitInfoHeight: CGFloat = 150
+    /// Height when the current resize drag started; nil outside a drag.
+    @State private var commitInfoDragBase: CGFloat?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,20 +81,12 @@ struct PullRequestItemDiffView: View {
             // A commit shows History-style: the changed files' diff on top
             // and a pane with just the commit's details below. Files (and a
             // commit whose details couldn't load) keep the full-height diff.
-            // Collapsed, only the pane's header row stays — outside the
-            // split, so the divider can't drag a hidden pane open.
+            // Not a VSplitView: a fixed-height pane with a draggable top
+            // divider keeps the diff's identity stable across collapse
+            // toggles and lets the collapse animate.
             if case .commit = item, let commit = model.prs.itemCommitDetail {
-                if commitInfoCollapsed {
-                    diffContent
-                    commitInfoHeader(commit)
-                } else {
-                    VSplitView {
-                        diffContent
-                            .frame(minHeight: 220)
-                        commitInfoPane(commit)
-                            .frame(minHeight: 110, idealHeight: 190)
-                    }
-                }
+                diffContent
+                commitInfoPane(commit)
             } else {
                 diffContent
             }
@@ -412,7 +409,11 @@ struct PullRequestItemDiffView: View {
     /// since gh's PR detail only carries each commit's headline.
     private func commitInfoPane(_ commit: CommitDetail) -> some View {
         VStack(spacing: 0) {
+            resizeHandle
             commitInfoHeader(commit)
+            Divider()
+            // Collapsing squeezes the message area to zero height instead of
+            // removing it, which is what makes the toggle animatable.
             ScrollView {
                 Text(commit.message)
                     .font(.system(size: 12.5))
@@ -421,49 +422,78 @@ struct PullRequestItemDiffView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(16)
             }
+            .frame(height: commitInfoCollapsed ? 0 : commitInfoHeight)
+            .clipped()
         }
+    }
+
+    /// The pane's top divider, doubling as its resize handle — a slim drag
+    /// band replacing the VSplitView divider. Inert while collapsed, so the
+    /// hidden message area can't be dragged open.
+    private var resizeHandle: some View {
+        ZStack {
+            Divider()
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            let base = commitInfoDragBase ?? commitInfoHeight
+                            commitInfoDragBase = base
+                            commitInfoHeight = min(max(base - value.translation.height, 60), 600)
+                        }
+                        .onEnded { _ in commitInfoDragBase = nil }
+                )
+                .onHover { inside in
+                    if inside {
+                        NSCursor.resizeUpDown.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+        }
+        .frame(height: 7)
+        .allowsHitTesting(!commitInfoCollapsed)
     }
 
     /// The pane's header row — avatar, author line, hash, and the collapse
     /// toggle. This is what remains on screen while the pane is collapsed.
     private func commitInfoHeader(_ commit: CommitDetail) -> some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: 11) {
-                AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("\(commit.author) <\(commit.authorEmail)>")
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .textSelection(.enabled)
-                    Text(commit.authorDate)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(commit.hash)
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 11) {
+            AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(commit.author) <\(commit.authorEmail)>")
+                    .font(.system(size: 12.5, weight: .semibold))
                     .textSelection(.enabled)
-                Button {
-                    commitInfoCollapsed.toggle()
-                } label: {
-                    Image(systemName: commitInfoCollapsed ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20, height: 20)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(commitInfoCollapsed ? "Expand commit details" : "Collapse commit details")
+                Text(commit.authorDate)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(.quaternary.opacity(0.25))
-            Divider()
+            Spacer()
+            Text(commit.hash)
+                .font(.system(size: 11.5, design: .monospaced))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Button {
+                withAnimation(.easeInOut(duration: 0.22)) {
+                    commitInfoCollapsed.toggle()
+                }
+            } label: {
+                Image(systemName: commitInfoCollapsed ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(commitInfoCollapsed ? "Expand commit details" : "Collapse commit details")
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.25))
     }
 }
 
