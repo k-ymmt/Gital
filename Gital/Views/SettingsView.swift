@@ -7,8 +7,8 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// App settings window: a General tab (auto fetch) and the keyboard
-/// shortcuts editor.
+/// App settings window: a General tab (auto fetch), the AI prompt editor,
+/// and the keyboard shortcuts editor.
 struct SettingsView: View {
     let shortcuts: ShortcutStore
 
@@ -16,6 +16,8 @@ struct SettingsView: View {
         TabView {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+            AISettingsTab()
+                .tabItem { Label("AI", systemImage: "sparkles") }
             ShortcutsSettingsTab(shortcuts: shortcuts)
                 .tabItem { Label("Shortcuts", systemImage: "keyboard") }
         }
@@ -43,6 +45,40 @@ private struct GeneralSettingsTab: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 220)
+    }
+}
+
+/// Editor for the instruction section of the AI commit-message prompt. The
+/// diff (and, when amending, the current message) is appended by the app and
+/// is not editable here.
+private struct AISettingsTab: View {
+    @AppStorage(CommitMessageGenerator.instructionsDefaultsKey)
+    private var instructions = CommitMessageGenerator.defaultInstructions
+
+    var body: some View {
+        Form {
+            Section("Commit Message Generation") {
+                TextEditor(text: $instructions)
+                    .font(.callout.monospaced())
+                    .frame(minHeight: 240)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("These instructions open the prompt sent to codex when generating a commit message. The commit's diff — and, when amending, the current message — is appended automatically. Clearing the text falls back to the default instructions.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Reset to Default") {
+                        // Remove the key instead of writing the default text,
+                        // so a future app update's improved default applies
+                        // without the user re-resetting.
+                        UserDefaults.standard.removeObject(
+                            forKey: CommitMessageGenerator.instructionsDefaultsKey)
+                    }
+                    .disabled(instructions == CommitMessageGenerator.defaultInstructions)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 520, height: 460)
     }
 }
 

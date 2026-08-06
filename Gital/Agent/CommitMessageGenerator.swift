@@ -8,19 +8,37 @@ enum CommitMessageGenerator {
     /// prompt still names every file.
     static let diffCharacterLimit = 30_000
 
-    static func prompt(diff: String, amend: Bool, currentMessage: String?) -> String {
-        let (diffText, wasTruncated) = truncate(diff)
-        var sections: [String] = [
-            """
-            You are generating a git commit message inside the Gital git client.
+    /// UserDefaults key for the user-customized instruction section of the
+    /// prompt (Settings › AI). Only the instructions are editable; the amend
+    /// note and the sentinel-marked diff section are always appended.
+    static let instructionsDefaultsKey = "commitMessageGenerationInstructions"
 
-            Rules:
-            - Reply with ONLY the commit message text: no code fences, no surrounding quotes, no commentary before or after it.
-            - First line: an imperative-mood summary of at most 72 characters.
-            - Add a body only when the change needs explanation beyond the summary; separate it with a blank line and wrap it at 72 columns.
-            - Do not run any commands and do not modify any files — everything needed is below.
-            """
-        ]
+    /// The built-in instruction section, also shown in Settings as the
+    /// starting point for customization.
+    static let defaultInstructions = """
+        You are generating a git commit message inside the Gital git client.
+
+        Rules:
+        - Reply with ONLY the commit message text: no code fences, no surrounding quotes, no commentary before or after it.
+        - First line: an imperative-mood summary of at most 72 characters.
+        - Add a body only when the change needs explanation beyond the summary; separate it with a blank line and wrap it at 72 columns.
+        - Do not run any commands and do not modify any files — everything needed is below.
+        """
+
+    /// The instruction section to use: the user's customized text when it has
+    /// content, otherwise the built-in default. Whitespace-only customization
+    /// (e.g. the Settings editor cleared by hand) must not send a blank
+    /// instruction block.
+    static func resolvedInstructions(_ custom: String?) -> String {
+        let trimmed = custom?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? defaultInstructions : trimmed
+    }
+
+    static func prompt(
+        diff: String, amend: Bool, currentMessage: String?, instructions: String? = nil
+    ) -> String {
+        let (diffText, wasTruncated) = truncate(diff)
+        var sections: [String] = [resolvedInstructions(instructions)]
         if amend {
             var note = "The user is amending the HEAD commit; the diff below is the full content of the amended commit."
             if let currentMessage, !currentMessage.isEmpty {

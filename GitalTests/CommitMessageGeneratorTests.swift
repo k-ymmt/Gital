@@ -125,4 +125,31 @@ import Testing
         let prompt = CommitMessageGenerator.prompt(diff: diff, amend: false, currentMessage: nil)
         #expect(prompt.contains("truncated"))
     }
+
+    // MARK: - custom instructions
+
+    @Test func customInstructionsReplaceOnlyTheInstructionSection() {
+        let prompt = CommitMessageGenerator.prompt(
+            diff: "+added line", amend: false, currentMessage: nil,
+            instructions: "Write the commit message in Japanese, Conventional Commits style."
+        )
+        #expect(prompt.hasPrefix("Write the commit message in Japanese"))
+        #expect(!prompt.contains("ONLY the commit message text"))
+        // The structural diff section stays regardless of customization.
+        #expect(prompt.contains("<<<BEGIN-DIFF>>>\n+added line\n<<<END-DIFF>>>"))
+    }
+
+    @Test func blankCustomInstructionsFallBackToDefault() {
+        for custom in [nil, "", "  \n\t "] {
+            let prompt = CommitMessageGenerator.prompt(
+                diff: "+x", amend: false, currentMessage: nil, instructions: custom)
+            #expect(prompt.hasPrefix(CommitMessageGenerator.defaultInstructions))
+        }
+    }
+
+    @Test func resolvedInstructionsTrimsCustomText() {
+        #expect(CommitMessageGenerator.resolvedInstructions("  Use emoji.  \n") == "Use emoji.")
+        #expect(CommitMessageGenerator.resolvedInstructions(nil)
+            == CommitMessageGenerator.defaultInstructions)
+    }
 }

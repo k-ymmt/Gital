@@ -135,7 +135,11 @@ extension RepoViewModel {
             // Context only — an unreadable HEAD message (unborn branch) must
             // not abort the generation itself.
             let current = amending ? try? await repository.headCommitMessage() : nil
-            let prompt = CommitMessageGenerator.prompt(diff: diff, amend: amending, currentMessage: current)
+            let prompt = CommitMessageGenerator.prompt(
+                diff: diff, amend: amending, currentMessage: current,
+                instructions: UserDefaults.standard.string(
+                    forKey: CommitMessageGenerator.instructionsDefaultsKey)
+            )
             // Cancellation during the awaits above must not still start a
             // codex turn (`try?` on the message fetch swallows it).
             try Task.checkCancellation()
