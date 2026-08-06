@@ -79,6 +79,20 @@ private struct AISettingsTab: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 460)
+        .onAppear { normalizeStoredInstructions() }
+        .onChange(of: instructions) { normalizeStoredInstructions() }
+    }
+
+    /// Keeps the invariant "text equals the default ⟺ key absent". The
+    /// @AppStorage default is in-memory only, so the first keystroke would
+    /// otherwise persist a snapshot of the then-current default under the
+    /// key — pinning it forever (Reset is disabled while the text equals the
+    /// default) and silently blocking future default improvements for a user
+    /// who never really customized anything.
+    private func normalizeStoredInstructions() {
+        if instructions == CommitMessageGenerator.defaultInstructions {
+            UserDefaults.standard.removeObject(forKey: CommitMessageGenerator.instructionsDefaultsKey)
+        }
     }
 }
 

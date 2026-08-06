@@ -25,8 +25,9 @@ struct CodexProtocolTests {
         if case .response(_, _, let errorMessage)? = parse(#"{"jsonrpc":"2.0","id":11,"error":{"message":"boom"}}"#) {
             #expect(errorMessage == "boom", "codex error response carries message")
         } else { Issue.record("codex error response parses") }
-        if case .serverRequest(let id, let method)? = parse(#"{"jsonrpc":"2.0","id":"srv-1","method":"execCommandApproval","params":{}}"#) {
+        if case .serverRequest(let id, let method, let params)? = parse(#"{"jsonrpc":"2.0","id":"srv-1","method":"execCommandApproval","params":{"threadId":"t1"}}"#) {
             #expect(id == .string("srv-1") && method == "execCommandApproval", "codex server request keeps string id")
+            #expect(params["threadId"] as? String == "t1", "codex server request carries params for turn attribution")
         } else { Issue.record("codex server request parses") }
     }
 
@@ -46,6 +47,29 @@ struct CodexProtocolTests {
         if case .notification(.unknown(let method, _))? = parse(#"{"method":"thread/tokenCount","params":{"threadId":"t1"}}"#) {
             #expect(method == "thread/tokenCount", "unhandled codex notification classified as unknown")
         } else { Issue.record("unknown codex notification parses") }
+    }
+
+    // Side-effecting item types must classify as themselves, benign ones as
+    // benign, and anything unheard-of as unrecognized — the old catch-all
+    // `.other` silently swallowed mcpToolCall, letting codex run MCP tools
+    // during text-only turns without tripping the side-effect guard.
+    @Test func itemStartedClassification() {
+        func kind(_ type: String) -> CodexNotification.ItemKind? {
+            if case .notification(.itemStarted(_, let kind))? =
+                parse(#"{"method":"item/started","params":{"threadId":"t1","item":{"type":"\#(type)"}}}"#) {
+                return kind
+            }
+            return nil
+        }
+        #expect({ if case .mcpToolCall? = kind("mcpToolCall") { true } else { false } }(), "mcpToolCall is a side effect")
+        #expect({ if case .webSearch? = kind("webSearch") { true } else { false } }(), "webSearch is a side effect")
+        #expect({ if case .reasoning? = kind("reasoning") { true } else { false } }(), "reasoning is a status")
+        for benign in ["agentMessage", "todoList", "error"] {
+            #expect({ if case .benign? = kind(benign) { true } else { false } }(), "\(benign) is benign")
+        }
+        if case .unrecognized(let type)? = kind("shinyNewThing") {
+            #expect(type == "shinyNewThing", "unknown item type carries its name")
+        } else { Issue.record("unknown item type classifies as unrecognized (fail closed)") }
     }
 
     @Test func garbageInput() {

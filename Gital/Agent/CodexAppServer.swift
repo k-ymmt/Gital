@@ -46,12 +46,23 @@ actor CodexAppServer {
         /// Set for one-shot conversations: the conversation→thread mapping is
         /// dropped when this turn ends, whichever path ends it.
         let oneShotConversationID: UUID?
+        /// The turn's contract is "reply with text, touch nothing". Approval
+        /// requests attributed to a text-only turn are denied instead of
+        /// auto-approved: the blanket "every turn is an explicit user
+        /// instruction to change the repository" justification does not hold
+        /// for commit-message generation.
+        let textOnly: Bool
         let continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         var completed = false
         var handle: ((CodexNotification) -> Void)?
 
-        init(oneShotConversationID: UUID?, continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation) {
+        init(
+            oneShotConversationID: UUID?,
+            textOnly: Bool,
+            continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
+        ) {
             self.oneShotConversationID = oneShotConversationID
+            self.textOnly = textOnly
             self.continuation = continuation
         }
     }
@@ -96,7 +107,12 @@ actor CodexAppServer {
     /// map does not grow with every use. Cleanup lives here, on the producer
     /// side, because only the actor knows whether `ensureThread` has inserted
     /// the mapping yet — a caller-side cleanup raced that insertion.
-    func runTurn(prompt: String, repoRoot: URL, conversationID: UUID, oneShot: Bool = false) -> AsyncThrowingStream<CodexTurnEvent, Error> {
+    /// `textOnly` marks a turn whose contract is "reply with text, touch
+    /// nothing" (commit-message generation): its approval requests are
+    /// denied instead of auto-approved.
+    func runTurn(
+        prompt: String, repoRoot: URL, conversationID: UUID, oneShot: Bool = false, textOnly: Bool = false
+    ) -> AsyncThrowingStream<CodexTurnEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -105,6 +121,7 @@ actor CodexAppServer {
                         repoRoot: repoRoot,
                         conversationID: conversationID,
                         oneShot: oneShot,
+                        textOnly: textOnly,
                         continuation: continuation
                     )
                 } catch {
@@ -132,10 +149,15 @@ actor CodexAppServer {
         repoRoot: URL,
         conversationID: UUID,
         oneShot: Bool,
+        textOnly: Bool,
         continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
     ) async throws {
         let turnID = UUID()
-        let record = TurnRecord(oneShotConversationID: oneShot ? conversationID : nil, continuation: continuation)
+        let record = TurnRecord(
+            oneShotConversationID: oneShot ? conversationID : nil,
+            textOnly: textOnly,
+            continuation: continuation
+        )
         // Registered before the (slow) setup awaits: this producer task is
         // unstructured, so it survives the consumer being cancelled, and a
         // consumer that went away while codex was still launching must be
@@ -177,10 +199,19 @@ actor CodexAppServer {
                     continuation.yield(.sideEffect("$ \(command)"))
                 case .fileChange:
                     continuation.yield(.sideEffect("Editing files…"))
+                case .mcpToolCall:
+                    continuation.yield(.sideEffect("Running a tool…"))
+                case .webSearch:
+                    continuation.yield(.sideEffect("Searching the web…"))
                 case .reasoning:
                     continuation.yield(.status("Thinking…"))
-                case .other:
+                case .benign:
                     break
+                case .unrecognized(let type):
+                    // Fail closed: an unknown item type may be a new kind of
+                    // side effect, so text-only consumers must get the chance
+                    // to abort rather than have it silently swallowed.
+                    continuation.yield(.sideEffect("Running \(type)…"))
                 }
             case .agentMessageCompleted(_, let text):
                 finalText = text
@@ -493,8 +524,8 @@ actor CodexAppServer {
             } else {
                 continuation.resume(returning: result)
             }
-        case .serverRequest(let id, let method):
-            respond(toServerRequest: method, id: id)
+        case .serverRequest(let id, let method, let params):
+            respond(toServerRequest: method, params: params, id: id)
         case .notification(let notification):
             deliver(notification)
         }
@@ -515,13 +546,15 @@ actor CodexAppServer {
     }
 
     /// Server→client requests must be answered or codex blocks forever
-    /// waiting (the turn silently hangs). Approval requests are approved:
-    /// every turn in this app is an explicit user instruction to change the
-    /// repository. Anything unknown gets a method-not-found error.
-    private func respond(toServerRequest method: String, id: CodexRequestID) {
+    /// waiting (the turn silently hangs). Approval requests for agent turns
+    /// are approved (those turns are an explicit user instruction to change
+    /// the repository); approval requests for text-only turns are denied —
+    /// commit-message generation must never grant repository changes.
+    /// Anything unknown gets a method-not-found error.
+    private func respond(toServerRequest method: String, params: [String: Any], id: CodexRequestID) {
         let response: [String: Any]
         if method.localizedCaseInsensitiveContains("approval") {
-            response = ["jsonrpc": "2.0", "id": id.jsonValue, "result": ["decision": "approved"]]
+            response = ["jsonrpc": "2.0", "id": id.jsonValue, "result": ["decision": approvalDecision(params: params)]]
         } else {
             response = [
                 "jsonrpc": "2.0", "id": id.jsonValue,
@@ -529,5 +562,27 @@ actor CodexAppServer {
             ]
         }
         try? write(response)
+    }
+
+    /// Denies when the approval belongs to a text-only turn. Attribution
+    /// mirrors `deliver(_:)`: by threadId when the request carries one,
+    /// otherwise by the single active turn. When attribution fails entirely,
+    /// the presence of ANY running text-only turn denies — wrongly denying
+    /// an agent turn degrades one answer, wrongly approving a text-only turn
+    /// grants repository changes nobody asked for.
+    private func approvalDecision(params: [String: Any]) -> String {
+        // A completed record can linger in activeTurns until its async
+        // cleanup runs; it must not speak for the thread it used to own.
+        let running = activeTurns.values.filter { !$0.completed }
+        let textOnly: Bool
+        if let threadID = params["threadId"] as? String,
+           running.contains(where: { $0.threadID == threadID }) {
+            textOnly = running.contains { $0.threadID == threadID && $0.textOnly }
+        } else if running.count == 1, let only = running.first {
+            textOnly = only.textOnly
+        } else {
+            textOnly = running.contains { $0.textOnly }
+        }
+        return textOnly ? "denied" : "approved"
     }
 }

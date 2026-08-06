@@ -47,8 +47,19 @@ enum CodexNotification {
     enum ItemKind {
         case commandExecution(command: String)
         case fileChange
+        case mcpToolCall
+        case webSearch
         case reasoning
-        case other
+        /// Item types known to produce no side effects (agentMessage,
+        /// todoList, error). Listed explicitly so that everything NOT listed
+        /// falls through to `.unrecognized` — a new codex item type must be
+        /// classified before it can be ignored.
+        case benign
+        /// An item type this client has never seen. Text-only consumers
+        /// treat it as a side effect (fail closed): the old `.other` bucket
+        /// silently swallowed mcpToolCall, letting codex run MCP tools
+        /// during commit-message generation without tripping the guard.
+        case unrecognized(type: String)
     }
 
     case agentMessageDelta(threadID: String?, delta: String)
@@ -80,7 +91,9 @@ enum CodexServerMessage {
     /// swallow a pending continuation.
     case response(id: Int, result: [String: Any], errorMessage: String?)
     /// Server→client request that must be answered (has both id and method).
-    case serverRequest(id: CodexRequestID, method: String)
+    /// Params ride along so approval requests can be attributed to their
+    /// turn (text-only turns answer them with a denial).
+    case serverRequest(id: CodexRequestID, method: String, params: [String: Any])
     /// Notification: has a method and no id.
     case notification(CodexNotification)
 
@@ -105,7 +118,7 @@ enum CodexServerMessage {
 
         guard let method else { return nil }
         if let rawID = object["id"], let id = CodexRequestID(rawID) {
-            return .serverRequest(id: id, method: method)
+            return .serverRequest(id: id, method: method, params: object["params"] as? [String: Any] ?? [:])
         }
         return .notification(Self.parseNotification(method: method, object: object))
     }
@@ -126,10 +139,16 @@ enum CodexServerMessage {
                 return .itemStarted(threadID: threadID, kind: .commandExecution(command: item?["command"] as? String ?? ""))
             case "fileChange":
                 return .itemStarted(threadID: threadID, kind: .fileChange)
+            case "mcpToolCall":
+                return .itemStarted(threadID: threadID, kind: .mcpToolCall)
+            case "webSearch":
+                return .itemStarted(threadID: threadID, kind: .webSearch)
             case "reasoning":
                 return .itemStarted(threadID: threadID, kind: .reasoning)
-            default:
-                return .itemStarted(threadID: threadID, kind: .other)
+            case "agentMessage", "todoList", "error":
+                return .itemStarted(threadID: threadID, kind: .benign)
+            case let type:
+                return .itemStarted(threadID: threadID, kind: .unrecognized(type: type ?? "untyped item"))
             }
         case "item/completed":
             if let item = params["item"] as? [String: Any],

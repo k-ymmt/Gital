@@ -58,4 +58,61 @@ struct CodexAppServerLaunchTests {
         #expect(completed == "fake message", "first turn completes with the streamed text")
         await server.shutdown()
     }
+
+    /// A fake codex that answers turn/start with an approval request and
+    /// echoes back whatever decision the client sent, as a delta.
+    private func makeApprovalProbingCodex() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fake-codex-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("codex")
+        let body = """
+        #!/bin/zsh
+        while IFS= read -r line; do
+          id=$(echo "$line" | sed -n 's/.*"id":\\([0-9]*\\).*/\\1/p')
+          case "$line" in
+            *'"initialize"'*) echo '{"id":'$id',"result":{}}' ;;
+            *'"thread/start"'*|*'"thread\\/start"'*) echo '{"id":'$id',"result":{"thread":{"id":"t1"}}}' ;;
+            *'"turn/start"'*|*'"turn\\/start"'*)
+              echo '{"id":'$id',"result":{}}'
+              echo '{"jsonrpc":"2.0","id":"srv-1","method":"execCommandApproval","params":{"threadId":"t1"}}'
+              ;;
+            *'"srv-1"'*)
+              decision=$(echo "$line" | sed -n 's/.*"decision":"\\([a-z]*\\)".*/\\1/p')
+              echo '{"method":"item/agentMessage/delta","params":{"threadId":"t1","delta":"decision='$decision'"}}'
+              echo '{"method":"turn/completed","params":{"threadId":"t1"}}'
+              ;;
+          esac
+        done
+        """
+        try body.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        return script
+    }
+
+    // The approval auto-grant must not extend to text-only turns: commit-
+    // message generation asking codex "may I run a command?" and getting
+    // "yes" defeats its own contract.
+    @Test func textOnlyTurnDeniesApprovalsAgentTurnApproves() async throws {
+        let fake = try makeApprovalProbingCodex()
+        defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+        let server = CodexAppServer(executableOverride: fake)
+
+        func decision(textOnly: Bool) async throws -> String {
+            var reply = ""
+            for try await event in await server.runTurn(
+                prompt: "hi", repoRoot: URL(fileURLWithPath: "/tmp"), conversationID: UUID(),
+                oneShot: true, textOnly: textOnly
+            ) {
+                if case .delta(let delta) = event { reply += delta }
+            }
+            return reply
+        }
+
+        let denied = try await decision(textOnly: true)
+        #expect(denied == "decision=denied", "text-only turn answers approval requests with a denial")
+        let approved = try await decision(textOnly: false)
+        #expect(approved == "decision=approved", "agent turns keep the approval auto-grant")
+        await server.shutdown()
+    }
 }
