@@ -43,10 +43,7 @@ struct ReviewThreadCard: View {
             // must still be able to say why nothing happened.
             if let error = model.prs.threadErrors[thread.id] {
                 Divider()
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignStyle.deletion)
-                    .textSelection(.enabled)
+                InlineErrorText(error)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
@@ -114,12 +111,7 @@ struct ReviewThreadCard: View {
     }
 
     private func threadChip(_ label: String, color: Color) -> some View {
-        Text(label)
-            .font(.system(size: 10, weight: .semibold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.18), in: Capsule())
-            .foregroundStyle(color)
+        TintedChip(text: label, color: color, fontSize: 10, horizontalPadding: 7, verticalPadding: 2)
     }
 
     private func commentRow(_ comment: ReviewThread.Comment) -> some View {

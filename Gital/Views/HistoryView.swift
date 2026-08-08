@@ -578,35 +578,16 @@ struct CommitDetailView: View {
             }
 
             if let diff = model.selectedCommitDiff {
-                if diff.isBinary || diff.hunks.isEmpty {
-                    ScrollView([.vertical, .horizontal]) {
-                        FileDiffContentView(diff: diff, mode: model.diffMode, imageContext: commitImageContext)
-                            .frame(minWidth: 600, alignment: .leading)
-                    }
-                } else {
-                    // Experimental WKWebView renderer: proper multi-line
-                    // selection, clean copies (no line numbers), native
-                    // scrolling. Binary/image diffs stay on the SwiftUI path.
-                    WebDiffView(diff: diff, mode: model.diffMode)
-                }
+                SingleFileDiffContent(diff: diff, mode: model.diffMode, imageContext: commitImageContext)
             } else {
                 Color.clear
             }
         }
     }
 
-    /// Commit diffs are first-parent diffs (`--diff-merges=first-parent`),
-    /// and `^` is exactly the first parent; on a root commit the old side
-    /// fails to resolve and renders as empty. Keyed off the hash the diffs
-    /// were loaded for, not the selection — they diverge while a new
-    /// selection's diff load is in flight.
+    /// Keyed off the hash the diffs were loaded for, not the selection —
+    /// they diverge while a new selection's diff load is in flight.
     private var commitImageContext: ImageDiffContext? {
-        model.commitDiffsHash.map {
-            ImageDiffContext(
-                repository: model.repository,
-                oldRevision: .commit("\($0)^"),
-                newRevision: .commit($0)
-            )
-        }
+        model.commitDiffsHash.map { ImageDiffContext.firstParent(repository: model.repository, hash: $0) }
     }
 }

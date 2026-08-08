@@ -132,6 +132,91 @@ extension View {
     }
 }
 
+/// Small tinted capsule badge (PR labels, reviewer states, thread states,
+/// pending markers): semibold text on the tint at 0.18 opacity. One
+/// implementation so the chip look can't drift between the PR views.
+struct TintedChip: View {
+    let text: String
+    let color: Color
+    var fontSize: CGFloat = 11
+    var horizontalPadding: CGFloat = 8
+    var verticalPadding: CGFloat = 2.5
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: fontSize, weight: .semibold))
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(color.opacity(0.18), in: Capsule())
+            .foregroundStyle(color)
+    }
+}
+
+/// Inline error line under a failed action — small, deletion-red, and
+/// selectable so the message can be copied into a search.
+struct InlineErrorText: View {
+    let text: String
+    var fontSize: CGFloat = 11
+
+    init(_ text: String, fontSize: CGFloat = 11) {
+        self.text = text
+        self.fontSize = fontSize
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: fontSize))
+            .foregroundStyle(DesignStyle.deletion)
+            .textSelection(.enabled)
+    }
+}
+
+/// Centered placeholder for an empty pane: a caller-provided icon over a
+/// secondary message, filling the available space.
+struct EmptyStateView<Icon: View>: View {
+    let message: String
+    /// Cap for long messages (load errors); nil lets the text fill.
+    var maxTextWidth: CGFloat?
+    @ViewBuilder let icon: () -> Icon
+
+    init(_ message: String, maxTextWidth: CGFloat? = nil, @ViewBuilder icon: @escaping () -> Icon) {
+        self.message = message
+        self.maxTextWidth = maxTextWidth
+        self.icon = icon
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            icon()
+                .foregroundStyle(.secondary)
+            Text(message)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: maxTextWidth)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The common SF Symbol icon for `EmptyStateView`.
+struct EmptyStateIcon: View {
+    let systemImage: String
+    var size: CGFloat = 34
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .font(.system(size: size))
+    }
+}
+
+extension EmptyStateView where Icon == EmptyStateIcon {
+    init(_ message: String, maxTextWidth: CGFloat? = nil, systemImage: String, iconSize: CGFloat = 34) {
+        self.init(message, maxTextWidth: maxTextWidth) {
+            EmptyStateIcon(systemImage: systemImage, size: iconSize)
+        }
+    }
+}
+
 /// Custom SVG glyph for git concepts (asset-catalog template images), used
 /// everywhere the app previously showed the arrow.triangle.branch/.pull
 /// SF Symbols. `size` is the glyph's point size, sized like an SF Symbol at

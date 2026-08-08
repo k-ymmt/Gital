@@ -32,6 +32,17 @@ struct ImageDiffContext {
             ImageDiffContext(repository: repository, oldRevision: $0.old, newRevision: $0.new)
         }
     }
+
+    /// Context for a commit diffed against its first parent — `^` is exactly
+    /// the first parent, matching `--diff-merges=first-parent` diffs. On a
+    /// root commit the old side fails to resolve and renders as empty.
+    static func firstParent(repository: GitRepository, hash: String) -> ImageDiffContext {
+        ImageDiffContext(
+            repository: repository,
+            oldRevision: .commit("\(hash)^"),
+            newRevision: .commit(hash)
+        )
+    }
 }
 
 /// Content for a binary file in a diff list: image files get side-by-side

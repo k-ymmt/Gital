@@ -13,15 +13,9 @@ struct PullRequestView: View {
                 ProgressView("Loading pull request…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                VStack(spacing: 10) {
+                EmptyStateView(model.prs.loadError ?? "Select a pull request", maxTextWidth: 420) {
                     GitGlyph(kind: .pullRequest, size: 36)
-                        .foregroundStyle(.secondary)
-                    Text(model.prs.loadError ?? "Select a pull request")
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 420)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         // Entering the tab shows the cached list immediately and re-fetches

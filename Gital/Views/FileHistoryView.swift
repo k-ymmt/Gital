@@ -152,16 +152,7 @@ struct FileHistorySheet: View {
                 DiffModePicker(mode: $diffMode)
             }
             if let diff = model.diffs.first {
-                if diff.isBinary || diff.hunks.isEmpty {
-                    ScrollView([.vertical, .horizontal]) {
-                        FileDiffContentView(diff: diff, mode: diffMode, imageContext: entryImageContext)
-                            .frame(minWidth: 600, alignment: .leading)
-                    }
-                } else {
-                    // Same renderer split as the History pane: WKWebView for
-                    // text diffs, SwiftUI for binary/image diffs.
-                    WebDiffView(diff: diff, mode: diffMode)
-                }
+                SingleFileDiffContent(diff: diff, mode: diffMode, imageContext: entryImageContext)
             } else {
                 // `git show` legitimately returns nothing here for a
                 // merge commit that kept the first parent's version.
@@ -174,18 +165,10 @@ struct FileHistorySheet: View {
         }
     }
 
-    /// Entry diffs are taken against the commit's first parent (`^`); a root
-    /// commit's old side fails to resolve and renders as empty. Keyed off
-    /// the hash the diff was loaded for, not the selection — they diverge
-    /// while a new selection's diff load is in flight.
+    /// Keyed off the hash the diff was loaded for, not the selection — they
+    /// diverge while a new selection's diff load is in flight.
     private var entryImageContext: ImageDiffContext? {
-        model.diffsHash.map { hash in
-            ImageDiffContext(
-                repository: model.repository,
-                oldRevision: .commit("\(hash)^"),
-                newRevision: .commit(hash)
-            )
-        }
+        model.diffsHash.map { ImageDiffContext.firstParent(repository: model.repository, hash: $0) }
     }
 }
 

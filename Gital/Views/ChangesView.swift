@@ -58,14 +58,7 @@ struct ChangesView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "checkmark.circle")
-                .font(.system(size: 34))
-                .foregroundStyle(.secondary)
-            Text("No changes in the working copy")
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EmptyStateView("No changes in the working copy", systemImage: "checkmark.circle")
     }
 }
 

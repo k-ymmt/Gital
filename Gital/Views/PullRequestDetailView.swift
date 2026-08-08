@@ -38,10 +38,7 @@ struct PullRequestDetailView: View {
                 // (possibly stale) cached copy left to show.
                 if let error = model.prs.threadsLoadError, model.prs.threads(for: detail.number).isEmpty {
                     sectionTitle("Conversations")
-                    Text(error)
-                        .font(.system(size: 12))
-                        .foregroundStyle(DesignStyle.deletion)
-                        .textSelection(.enabled)
+                    InlineErrorText(error, fontSize: 12)
                 } else if !model.prs.threads(for: detail.number).isEmpty {
                     sectionTitle("Conversations", count: model.prs.threads(for: detail.number).count)
                     ConversationsCard(model: model, detail: detail)
@@ -130,12 +127,7 @@ struct PullRequestDetailView: View {
         HStack(spacing: 7) {
             ForEach(detail.labels) { label in
                 let color = Color(hex: UInt32(label.color, radix: 16) ?? DesignStyle.brandBlueHex)
-                Text(label.name)
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(color.opacity(0.18), in: Capsule())
-                    .foregroundStyle(color)
+                TintedChip(text: label.name, color: color, horizontalPadding: 9, verticalPadding: 3)
             }
         }
     }
@@ -216,12 +208,7 @@ struct PullRequestDetailView: View {
         case "COMMENTED": ("Commented", .secondary)
         default: ("Pending", DesignStyle.tagAmber)
         }
-        return Text(label)
-            .font(.system(size: 11, weight: .semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 2.5)
-            .background(color.opacity(0.16), in: Capsule())
-            .foregroundStyle(color)
+        return TintedChip(text: label, color: color)
     }
 
     private var commitsCard: some View {

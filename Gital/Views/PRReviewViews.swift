@@ -44,12 +44,7 @@ struct PendingReviewCommentCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Text("Pending")
-                    .font(.system(size: 10, weight: .semibold))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(DesignStyle.tagAmber.opacity(0.18), in: Capsule())
-                    .foregroundStyle(DesignStyle.tagAmber)
+                TintedChip(text: "Pending", color: DesignStyle.tagAmber, fontSize: 10, horizontalPadding: 7, verticalPadding: 2)
                 Text(lineLabel)
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
@@ -104,9 +99,7 @@ struct ReviewCommentComposerView: View {
             PlaceholderTextEditor(text: $prs.composerText, placeholder: "Leave a review comment")
                 .focused($focused)
             if let error = model.prs.composer?.error {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignStyle.deletion)
+                InlineErrorText(error)
             }
             HStack(spacing: 8) {
                 Text("Drafts are submitted together with your review.")
@@ -230,16 +223,11 @@ struct ReviewSubmitForm: View {
                 .foregroundStyle(.secondary)
 
             if isOwnPR && event != .comment {
-                Text("You can't \(event == .approve ? "approve" : "request changes on") your own pull request.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignStyle.deletion)
+                InlineErrorText("You can't \(event == .approve ? "approve" : "request changes on") your own pull request.")
             }
 
             if let error = model.prs.reviewSubmitError {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(DesignStyle.deletion)
-                    .textSelection(.enabled)
+                InlineErrorText(error)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 

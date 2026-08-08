@@ -61,14 +61,7 @@ struct StashDetailView: View {
                 }
             }
         } else {
-            VStack(spacing: 10) {
-                Image(systemName: "archivebox")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.secondary)
-                Text("Select a stash to see its contents")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView("Select a stash to see its contents", systemImage: "archivebox")
         }
     }
 

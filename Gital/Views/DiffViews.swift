@@ -153,6 +153,29 @@ struct FileDiffContentView: View {
     }
 }
 
+/// The renderer split shared by the read-only single-file diff panes
+/// (History, File History): binary and empty diffs render on the SwiftUI
+/// path (image preview, "no changes" note) inside a two-axis ScrollView;
+/// text diffs go to the self-scrolling WKWebView renderer (proper
+/// multi-line selection, clean copies, native scrolling). One home for the
+/// predicate, so a change to it can't miss a pane.
+struct SingleFileDiffContent: View {
+    let diff: FileDiff
+    let mode: DiffMode
+    var imageContext: ImageDiffContext? = nil
+
+    var body: some View {
+        if diff.isBinary || diff.hunks.isEmpty {
+            ScrollView([.vertical, .horizontal]) {
+                FileDiffContentView(diff: diff, mode: mode, imageContext: imageContext)
+                    .frame(minWidth: 600, alignment: .leading)
+            }
+        } else {
+            WebDiffView(diff: diff, mode: mode)
+        }
+    }
+}
+
 struct DiffModePicker: View {
     @Binding var mode: DiffMode
 

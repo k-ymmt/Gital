@@ -80,17 +80,7 @@ struct PullRequestItemDiffView: View {
     @ViewBuilder
     private var diffContent: some View {
         if let error = model.prs.itemLoadError {
-            VStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 30))
-                    .foregroundStyle(.secondary)
-                Text(error)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(error, maxTextWidth: 460, systemImage: "exclamationmark.triangle", iconSize: 30)
         } else if model.prs.itemDiffs.isEmpty {
             // Details loaded with no diffs = a genuinely empty commit
             // (--allow-empty, or a merge empty against its first parent) —
