@@ -141,19 +141,19 @@ struct WorkingDiffPane: View {
         }
     }
 
-    /// rows × 19 plus the header spacers — only holds the scroll extent until
-    /// the first real height report (wrong whenever lines wrap).
+    /// rows × row height plus the header spacers — only holds the scroll
+    /// extent until the first real height report (wrong whenever lines wrap).
     private static func estimatedHeight(for diffs: [FileDiff], mode: DiffMode) -> CGFloat {
         diffs.reduce(0) { total, diff in
             let rows: CGFloat
             if diff.isBinary {
-                rows = Overlay.binaryEstimate / 19
+                rows = Overlay.binaryEstimate / DiffHTMLBuilder.rowHeight
             } else if mode == .split {
                 rows = CGFloat(SplitDiffRow.rows(for: diff.hunks).count)
             } else {
                 rows = CGFloat(diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count })
             }
-            return total + CGFloat(DiffHTMLBuilder.headerSpacerEstimate) + rows * 19
+            return total + CGFloat(DiffHTMLBuilder.headerSpacerEstimate) + rows * DiffHTMLBuilder.rowHeight
         }
     }
 

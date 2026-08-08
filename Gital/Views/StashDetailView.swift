@@ -77,9 +77,9 @@ struct StashDetailView: View {
     private func estimatedHeight(for diff: FileDiff) -> CGFloat {
         switch model.diffMode {
         case .unified:
-            CGFloat(DiffHTMLBuilder.unifiedItems(for: diff).count) * 19
+            CGFloat(DiffHTMLBuilder.unifiedItems(for: diff).count) * DiffHTMLBuilder.rowHeight
         case .split:
-            CGFloat(SplitDiffRow.rows(for: diff.hunks).count) * 19
+            CGFloat(SplitDiffRow.rows(for: diff.hunks).count) * DiffHTMLBuilder.rowHeight
         }
     }
 }

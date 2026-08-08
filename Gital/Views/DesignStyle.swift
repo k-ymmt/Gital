@@ -14,17 +14,50 @@ extension Color {
 
 /// Palette lifted from the reference design.
 enum DesignStyle {
-    static let addition = Color(hex: 0x3fb950)
-    static let deletion = Color(hex: 0xf85149)
-    static let additionBackground = Color(hex: 0x2ea043, opacity: 0.15)
-    static let deletionBackground = Color(hex: 0xf85149, opacity: 0.12)
-    static let hunkBackground = Color(hex: 0x388bfd, opacity: 0.10)
-    static let hunkText = Color(hex: 0x6ea8fe)
+    // Raw hex values, shared between the SwiftUI colors and the CSS mirror
+    // below so the WKWebView diff pages can never drift from the palette.
+    static let additionHex: UInt32 = 0x3fb950
+    static let deletionHex: UInt32 = 0xf85149
+    static let additionBackgroundHex: UInt32 = 0x2ea043
+    static let hunkHex: UInt32 = 0x388bfd
+    static let hunkTextHex: UInt32 = 0x6ea8fe
+    static let brandBlueHex: UInt32 = 0x2f6fed
+
+    static let addition = Color(hex: additionHex)
+    static let deletion = Color(hex: deletionHex)
+    static let additionBackground = Color(hex: additionBackgroundHex, opacity: 0.15)
+    static let deletionBackground = Color(hex: deletionHex, opacity: 0.12)
+    static let hunkBackground = Color(hex: hunkHex, opacity: 0.10)
+    static let hunkText = Color(hex: hunkTextHex)
     static let tagAmber = Color(hex: 0xe0b25a)
     /// GitHub's merged-purple; also the agent accent.
     static let mergedPurple = Color(hex: 0x8957e5)
-    static let linkBlue = Color(hex: 0x6ea8fe)
-    static let brandBlue = Color(hex: 0x2f6fed)
+    static let linkBlue = Color(hex: hunkTextHex)
+    static let brandBlue = Color(hex: brandBlueHex)
+
+    /// CSS spellings of the palette for `DiffHTMLBuilder`'s pages — the
+    /// "no raw hex values in views" rule extends to the generated CSS.
+    enum CSS {
+        static let addition = hex(additionHex)
+        static let deletion = hex(deletionHex)
+        static let additionBackground = rgba(additionBackgroundHex, 0.15)
+        static let deletionBackground = rgba(deletionHex, 0.12)
+        static let hunkBackground = rgba(hunkHex, 0.10)
+        static let hunkText = hex(hunkTextHex)
+        static let brandBlue = rgb(brandBlueHex)
+
+        static func hex(_ value: UInt32) -> String {
+            String(format: "#%06x", value)
+        }
+
+        static func rgb(_ value: UInt32) -> String {
+            "rgb(\((value >> 16) & 0xff), \((value >> 8) & 0xff), \(value & 0xff))"
+        }
+
+        static func rgba(_ value: UInt32, _ alpha: Double) -> String {
+            "rgba(\((value >> 16) & 0xff), \((value >> 8) & 0xff), \(value & 0xff), \(alpha))"
+        }
+    }
 
     /// State color of a pull request (list icon, detail status chip).
     static func prStateColor(state: String, isDraft: Bool) -> Color {

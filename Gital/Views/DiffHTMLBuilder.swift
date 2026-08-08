@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// Renders a `FileDiff` into a self-contained HTML page for `WebDiffView`
@@ -135,6 +136,12 @@ enum DiffHTMLBuilder {
     /// live measurement: the HTML string must not depend on runtime state, or
     /// every native re-measure would reload the whole page.
     static let headerSpacerEstimate: Double = 29
+
+    /// Unwrapped diff-row height. Interpolated into the page CSS
+    /// (`line-height`, `min-height`, `contain-intrinsic-size`) and used by
+    /// every native rows-×-height scroll-extent estimate — one constant, so
+    /// the estimators can never desync from the rendered page.
+    static let rowHeight: CGFloat = 19
 
     /// The whole Working Copy diff as ONE page: every file renders inside its
     /// own `<section class="file">` carrying its Shiki language, with spacer
@@ -333,7 +340,7 @@ enum DiffHTMLBuilder {
     :root { color-scheme: light dark; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
-        font: 12px/19px ui-monospace, "SF Mono", Menlo, monospace;
+        font: 12px/\(Int(rowHeight))px ui-monospace, "SF Mono", Menlo, monospace;
         color: CanvasText;
         background: transparent;
         cursor: text;
@@ -341,22 +348,22 @@ enum DiffHTMLBuilder {
     .num, .sign { -webkit-user-select: none; user-select: none; }
     .num::before { content: attr(data-n); }
     .sign::before { content: attr(data-s); }
-    .line, .side { display: flex; align-items: flex-start; min-height: 19px; }
+    .line, .side { display: flex; align-items: flex-start; min-height: \(Int(rowHeight))px; }
     .line { position: relative; }
     .line .num { flex: 0 0 46px; padding-right: 10px; text-align: right; opacity: 0.45; }
     .sign { flex: 0 0 14px; text-align: center; }
     .text { flex: 1 1 auto; min-width: 0; white-space: pre-wrap; word-break: break-all; padding-right: 16px; }
-    .line.add, .side.add { background: rgba(46, 160, 67, 0.15); }
-    .line.del, .side.del { background: rgba(248, 81, 73, 0.12); }
-    .line.add .sign { color: #3fb950; }
-    .line.del .sign { color: #f85149; }
+    .line.add, .side.add { background: \(DesignStyle.CSS.additionBackground); }
+    .line.del, .side.del { background: \(DesignStyle.CSS.deletionBackground); }
+    .line.add .sign { color: \(DesignStyle.CSS.addition); }
+    .line.del .sign { color: \(DesignStyle.CSS.deletion); }
     .hunk {
         display: flex;
         align-items: center;
-        min-height: 19px;
+        min-height: \(Int(rowHeight))px;
         padding-left: 12px;
-        background: rgba(56, 139, 253, 0.10);
-        color: #6ea8fe;
+        background: \(DesignStyle.CSS.hunkBackground);
+        color: \(DesignStyle.CSS.hunkText);
     }
     .hunk .htext { flex: 1 1 auto; white-space: nowrap; overflow: hidden; }
     .row { display: flex; align-items: stretch; }
@@ -368,15 +375,15 @@ enum DiffHTMLBuilder {
 
     /// Off-screen rows skip style/layout/paint entirely — on a self-scrolling
     /// page a many-thousand-line diff lays out only what's near the viewport.
-    /// 19px is the unwrapped row height (matches `min-height`); `auto`
+    /// `rowHeight` is the unwrapped row height (matches `min-height`); `auto`
     /// remembers a wrapped row's real height once it has rendered, so
-    /// scrolling back over it never jumps. (`auto 19px` sets both axes; the
-    /// width component is moot — rows are block-level and stretch.) Hunk
+    /// scrolling back over it never jumps. (`auto <height>` sets both axes;
+    /// the width component is moot — rows are block-level and stretch.) Hunk
     /// headers stay always-rendered: they are few, and `.htext` is the only
     /// nowrap row. Selection marks skipped rows relevant, so Select All +
     /// Copy still serializes every row — pinned by `WebDiffLazyRenderTests`.
     private static let lazyRenderCSS = """
-    .line, .row { content-visibility: auto; contain-intrinsic-size: auto 19px; }
+    .line, .row { content-visibility: auto; contain-intrinsic-size: auto \(Int(rowHeight))px; }
     """
 
     /// Hover/selection affordances for the Working Copy: hover tint, accent
@@ -390,8 +397,8 @@ enum DiffHTMLBuilder {
     private static let interactiveCSS = """
     .line.i:hover { background-image: linear-gradient(color-mix(in srgb, CanvasText 4%, transparent), color-mix(in srgb, CanvasText 4%, transparent)); }
     .line.sel, .line.sel:hover {
-        background-image: linear-gradient(rgba(47, 111, 237, 0.16), rgba(47, 111, 237, 0.16));
-        box-shadow: inset 2.5px 0 0 0 rgb(47, 111, 237);
+        background-image: linear-gradient(\(DesignStyle.CSS.rgba(DesignStyle.brandBlueHex, 0.16)), \(DesignStyle.CSS.rgba(DesignStyle.brandBlueHex, 0.16)));
+        box-shadow: inset 2.5px 0 0 0 \(DesignStyle.CSS.brandBlue);
     }
     .ask {
         position: absolute;
@@ -400,7 +407,7 @@ enum DiffHTMLBuilder {
         width: 17px;
         height: 17px;
         border-radius: 4px;
-        background: rgb(47, 111, 237);
+        background: \(DesignStyle.CSS.brandBlue);
         color: white;
         font: 700 11px/17px -apple-system, system-ui;
         text-align: center;
@@ -421,18 +428,18 @@ enum DiffHTMLBuilder {
         padding: 1.5px 7px;
         border-radius: 999px;
         background: color-mix(in srgb, Canvas 70%, transparent);
-        border: 1px solid rgba(47, 111, 237, 0.4);
-        color: rgb(47, 111, 237);
+        border: 1px solid \(DesignStyle.CSS.rgba(DesignStyle.brandBlueHex, 0.4));
+        color: \(DesignStyle.CSS.brandBlue);
         cursor: pointer;
     }
-    .hb.destructive { color: #f85149; border-color: rgba(248, 81, 73, 0.4); }
+    .hb.destructive { color: \(DesignStyle.CSS.deletion); border-color: \(DesignStyle.CSS.rgba(DesignStyle.deletionHex, 0.4)); }
     .tsel, .hsel { position: relative; }
     .tsel::after, .hsel::after {
         content: "";
         position: absolute;
         inset: 0;
         pointer-events: none;
-        border: 0 solid rgb(47, 111, 237);
+        border: 0 solid \(DesignStyle.CSS.brandBlue);
         border-left-width: 1.5px;
         border-right-width: 1.5px;
     }
@@ -486,7 +493,7 @@ enum DiffHTMLBuilder {
         width: 17px;
         height: 17px;
         border-radius: 4px;
-        background: rgb(47, 111, 237);
+        background: \(DesignStyle.CSS.brandBlue);
         color: white;
         font: 700 11px/17px -apple-system, system-ui;
         text-align: center;
@@ -522,7 +529,7 @@ enum DiffHTMLBuilder {
         position: absolute;
         inset: 0;
         pointer-events: none;
-        border: 0 solid rgb(47, 111, 237);
+        border: 0 solid \(DesignStyle.CSS.brandBlue);
         border-left-width: 1.5px;
         border-right-width: 1.5px;
     }
@@ -535,7 +542,7 @@ enum DiffHTMLBuilder {
         width: 17px;
         height: 17px;
         border-radius: 4px;
-        background: rgb(47, 111, 237);
+        background: \(DesignStyle.CSS.brandBlue);
         color: white;
         font: 700 11px/17px -apple-system, system-ui;
         text-align: center;

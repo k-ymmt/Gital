@@ -182,7 +182,7 @@ struct PullRequestItemDiffView: View {
                             ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
                             : nil
                     ),
-                    estimatedHeight: CGFloat(segment.items.count) * 19,
+                    estimatedHeight: CGFloat(segment.items.count) * DiffHTMLBuilder.rowHeight,
                     onAction: { handleReview($0, in: diff) }
                 )
                 if let line = segment.interleaveAfterLine {
@@ -208,7 +208,7 @@ struct PullRequestItemDiffView: View {
                         rows: segment.rows,
                         language: DiffSyntaxHighlighting.language(for: diff)
                     ),
-                    estimatedHeight: CGFloat(segment.rows.count) * 19,
+                    estimatedHeight: CGFloat(segment.rows.count) * DiffHTMLBuilder.rowHeight,
                     onAction: { _ in }
                 )
                 ForEach(segment.threads) { thread in
@@ -680,7 +680,7 @@ struct PullRequestDetailView: View {
     private var labelChips: some View {
         HStack(spacing: 7) {
             ForEach(detail.labels) { label in
-                let color = Color(hex: UInt32(label.color, radix: 16) ?? 0x2f6fed)
+                let color = Color(hex: UInt32(label.color, radix: 16) ?? DesignStyle.brandBlueHex)
                 Text(label.name)
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 9)
