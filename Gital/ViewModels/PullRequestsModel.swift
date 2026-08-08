@@ -385,24 +385,59 @@ final class PullRequestsModel {
     /// persisted per repo by `PendingReviewStore`.
     var pendingComments: [Int: [PendingReviewComment]] = [:]
     @ObservationIgnored private var pendingReviewStore: PendingReviewStore?
-    /// Anchor the review comment composer is currently open at, nil when
-    /// closed. Owned by the model so the composer survives LazyVStack row
-    /// recycling while the user scrolls.
-    var reviewComposerAnchor: ReviewCommentAnchor?
-    /// Content of the anchored diff line, captured when the composer opens;
-    /// stored on the draft for display matching and submit-time re-anchoring.
-    var reviewComposerLineText = ""
-    /// First line of the composer's range for a multi-line comment (the main
-    /// anchor is the range's last line); nil while composing a single-line
-    /// comment.
-    var reviewComposerStartAnchor: ReviewCommentAnchor?
-    var reviewComposerStartLineText: String?
-    var reviewComposerText = ""
-    /// Save-time validation failure shown inside the composer.
-    var reviewComposerError: String?
-    /// When set, the composer is editing this existing draft instead of
-    /// adding a new one.
-    var editingCommentID: UUID?
+    /// The review-comment composer's whole state as one value: every
+    /// open/edit/close transition swaps the value atomically, so a field can
+    /// never be updated in one transition and forgotten in another.
+    struct ReviewComposer: Equatable {
+        /// Anchor the composer is open at (for a multi-line comment, the
+        /// range's LAST line, GitHub-style).
+        var anchor: ReviewCommentAnchor
+        /// Content of the anchored diff line, captured when the composer
+        /// opens; stored on the draft for display matching and submit-time
+        /// re-anchoring.
+        var lineText: String
+        /// First line of the range for a multi-line comment; nil while
+        /// composing a single-line comment.
+        var startAnchor: ReviewCommentAnchor?
+        var startLineText: String?
+        var text = ""
+        /// Save-time validation failure shown inside the composer.
+        var error: String?
+        /// When set, the composer is editing this existing draft instead of
+        /// adding a new one.
+        var editingCommentID: UUID?
+
+        /// The place the composer is open at, ignoring what's typed in it.
+        var location: ReviewComposerLocation {
+            ReviewComposerLocation(
+                anchor: anchor, lineText: lineText,
+                startAnchor: startAnchor, startLineText: startLineText
+            )
+        }
+    }
+
+    /// Where a composer is (or would be) open. Compares the line TEXTS too,
+    /// not just the coordinates: the composer renders only where coordinates
+    /// AND content match (commit diffs number files differently than the
+    /// whole-PR diff).
+    struct ReviewComposerLocation: Equatable {
+        var anchor: ReviewCommentAnchor
+        var lineText: String
+        var startAnchor: ReviewCommentAnchor?
+        var startLineText: String?
+    }
+
+    /// Nil when the composer is closed. Owned by the model so the composer
+    /// survives LazyVStack row recycling while the user scrolls.
+    var composer: ReviewComposer?
+
+    /// Non-optional passthrough for the composer's text so SwiftUI can bind
+    /// to it; writes while the composer is closed are dropped.
+    var composerText: String {
+        get { composer?.text ?? "" }
+        set { composer?.text = newValue }
+    }
+
     var isSubmittingReview = false
     var reviewSubmitError: String?
 
@@ -420,47 +455,49 @@ final class PullRequestsModel {
         startAnchor: ReviewCommentAnchor? = nil,
         startLineText: String? = nil
     ) {
-        // "Already open here" must compare the line TEXTS too, not just the
-        // coordinates: the composer renders only where coordinates AND
-        // content match (`composerIsOpen`), so an early return on stale
-        // state from a same-numbered line of another diff (commit vs
-        // whole-PR numbering) would leave the composer invisible and the
-        // click dead.
-        if reviewComposerAnchor == anchor && reviewComposerLineText == lineText
-            && reviewComposerStartAnchor == startAnchor && reviewComposerStartLineText == startLineText
-            && editingCommentID == nil { return }
+        let location = ReviewComposerLocation(
+            anchor: anchor, lineText: lineText,
+            startAnchor: startAnchor, startLineText: startLineText
+        )
+        // "Already open here" uses the location's coordinates-AND-content
+        // rule — an early return on stale state from a same-numbered line of
+        // another diff would leave the composer invisible and the click dead.
+        if let current = composer, current.editingCommentID == nil, current.location == location {
+            return
+        }
         // Unsaved new-comment text travels to the new anchor instead of
         // being silently discarded; an edit in progress is dropped — its
         // draft still holds the saved body.
-        if editingCommentID != nil {
-            reviewComposerText = ""
-        }
-        editingCommentID = nil
-        reviewComposerAnchor = anchor
-        reviewComposerLineText = lineText
-        reviewComposerStartAnchor = startAnchor
-        reviewComposerStartLineText = startLineText
-        reviewComposerError = nil
+        let carriedText = composer?.editingCommentID == nil ? composer?.text ?? "" : ""
+        composer = ReviewComposer(
+            anchor: anchor, lineText: lineText,
+            startAnchor: startAnchor, startLineText: startLineText,
+            text: carriedText
+        )
     }
 
     func editComment(_ comment: PendingReviewComment) {
-        reviewComposerAnchor = comment.anchor
-        reviewComposerLineText = comment.lineText
-        reviewComposerStartAnchor = comment.startAnchor
-        reviewComposerStartLineText = comment.startLineText
-        reviewComposerText = comment.body
-        reviewComposerError = nil
-        editingCommentID = comment.id
+        composer = ReviewComposer(
+            anchor: comment.anchor,
+            lineText: comment.lineText,
+            startAnchor: comment.startAnchor,
+            startLineText: comment.startLineText,
+            text: comment.body,
+            editingCommentID: comment.id
+        )
     }
 
     func closeReviewComposer() {
-        reviewComposerAnchor = nil
-        reviewComposerLineText = ""
-        reviewComposerStartAnchor = nil
-        reviewComposerStartLineText = nil
-        reviewComposerText = ""
-        reviewComposerError = nil
-        editingCommentID = nil
+        composer = nil
+    }
+
+    /// Whether the composer should render at this line of this diff — the
+    /// render side applies the same coordinates-AND-content rule the open
+    /// path compares with, so the two can never disagree.
+    func isComposerOpen(at line: DiffLine, in diff: FileDiff) -> Bool {
+        guard let composer else { return false }
+        return composer.anchor == ReviewCommentAnchor(path: diff.path, diffLine: line)
+            && composer.lineText == line.text
     }
 
     /// Saves the composer's text as a new draft comment, or into the draft
@@ -470,22 +507,22 @@ final class PullRequestsModel {
     /// commit-diff line missing from the PR's final diff) fails here, with
     /// the composer still open, instead of poisoning the submission later.
     func saveComposerComment(in number: Int) {
-        guard let anchor = reviewComposerAnchor else { return }
-        let body = reviewComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let current = composer else { return }
+        let body = current.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         var comments = pendingComments(for: number)
-        if let id = editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
+        if let id = current.editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
             comments[index].body = body
         } else {
             let comment = PendingReviewComment(
-                anchor: anchor,
-                lineText: reviewComposerLineText,
-                startAnchor: reviewComposerStartAnchor,
-                startLineText: reviewComposerStartLineText,
+                anchor: current.anchor,
+                lineText: current.lineText,
+                startAnchor: current.startAnchor,
+                startLineText: current.startLineText,
                 body: body
             )
             if let diffs = diffsCache[number], comment.resolved(in: diffs) == nil {
-                reviewComposerError = "This line isn't part of the pull request's final diff, so GitHub can't accept a comment here."
+                composer?.error = "This line isn't part of the pull request's final diff, so GitHub can't accept a comment here."
                 return
             }
             comments.append(comment)
@@ -498,7 +535,7 @@ final class PullRequestsModel {
         var comments = pendingComments(for: number)
         comments.removeAll { $0.id == id }
         setPendingComments(comments, for: number)
-        if editingCommentID == id {
+        if composer?.editingCommentID == id {
             closeReviewComposer()
         }
     }
