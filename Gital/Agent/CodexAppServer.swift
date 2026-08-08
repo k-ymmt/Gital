@@ -564,18 +564,30 @@ actor CodexAppServer {
         try? write(response)
     }
 
+    private func approvalDecision(params: [String: Any]) -> String {
+        // A completed record can linger in activeTurns until its async
+        // cleanup runs; it must not speak for the thread it used to own.
+        let running = activeTurns.values.filter { !$0.completed }
+            .map { (threadID: $0.threadID, textOnly: $0.textOnly) }
+        return Self.approvalDecision(
+            requestThreadID: params["threadId"] as? String,
+            running: running
+        )
+    }
+
     /// Denies when the approval belongs to a text-only turn. Attribution
     /// mirrors `deliver(_:)`: by threadId when the request carries one,
     /// otherwise by the single active turn. When attribution fails entirely,
     /// the presence of ANY running text-only turn denies — wrongly denying
     /// an agent turn degrades one answer, wrongly approving a text-only turn
-    /// grants repository changes nobody asked for.
-    private func approvalDecision(params: [String: Any]) -> String {
-        // A completed record can linger in activeTurns until its async
-        // cleanup runs; it must not speak for the thread it used to own.
-        let running = activeTurns.values.filter { !$0.completed }
+    /// grants repository changes nobody asked for. Pure and static so the
+    /// mixed-turn branches are unit-testable without a live codex process.
+    static func approvalDecision(
+        requestThreadID: String?,
+        running: [(threadID: String?, textOnly: Bool)]
+    ) -> String {
         let textOnly: Bool
-        if let threadID = params["threadId"] as? String,
+        if let threadID = requestThreadID,
            running.contains(where: { $0.threadID == threadID }) {
             textOnly = running.contains { $0.threadID == threadID && $0.textOnly }
         } else if running.count == 1, let only = running.first {

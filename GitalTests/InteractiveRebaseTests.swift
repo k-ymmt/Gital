@@ -290,6 +290,26 @@ struct InteractiveRebaseTests {
         #expect(!line.contains("\n"))
     }
 
+    @Test func foldExecLineGuardsBothPositions() {
+        let line = GitRepository.foldExecLine(follower: commit("bbb"), base: commit("aaa"))
+        // Both the follower (at HEAD) and the base (directly beneath, skip 1)
+        // must be verified — folding into the wrong commit is never allowed.
+        #expect(line.hasPrefix("exec if test "))
+        #expect(line.contains(" && "))
+        #expect(line.contains("--skip=1"))
+        #expect(line.contains("git reset --soft HEAD^"))
+        #expect(line.contains("git commit --amend --no-edit --no-verify --allow-empty"))
+        // The guard must fail soft (echo, not fold).
+        #expect(line.contains("else echo"))
+        #expect(!line.contains("\n"))
+    }
+
+    @Test func foldExecLineQuotesHostileIdentities() {
+        let hostile = commit("bbb", identity: "1,a@b,it's a 'subject'")
+        let line = GitRepository.foldExecLine(follower: hostile, base: commit("aaa"))
+        #expect(line.contains("'1,a@b,it'\\''s a '\\''subject'\\'''"))
+    }
+
     @Test func identityGuardsAreShellQuoted() {
         let hostile = commit("aaa", identity: "1,a@b,it's a 'subject'")
         let line = GitRepository.amendExecLine(base: hostile, message: "m")

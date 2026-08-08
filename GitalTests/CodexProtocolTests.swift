@@ -72,6 +72,17 @@ struct CodexProtocolTests {
         } else { Issue.record("unknown item type classifies as unrecognized (fail closed)") }
     }
 
+    @Test func requestIDEchoesNumberAndStringExactly() {
+        // JSON-RPC ids may be numbers or strings; a wrong-typed echo makes
+        // codex ignore the response and the turn hangs silently.
+        #expect(CodexRequestID(7) == .number(7))
+        #expect(CodexRequestID(7)?.jsonValue as? Int == 7)
+        #expect(CodexRequestID("srv-1") == .string("srv-1"))
+        #expect(CodexRequestID("srv-1")?.jsonValue as? String == "srv-1")
+        #expect(CodexRequestID(1.5) == nil)
+        #expect(CodexRequestID([1]) == nil)
+    }
+
     @Test func garbageInput() {
         #expect(parse("not json") == nil, "garbage codex line yields nil")
         #expect(parse(#"{"jsonrpc":"2.0"}"#) == nil, "empty codex object yields nil")
