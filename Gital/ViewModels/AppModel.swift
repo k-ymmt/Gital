@@ -12,9 +12,9 @@ final class AppModel {
     var openError: String?
     var commandLineToolMessage: String?
 
-    /// Bumped on every open/close; a slow `discover` from an earlier click
-    /// must not replace the repository the user opened afterwards.
-    @ObservationIgnored private var openGeneration = 0
+    /// A slow `discover` from an earlier click must not replace the
+    /// repository the user opened afterwards.
+    @ObservationIgnored private let openLoader = LatestLoader()
 
     /// Selecting the install menu item twice must not stack two
     /// administrator-password prompts.
@@ -48,28 +48,19 @@ final class AppModel {
     }
 
     func openRepository(at url: URL) {
-        openGeneration += 1
-        let generation = openGeneration
         Task {
-            guard let repository = await GitRepository.discover(at: url) else {
-                if generation == openGeneration {
-                    openError = "“\(url.lastPathComponent)” is not a Git repository."
-                }
+            guard let result = await openLoader.run({ await GitRepository.discover(at: url) }),
+                  case .success(let discovered) = result else { return }
+            guard let repository = discovered else {
+                openError = "“\(url.lastPathComponent)” is not a Git repository."
                 return
             }
-            guard generation == openGeneration else { return }
             repoViewModel?.close()  // stop the old watcher and codex subprocess
             let viewModel = RepoViewModel(repository: repository)
             repoViewModel = viewModel
             rememberRecent(repository.root)
             await viewModel.refreshAll()
         }
-    }
-
-    func closeRepository() {
-        openGeneration += 1
-        repoViewModel?.close()
-        repoViewModel = nil
     }
 
     func installCommandLineTool() {

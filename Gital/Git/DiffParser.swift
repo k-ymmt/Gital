@@ -324,54 +324,14 @@ enum DiffParser {
     }
 
     /// Unquotes a git C-style quoted path (`"\346\227\245..."`); returns other
-    /// strings unchanged.
+    /// strings unchanged. Shared with `GitRepository` via `GitPathQuoting`.
     private static func unquotePath(_ path: String) -> String {
-        guard path.hasPrefix("\"") else { return path }
-        var rest = Substring(path)
-        return scanQuoted(&rest) ?? path
+        GitPathQuoting.unquote(path)
     }
 
     /// Scans a leading C-quoted string, consuming it from `rest`.
     private static func scanQuoted(_ rest: inout Substring) -> String? {
-        guard rest.first == "\"" else { return nil }
-        var bytes: [UInt8] = []
-        var index = rest.index(after: rest.startIndex)
-        while index < rest.endIndex {
-            let char = rest[index]
-            if char == "\"" {
-                rest = rest[rest.index(after: index)...]
-                return String(decoding: bytes, as: UTF8.self)
-            }
-            if char == "\\" {
-                index = rest.index(after: index)
-                guard index < rest.endIndex else { return nil }
-                let escaped = rest[index]
-                switch escaped {
-                case "n": bytes.append(0x0A)
-                case "t": bytes.append(0x09)
-                case "r": bytes.append(0x0D)
-                case "\\", "\"": bytes.append(escaped.asciiValue!)
-                case "0"..."7":
-                    var value = 0
-                    var digits = 0
-                    var digitIndex = index
-                    while digitIndex < rest.endIndex, digits < 3,
-                          let ascii = rest[digitIndex].asciiValue, (0x30...0x37).contains(ascii) {
-                        value = value * 8 + Int(ascii - 0x30)
-                        digits += 1
-                        digitIndex = rest.index(after: digitIndex)
-                    }
-                    bytes.append(UInt8(truncatingIfNeeded: value))
-                    index = rest.index(digitIndex, offsetBy: -1)
-                default:
-                    bytes.append(contentsOf: Array(String(escaped).utf8))
-                }
-            } else {
-                bytes.append(contentsOf: Array(String(char).utf8))
-            }
-            index = rest.index(after: index)
-        }
-        return nil
+        GitPathQuoting.scanQuoted(&rest)
     }
 
     private static func parseHunkHeader(_ line: String) -> (oldStart: Int, newStart: Int, parents: Int)? {

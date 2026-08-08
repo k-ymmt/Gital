@@ -30,12 +30,6 @@ struct Commit: Hashable, Identifiable {
 
     var id: String { hash }
     var shortHash: String { String(hash.prefix(7)) }
-
-    var authorInitials: String {
-        let words = author.split(separator: " ")
-        let initials = words.prefix(2).compactMap { $0.first }
-        return String(initials).uppercased()
-    }
 }
 
 /// Full metadata for one commit, loaded on selection: absolute dates, the

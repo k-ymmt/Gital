@@ -498,48 +498,12 @@ final class GitRepository: @unchecked Sendable {
         return entries
     }
 
-    /// Reverses git's C-style path quoting (`"a\tb.txt"`). quotepath=false
-    /// keeps non-ASCII raw, but tabs, quotes, and control bytes in a path are
-    /// still escaped — and a tab inside an unquoted path would break the
-    /// name-status field split.
+    /// Reverses git's C-style path quoting; a tab inside an unquoted path
+    /// would break the name-status field split. Delegates to the shared
+    /// implementation so file-history paths and diff-header paths can never
+    /// resolve differently.
     static func unquotePath(_ raw: String) -> String {
-        guard raw.count >= 2, raw.hasPrefix("\""), raw.hasSuffix("\"") else { return raw }
-        let escaped = Array(raw.dropFirst().dropLast().utf8)
-        var bytes: [UInt8] = []
-        var i = 0
-        while i < escaped.count {
-            let byte = escaped[i]
-            guard byte == UInt8(ascii: "\\"), i + 1 < escaped.count else {
-                bytes.append(byte)
-                i += 1
-                continue
-            }
-            i += 1
-            let code = escaped[i]
-            switch code {
-            case UInt8(ascii: "a"): bytes.append(7)
-            case UInt8(ascii: "b"): bytes.append(8)
-            case UInt8(ascii: "t"): bytes.append(9)
-            case UInt8(ascii: "n"): bytes.append(10)
-            case UInt8(ascii: "v"): bytes.append(11)
-            case UInt8(ascii: "f"): bytes.append(12)
-            case UInt8(ascii: "r"): bytes.append(13)
-            case UInt8(ascii: "0")...UInt8(ascii: "7"):
-                var value = 0
-                var digits = 0
-                while i < escaped.count, digits < 3,
-                      (UInt8(ascii: "0")...UInt8(ascii: "7")).contains(escaped[i]) {
-                    value = value * 8 + Int(escaped[i] - UInt8(ascii: "0"))
-                    i += 1
-                    digits += 1
-                }
-                bytes.append(UInt8(truncatingIfNeeded: value))
-                continue
-            default: bytes.append(code)  // \" and \\ fall through here
-            }
-            i += 1
-        }
-        return String(decoding: bytes, as: UTF8.self)
+        GitPathQuoting.unquote(raw)
     }
 
     // MARK: - Blame
@@ -605,6 +569,16 @@ final class GitRepository: @unchecked Sendable {
         return BlameFile(lines: lines, annotations: annotations)
     }
 
+    // Shared instance: blameDate runs once per unique commit in a blame, and
+    // DateFormatter construction dominates the cost. Mutating the time zone
+    // per call is safe — the type is MainActor-isolated.
+    private static let blameDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+
     /// Formats porcelain's epoch + "+0900"-style offset as a short local-to-
     /// the-author date.
     static func blameDate(epoch: String?, timeZone: String?) -> String {
@@ -613,11 +587,8 @@ final class GitRepository: @unchecked Sendable {
         if let timeZone, timeZone.count == 5, let value = Int(timeZone) {
             offsetSeconds = (abs(value) / 100 * 3600 + abs(value) % 100 * 60) * (value < 0 ? -1 : 1)
         }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        formatter.timeZone = TimeZone(secondsFromGMT: offsetSeconds) ?? .current
-        return formatter.string(from: Date(timeIntervalSince1970: seconds))
+        blameDateFormatter.timeZone = TimeZone(secondsFromGMT: offsetSeconds) ?? .current
+        return blameDateFormatter.string(from: Date(timeIntervalSince1970: seconds))
     }
 
     // MARK: - Staging / committing
@@ -1517,28 +1488,29 @@ final class GitRepository: @unchecked Sendable {
         // so it is safe to delete as soon as the command returns — even on a
         // conflict stop.
         defer { try? FileManager.default.removeItem(at: todoFile) }
-        try await executor.run([
-            "-c", "sequence.editor=/bin/cp -f \(Self.shellQuote(todoFile.path))",
-            "-c", "core.editor=true",
-            // A comment char like `p` or `d` would turn todo commands into
-            // comments; pin the default.
-            "-c", "core.commentChar=#",
-            // A transiently failing amend exec (e.g. broken gpg signing) is
-            // retried on --continue instead of being silently dropped, which
-            // would lose the message rewrite while reporting success.
-            "-c", "rebase.rescheduleFailedExec=true",
-            "rebase", "--interactive",
-            // A pick that reorder/drop made empty is kept instead of
-            // stopping: the stop's obvious "Continue" drops the commit and
-            // desynchronizes the todo from its pending exec rewrites. The
-            // amend execs pass --allow-empty and tolerate kept-empty picks.
-            "--empty=keep",
-            // rebase.updateRefs would put update-ref lines into the todo the
-            // cp injection then discards; disable it explicitly so the
-            // behavior is deliberate rather than silently config-dependent.
-            "--no-update-refs",
-            baseHash ?? "--root",
-        ])
+        try await executor.run(Self.interactiveRebaseArguments(todoPath: todoFile.path, baseHash: baseHash))
+    }
+
+    /// The full argv that starts an app-driven interactive rebase. The config
+    /// pins come from `operationArguments(.rebase)` — the same ones
+    /// `--continue` re-applies, which must match because a continued rebase
+    /// re-reads the remaining todo. Static so tests can pin the whole argv.
+    static func interactiveRebaseArguments(todoPath: String, baseHash: String?) -> [String] {
+        ["-c", "sequence.editor=/bin/cp -f \(shellQuote(todoPath))"]
+            + operationArguments(.rebase)
+            + [
+                "rebase", "--interactive",
+                // A pick that reorder/drop made empty is kept instead of
+                // stopping: the stop's obvious "Continue" drops the commit and
+                // desynchronizes the todo from its pending exec rewrites. The
+                // amend execs pass --allow-empty and tolerate kept-empty picks.
+                "--empty=keep",
+                // rebase.updateRefs would put update-ref lines into the todo the
+                // cp injection then discards; disable it explicitly so the
+                // behavior is deliberate rather than silently config-dependent.
+                "--no-update-refs",
+                baseHash ?? "--root",
+            ]
     }
 
     func stashPush(message: String?) async throws {

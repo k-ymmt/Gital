@@ -162,6 +162,9 @@ final class PullRequestsModel {
     /// When the PR list was last fetched; lets tab entry skip a re-fetch
     /// that just ran (repo open, a merge, a recent entry).
     @ObservationIgnored private var lastListRefresh: Date?
+    /// Tab entry, a merge, and `refreshAll` can all trigger a list refresh
+    /// concurrently; without supersession the slowest gh run would win.
+    @ObservationIgnored private let listLoader = LatestLoader()
 
     init(repository: GitRepository, github: GitHubService) {
         self.repository = repository
@@ -216,19 +219,28 @@ final class PullRequestsModel {
 
     func refresh() async {
         lastListRefresh = .now
-        do {
-            // Fetched once per repo session; a failure (offline, gh not
-            // authenticated) is non-fatal — the "awaiting your review"
-            // filter just matches nothing until the next refresh.
+        // The viewer login is fetched once per repo session; a failure
+        // (offline, gh not authenticated) is non-fatal — the "awaiting your
+        // review" filter just matches nothing until the next refresh.
+        let result = await listLoader.run { [github, viewerLogin] in
             async let viewerTask = viewerLogin == nil ? github.viewerLogin() : nil
-            pullRequests = try await github.listPullRequests()
+            let list = try await github.listPullRequests()
+            return (list, try? await viewerTask)
+        }
+        switch result {
+        case .success(let (list, login)):
+            pullRequests = list
             loadError = nil
-            if let login = try? await viewerTask, !login.isEmpty {
+            if let login, !login.isEmpty {
                 viewerLogin = login
             }
-        } catch {
-            pullRequests = []
+        case .failure(let error):
+            // Keep the current list on screen — a transient failure should
+            // not blank a list a user is looking at (or one a newer refresh
+            // already replaced).
             loadError = error.localizedDescription
+        case nil:
+            break
         }
     }
 

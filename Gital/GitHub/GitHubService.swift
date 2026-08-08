@@ -452,12 +452,18 @@ struct GitHubService {
         }
     }
 
-    private static func relativeDate(from iso: String) -> String {
-        let formatter = ISO8601DateFormatter()
-        guard let date = formatter.date(from: iso) else { return iso }
+    // Shared instances: this runs once per PR row and per review comment,
+    // and formatter construction dominates the cost.
+    private static let isoFormatter = ISO8601DateFormatter()
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
         let relative = RelativeDateTimeFormatter()
         relative.unitsStyle = .full
-        return relative.localizedString(for: date, relativeTo: Date())
+        return relative
+    }()
+
+    private static func relativeDate(from iso: String) -> String {
+        guard let date = isoFormatter.date(from: iso) else { return iso }
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
     }
 
     private func runGH(_ arguments: [String], stdin: Data? = nil) async throws -> Data {

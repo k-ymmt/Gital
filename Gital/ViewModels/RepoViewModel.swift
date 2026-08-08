@@ -121,7 +121,6 @@ final class RepoViewModel {
         didSet { if oldValue != selectedChange { Task { await loadWorkingDiffs() } } }
     }
 
-    var selectedChangePath: String? { selectedChange?.path }
     var workingDiffs: [FileDiff] = []
     /// IDs of every visible line in `workingDiffs`, maintained by
     /// `loadWorkingDiffs` — views must not rebuild this O(all lines) set on

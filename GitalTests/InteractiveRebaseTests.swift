@@ -318,4 +318,29 @@ struct InteractiveRebaseTests {
         // Other operations keep only the editor pin.
         #expect(GitRepository.operationArguments(.merge) == ["-c", "core.editor=true"])
     }
+
+    // MARK: - Start argv
+
+    @Test func interactiveRebaseStartCarriesTheSamePinsAsContinue() {
+        let args = GitRepository.interactiveRebaseArguments(todoPath: "/tmp/todo.txt", baseHash: "abc")
+        // A continued rebase re-reads the remaining todo, so every pin the
+        // continuation applies must already hold at start.
+        for pin in GitRepository.operationArguments(.rebase) where pin != "-c" {
+            #expect(args.contains(pin), "start argv is missing continuation pin \(pin)")
+        }
+        #expect(args.contains("sequence.editor=/bin/cp -f '/tmp/todo.txt'"))
+        #expect(args.contains("--empty=keep"))
+        #expect(args.contains("--no-update-refs"))
+        #expect(args.last == "abc")
+    }
+
+    @Test func interactiveRebaseWithoutBaseTargetsRoot() {
+        let args = GitRepository.interactiveRebaseArguments(todoPath: "/tmp/todo.txt", baseHash: nil)
+        #expect(args.last == "--root")
+    }
+
+    @Test func interactiveRebaseQuotesTodoPathsWithSpaces() {
+        let args = GitRepository.interactiveRebaseArguments(todoPath: "/tmp/with space/todo.txt", baseHash: "abc")
+        #expect(args.contains("sequence.editor=/bin/cp -f '/tmp/with space/todo.txt'"))
+    }
 }
