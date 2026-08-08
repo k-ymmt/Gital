@@ -1,8 +1,42 @@
 import Foundation
 
+enum CodexError: LocalizedError {
+    case notInstalled
+    case protocolError(String)
+    case turnFailed(String)
+    case terminated
+
+    var errorDescription: String? {
+        switch self {
+        case .notInstalled:
+            "codex CLI not found. Install it with `npm install -g @openai/codex`."
+        case .protocolError(let message):
+            "Codex app-server protocol error: \(message)"
+        case .turnFailed(let message):
+            "Codex turn failed: \(message)"
+        case .terminated:
+            "The Codex app-server process exited unexpectedly."
+        }
+    }
+}
+
+enum CodexTurnEvent {
+    /// Progress that changes nothing ("Thinking…").
+    case status(String)
+    /// Codex started running a command or editing files. Separate from
+    /// `.status` so text-only consumers (commit-message generation) can treat
+    /// repository side effects as a contract violation instead of pattern-
+    /// matching on display strings.
+    case sideEffect(String)
+    case delta(String)
+    case completed(String)
+}
+
 /// Accumulates raw stdout chunks and yields complete newline-terminated
 /// lines; a partial trailing line stays buffered until its newline arrives.
-struct NewlineBuffer {
+/// `nonisolated`: pure value type used from the CodexAppServer actor, which
+/// must not hop to the main actor to buffer stdout.
+nonisolated struct NewlineBuffer {
     private var buffer = Data()
 
     mutating func append(_ data: Data) -> [Data] {
@@ -19,7 +53,7 @@ struct NewlineBuffer {
 
 /// A JSON-RPC request id, which the spec allows to be a number or a string.
 /// Server-initiated requests must be echoed back with the exact same id.
-enum CodexRequestID: Equatable {
+nonisolated enum CodexRequestID: Equatable {
     case number(Int)
     case string(String)
 
@@ -43,7 +77,7 @@ enum CodexRequestID: Equatable {
 
 /// The app-server notifications this client reacts to, decoded into typed
 /// payloads at the parse boundary so the turn observer is a plain switch.
-enum CodexNotification {
+nonisolated enum CodexNotification {
     enum ItemKind {
         case commandExecution(command: String)
         case fileChange
@@ -85,7 +119,7 @@ enum CodexNotification {
 }
 
 /// One parsed line of the codex app-server's newline-delimited JSON-RPC.
-enum CodexServerMessage {
+nonisolated enum CodexServerMessage {
     /// Response to one of our requests: has an id and no method. Matching on
     /// the id alone would let a server-initiated request with a colliding id
     /// swallow a pending continuation.

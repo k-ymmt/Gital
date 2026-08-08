@@ -1,39 +1,11 @@
 import Foundation
 import os
 
-enum CodexError: LocalizedError {
-    case notInstalled
-    case protocolError(String)
-    case turnFailed(String)
-    case terminated
-
-    var errorDescription: String? {
-        switch self {
-        case .notInstalled:
-            "codex CLI not found. Install it with `npm install -g @openai/codex`."
-        case .protocolError(let message):
-            "Codex app-server protocol error: \(message)"
-        case .turnFailed(let message):
-            "Codex turn failed: \(message)"
-        case .terminated:
-            "The Codex app-server process exited unexpectedly."
-        }
-    }
-}
-
-enum CodexTurnEvent {
-    /// Progress that changes nothing ("Thinking…").
-    case status(String)
-    /// Codex started running a command or editing files. Separate from
-    /// `.status` so text-only consumers (commit-message generation) can treat
-    /// repository side effects as a contract violation instead of pattern-
-    /// matching on display strings.
-    case sideEffect(String)
-    case delta(String)
-    case completed(String)
-}
-
-/// JSON-RPC client for `codex app-server` speaking newline-delimited JSON over stdio.
+/// JSON-RPC client for `codex app-server` speaking newline-delimited JSON
+/// over stdio. One actor, two clearly-owned halves: `Wire` (below) owns the
+/// process handles and pending REQUESTS, the actor itself owns the TURNS —
+/// every teardown path sweeps each half through its owner, so none of them
+/// can forget a step.
 actor CodexAppServer {
     /// Book-keeping for one in-flight turn, including its notification
     /// handler. Mutated only on the actor's executor (dispatch + actor
@@ -77,19 +49,11 @@ actor CodexAppServer {
         self.executableOverride = executableOverride
     }
 
-    private var process: Process?
-    private var stdinHandle: FileHandle?
-    private var nextRequestID = 10
-    private var pendingRequests: [Int: CheckedContinuation<[String: Any], Error>] = [:]
+    private var wire = Wire()
     /// The single turn registry: each record owns its notification handler,
     /// so registration and cleanup are one map operation (the old separate
     /// handler dictionary invited drift between the two).
     private var activeTurns: [UUID: TurnRecord] = [:]
-    private var lineBuffer = NewlineBuffer()
-    /// Bumped on every process replacement; stamps stdout drains so a
-    /// straggling flush from a previous process's pipe cannot feed the new
-    /// process's line buffer.
-    private var pipeGeneration = 0
     private var initTask: Task<Void, Error>?
     /// Bumped whenever `initTask` is replaced; lets awaiting callers detect
     /// that the task they waited on is no longer the current one.
@@ -131,15 +95,19 @@ actor CodexAppServer {
         }
     }
 
+    /// Repo close: every turn dies, even ones still in setup — unlike the
+    /// narrower process-replacement and exit sweeps below.
     func shutdown() {
-        let old = process
-        process = nil
-        stdinHandle = nil
         initTask = nil
         threadIDsByConversation = [:]
-        failEverything(with: CodexError.terminated)
-        old?.terminationHandler = nil
-        old?.terminate()
+        let old = wire.retire(with: CodexError.terminated)
+        failAllTurns(with: CodexError.terminated)
+        if let old {
+            old.terminationHandler = nil
+            // Escalates to SIGKILL: a codex that ignores SIGTERM must not
+            // survive the repository being closed.
+            Subprocess.terminateWithEscalation(old)
+        }
     }
 
     // MARK: - Turn plumbing
@@ -295,7 +263,7 @@ actor CodexAppServer {
                 if initGeneration == generation { initTask = nil }
                 throw error
             }
-            if process?.isRunning == true { return }
+            if wire.isRunning { return }
             if initGeneration == generation { initTask = nil }  // launched earlier but died since
         }
         initGeneration += 1
@@ -319,7 +287,7 @@ actor CodexAppServer {
         // Newer codex releases (observed on 0.145.0) queue every subsequent
         // request until the client confirms the handshake with this
         // notification — without it, thread/start never gets an answer.
-        try write([
+        try wire.write([
             "jsonrpc": "2.0",
             "method": "initialized",
         ])
@@ -329,26 +297,23 @@ actor CodexAppServer {
         // Replace any previous (dead or stale) process WITHOUT sweeping
         // turns still in setup: a first turn registers itself in
         // `activeTurns` before setup reaches this point, and the full
-        // `shutdown()` that used to run here failed that fresh turn with
-        // "exited unexpectedly" on every launch — while codex itself came
-        // up fine underneath. Everything owned by the OLD process is swept:
-        // its pending requests and started turns (normally already failed by
-        // `processDidExit`, but that sweep is skipped when the exit races a
-        // relaunch past the identity guard — without this, such turns leak
-        // as spinners that never finish), its buffered partial output (a
-        // half-line from a crashed codex would glue onto the new process's
-        // first response and hang `initialize` forever), and the thread-ID
-        // map.
-        let old = process
-        process = nil
-        stdinHandle = nil
+        // shutdown-style sweep that used to run here failed that fresh turn
+        // with "exited unexpectedly" on every launch — while codex itself
+        // came up fine underneath. Everything owned by the OLD process is
+        // swept: `wire.retire` fails its pending requests and drops its
+        // buffered partial output (a half-line from a crashed codex would
+        // glue onto the new process's first response and hang `initialize`
+        // forever), and `failStartedTurns` finishes its started turns
+        // (normally already failed by `processDidExit`, but that sweep is
+        // skipped when the exit races a relaunch past the identity guard —
+        // without this, such turns leak as spinners that never finish).
         threadIDsByConversation = [:]
-        lineBuffer = NewlineBuffer()
-        pipeGeneration += 1
-        failPendingRequests(with: CodexError.terminated)
+        let old = wire.retire(with: CodexError.terminated)
         failStartedTurns(with: CodexError.terminated)
-        old?.terminationHandler = nil
-        old?.terminate()
+        if let old {
+            old.terminationHandler = nil
+            Subprocess.terminateWithEscalation(old)
+        }
 
         let codexURL: URL
         if let executableOverride {
@@ -379,10 +344,10 @@ actor CodexAppServer {
         process.standardError = stderrPipe
 
         // The generation stamp keeps a straggling drain of the OLD pipe
-        // (its handler can still be flushing when the replacement above has
+        // (its handler can still be flushing when `wire.retire` above has
         // already reset the line buffer) from corrupting the new process's
         // stream.
-        let generation = pipeGeneration
+        let generation = wire.pipeGeneration
         stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty else {
@@ -415,18 +380,14 @@ actor CodexAppServer {
             throw CodexError.notInstalled
         }
 
-        self.process = process
-        self.stdinHandle = stdinPipe.fileHandleForWriting
+        wire.adopt(process, stdin: stdinPipe.fileHandleForWriting)
     }
 
     private func processDidExit(_ exited: Process) {
-        guard exited === process else { return }  // stale handler after a restart
-        process = nil
-        stdinHandle = nil
+        guard exited === wire.process else { return }  // stale handler after a restart
         initTask = nil
         threadIDsByConversation = [:]
-        lineBuffer = NewlineBuffer()
-        failPendingRequests(with: CodexError.terminated)
+        _ = wire.retire(with: CodexError.terminated)
         // Only turns already attached to a codex thread die with the
         // process. A turn still in setup rides on the launch/request
         // continuations — if it was waiting on this process, the request
@@ -437,25 +398,17 @@ actor CodexAppServer {
         failStartedTurns(with: CodexError.terminated)
     }
 
-    /// Fails every pending request and finishes every active turn stream —
-    /// nothing may be left waiting on a process that no longer exists.
-    /// Reserved for `shutdown()` (repo close), where even setup-phase turns
-    /// must die; process replacement and exit use the narrower sweeps.
-    private func failEverything(with error: Error) {
-        failPendingRequests(with: error)
+    // MARK: - Turn sweeps (the wire sweeps requests; the actor sweeps turns)
+
+    /// Finishes every active turn stream, setup-phase ones included.
+    /// Reserved for `shutdown()` (repo close); process replacement and exit
+    /// use the narrower `failStartedTurns`.
+    private func failAllTurns(with error: Error) {
         let turns = activeTurns
         activeTurns = [:]
         for record in turns.values {
             record.completed = true
             record.continuation.finish(throwing: error)
-        }
-    }
-
-    private func failPendingRequests(with error: Error) {
-        let pending = pendingRequests
-        pendingRequests = [:]
-        for continuation in pending.values {
-            continuation.resume(throwing: error)
         }
     }
 
@@ -473,38 +426,25 @@ actor CodexAppServer {
     // MARK: - JSON-RPC
 
     private func sendRequest(method: String, params: [String: Any]) async throws -> [String: Any] {
-        let id = nextRequestID
-        nextRequestID += 1
-
+        let id = wire.allocateRequestID()
         let message: [String: Any] = [
             "jsonrpc": "2.0",
             "id": id,
             "method": method,
             "params": params,
         ]
-        try write(message)
+        try wire.write(message)
 
+        // No suspension between the write and the registration below, so the
+        // response (which arrives through this same actor) cannot beat the
+        // continuation into the table.
         return try await withCheckedThrowingContinuation { continuation in
-            pendingRequests[id] = continuation
-        }
-    }
-
-    private func write(_ message: [String: Any]) throws {
-        var data = try JSONSerialization.data(withJSONObject: message)
-        data.append(0x0a)
-        guard let stdinHandle, process?.isRunning == true else {
-            throw CodexError.protocolError("app-server not running")
-        }
-        do {
-            try stdinHandle.write(contentsOf: data)
-        } catch {
-            throw CodexError.terminated
+            wire.register(continuation, for: id)
         }
     }
 
     private func consume(_ data: Data, generation: Int) {
-        guard generation == pipeGeneration else { return }  // old process's pipe
-        for lineData in lineBuffer.append(data) {
+        for lineData in wire.bufferLines(data, generation: generation) {
             guard let message = CodexServerMessage.parse(lineData) else {
                 // Never drop a line silently — an unexpected shape here is
                 // the first symptom of a protocol change.
@@ -518,7 +458,7 @@ actor CodexAppServer {
     private func dispatch(_ message: CodexServerMessage) {
         switch message {
         case .response(let id, let result, let errorMessage):
-            guard let continuation = pendingRequests.removeValue(forKey: id) else { return }
+            guard let continuation = wire.takeContinuation(for: id) else { return }
             if let errorMessage {
                 continuation.resume(throwing: CodexError.protocolError(errorMessage))
             } else {
@@ -561,7 +501,7 @@ actor CodexAppServer {
                 "error": ["code": -32601, "message": "method not supported: \(method)"],
             ]
         }
-        try? write(response)
+        try? wire.write(response)
     }
 
     private func approvalDecision(params: [String: Any]) -> String {
@@ -596,5 +536,90 @@ actor CodexAppServer {
             textOnly = running.contains { $0.textOnly }
         }
         return textOnly ? "denied" : "approved"
+    }
+
+    // MARK: - Wire
+
+    /// The wire to one codex process: the process handles, stdin writes,
+    /// request/response correlation, stdout line buffering, and the sweeps
+    /// tied to replacing or losing that process. A plain value owned by the
+    /// actor (all access stays on its executor); pulling this state into one
+    /// type makes the ownership rule structural instead of prose — the wire
+    /// sweeps pending requests, the actor sweeps turns — and `retire` is the
+    /// single teardown implementation, so no path can forget the line-buffer
+    /// reset or the generation bump.
+    private struct Wire {
+        private(set) var process: Process?
+        private var stdinHandle: FileHandle?
+        private var nextRequestID = 10
+        private var pendingRequests: [Int: CheckedContinuation<[String: Any], Error>] = [:]
+        private var lineBuffer = NewlineBuffer()
+        /// Bumped on every retirement; stamps stdout drains so a straggling
+        /// flush from a previous process's pipe cannot feed the new
+        /// process's line buffer.
+        private(set) var pipeGeneration = 0
+
+        var isRunning: Bool { process?.isRunning == true }
+
+        /// Retires the current process, if any: clears the handles, drops
+        /// buffered partial output, invalidates in-flight pipe drains, and
+        /// fails every pending request. Returns the old process for the
+        /// caller to terminate (nil when there was none, or when the caller
+        /// is reacting to the process having already exited).
+        mutating func retire(with error: Error) -> Process? {
+            let old = process
+            process = nil
+            stdinHandle = nil
+            lineBuffer = NewlineBuffer()
+            pipeGeneration += 1
+            failPendingRequests(with: error)
+            return old
+        }
+
+        mutating func adopt(_ process: Process, stdin: FileHandle) {
+            self.process = process
+            stdinHandle = stdin
+        }
+
+        mutating func allocateRequestID() -> Int {
+            defer { nextRequestID += 1 }
+            return nextRequestID
+        }
+
+        mutating func register(_ continuation: CheckedContinuation<[String: Any], Error>, for id: Int) {
+            pendingRequests[id] = continuation
+        }
+
+        mutating func takeContinuation(for id: Int) -> CheckedContinuation<[String: Any], Error>? {
+            pendingRequests.removeValue(forKey: id)
+        }
+
+        mutating func failPendingRequests(with error: Error) {
+            let pending = pendingRequests
+            pendingRequests = [:]
+            for continuation in pending.values {
+                continuation.resume(throwing: error)
+            }
+        }
+
+        /// Appends a stdout chunk and yields the complete lines it closes;
+        /// chunks stamped for a retired process's pipe are dropped.
+        mutating func bufferLines(_ data: Data, generation: Int) -> [Data] {
+            guard generation == pipeGeneration else { return [] }
+            return lineBuffer.append(data)
+        }
+
+        func write(_ message: [String: Any]) throws {
+            var data = try JSONSerialization.data(withJSONObject: message)
+            data.append(0x0a)
+            guard let stdinHandle, isRunning else {
+                throw CodexError.protocolError("app-server not running")
+            }
+            do {
+                try stdinHandle.write(contentsOf: data)
+            } catch {
+                throw CodexError.terminated
+            }
+        }
     }
 }

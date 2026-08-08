@@ -219,7 +219,7 @@ enum DiffHTMLBuilder {
     /// An empty span copies as nothing — the blank line would vanish from
     /// multi-line copies — so empty lines carry a real space (exactly what
     /// the SwiftUI renderer put in its `Text`).
-    private static func textContent(_ text: String) -> String {
+    private nonisolated static func textContent(_ text: String) -> String {
         text.isEmpty ? " " : escape(text)
     }
 
@@ -272,7 +272,7 @@ enum DiffHTMLBuilder {
         return "<div class=\"hunk\"\(idAttr)><span class=\"htext\">\(escape(text))</span>\(buttonSpan)</div>\n"
     }
 
-    private static func kindClass(_ kind: DiffLine.Kind) -> String {
+    private nonisolated static func kindClass(_ kind: DiffLine.Kind) -> String {
         switch kind {
         case .addition: "add"
         case .deletion: "del"
@@ -282,7 +282,7 @@ enum DiffHTMLBuilder {
 
     // MARK: - Escaping
 
-    static func escape(_ text: String) -> String {
+    nonisolated static func escape(_ text: String) -> String {
         var out = ""
         out.reserveCapacity(text.count)
         for char in text {
@@ -298,7 +298,7 @@ enum DiffHTMLBuilder {
 
     /// Attribute values additionally need quote escaping — line and hunk IDs
     /// embed the file path, which can contain anything.
-    static func escapeAttr(_ text: String) -> String {
+    nonisolated static func escapeAttr(_ text: String) -> String {
         escape(text).replacingOccurrences(of: "\"", with: "&quot;")
     }
 
