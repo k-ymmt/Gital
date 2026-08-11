@@ -45,6 +45,13 @@ enum Subprocess {
         let stderr: Data
     }
 
+    /// Single-quotes a string for POSIX `sh` — the one implementation shared
+    /// by every caller that has to embed a value in a shell command line
+    /// (git's sequence.editor, the install helper's script).
+    nonisolated static func shellSingleQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// How long after process exit to keep waiting for pipe EOF before
     /// finishing with whatever output has been drained. A child left running
     /// in the background (git's fsmonitor daemon, credential helpers, gh's

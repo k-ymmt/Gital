@@ -101,7 +101,7 @@ enum CommandLineToolInstaller {
     }
 
     private static func shellSingleQuoted(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        Subprocess.shellSingleQuoted(value)
     }
 
     private static func appleScriptLiteral(_ value: String) -> String {

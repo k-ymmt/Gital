@@ -282,7 +282,7 @@ extension GitRepository {
     /// Single-quotes a string for POSIX `sh` (sequence.editor runs through
     /// the shell).
     static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        Subprocess.shellSingleQuoted(value)
     }
 
     /// Starts an interactive rebase driven by a pre-built todo. The todo is
