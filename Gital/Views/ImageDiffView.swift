@@ -207,8 +207,13 @@ struct ImageDiffView: View {
                 continue  // no blob at this revision — try the next source
             }
             guard size <= Self.maxPreviewBytes else { return .unavailable }
-            guard let data = try? await context.repository.fileContents(path: path, at: revision),
-                  !data.isEmpty else { return .absent }
+            guard let data = try? await context.repository.fileContents(path: path, at: revision) else {
+                // The blob exists (fileSize just succeeded) but couldn't be
+                // read — "No image" here would assert an add/delete that
+                // never happened.
+                return .unavailable
+            }
+            guard !data.isEmpty else { return .absent }
             guard data.count <= Self.maxPreviewBytes, !Self.isLFSPointer(data),
                   let image = NSImage(data: data) else { return .unavailable }
             return .loaded(image, bytes: data.count)

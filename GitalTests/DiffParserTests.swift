@@ -23,6 +23,49 @@ struct DiffParserTests {
         #expect(addition.oldNumber == nil && addition.newNumber == 43, "addition line numbering")
     }
 
+    // CRLF file content: "\r\n" is a single grapheme that never equals "\n",
+    // so a Character-based split would fuse the whole hunk into one context
+    // "line" and every +/- row would vanish.
+    @Test func crlfDiff() throws {
+        let crlfDiff = "diff --git a/win.txt b/win.txt\n"
+            + "index 1111111..2222222 100644\n"
+            + "--- a/win.txt\n"
+            + "+++ b/win.txt\n"
+            + "@@ -1,2 +1,2 @@\n"
+            + " line1\r\n"
+            + "-old\r\n"
+            + "+new\r\n"
+        let diffs = DiffParser.parse(crlfDiff)
+        #expect(diffs.count == 1 && diffs[0].hunks.count == 1, "CRLF diff parses")
+        #expect(diffs[0].additions == 1 && diffs[0].deletions == 1, "CRLF +/- lines are classified")
+        let lines = diffs[0].hunks[0].lines
+        #expect(lines.count == 3, "CRLF hunk keeps three rows")
+        let deletion = try #require(lines.first { $0.kind == .deletion })
+        #expect(deletion.text == "old\r", "the \\r stays part of the content (PatchBuilder needs it)")
+        #expect(deletion.oldNumber == 2, "CRLF deletion numbering")
+    }
+
+    // Combined hunks: a removed line marks `-` only in the columns of parents
+    // that had it — " -" was in the SECOND parent only and must not consume a
+    // first-parent line number.
+    @Test func combinedSecondParentOnlyDeletion() {
+        let diff = """
+diff --cc file.txt
+index 1e427e4,c08134a..0000000
+--- a/file.txt
++++ b/file.txt
+@@@ -1,4 -1,4 +1,2 @@@
+  keep
+ -second only
+- first only
+  tail
+"""
+        let lines = DiffParser.parse(diff)[0].hunks[0].lines
+        #expect(lines[1].kind == .deletion && lines[1].oldNumber == nil, "second-parent-only deletion carries no first-parent number")
+        #expect(lines[2].kind == .deletion && lines[2].oldNumber == 2, "first-parent deletion numbering unaffected")
+        #expect(lines[3].kind == .context && lines[3].oldNumber == 3, "context after deletions is not shifted")
+    }
+
     // Hunk headers omit the count when a side is exactly one line (@@ -1 +1 @@).
     @Test func countlessHunkHeader() {
         let singleLineDiff = """

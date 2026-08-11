@@ -11,10 +11,12 @@ extension RepoViewModel {
     /// retries). Refreshes only what a fetch can change; the working diff and
     /// the PR list (a gh network call of its own) are untouched.
     func autoFetchTick(interval: TimeInterval) async {
-        guard !isSyncing else { return }
+        guard !isSyncing, !isAutoFetching else { return }
         let now = ContinuousClock.now
         guard AutoFetchPreference.shouldFetch(lastFetch: lastAutoFetch, now: now, interval: interval) else { return }
         lastAutoFetch = now
+        isAutoFetching = true
+        defer { isAutoFetching = false }
         // Timeout because the executor serializes network commands behind
         // this fetch: a wedged remote would otherwise stall every push/pull
         // (and the following ticks) with no busy indicator anywhere. `try?`
@@ -260,7 +262,7 @@ extension RepoViewModel {
     /// a plain stage would let `<<<<<<<` blocks reach the next commit.
     func requestMarkResolved(_ change: FileChange) {
         Task {
-            if repository.containsConflictMarkers(path: change.path) {
+            if await repository.containsConflictMarkers(path: change.path) {
                 pendingMarkResolved = change
             } else {
                 stage(change)

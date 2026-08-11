@@ -135,9 +135,13 @@ extension GitRepository {
     func createBranch(name: String, at startPoint: String? = nil, checkout: Bool) async throws {
         let start = startPoint.map { [$0] } ?? []
         if checkout {
+            // `-b` consumes the next argument as its value, so an
+            // option-looking name can't be re-parsed as a flag here.
             try await executor.run(["checkout", "-b", name] + start)
         } else {
-            try await executor.run(["branch", name] + start)
+            // `--`: `name` is free text from the new-branch prompt — without
+            // the separator a value like "--force" is parsed as an option.
+            try await executor.run(["branch", "--", name] + start)
         }
     }
 
@@ -192,7 +196,9 @@ extension GitRepository {
         try await executor.run(["remote", "remove", name])
     }
 
+    /// `--` separator: `name` is free text from the new-tag prompt — without
+    /// it a name like "--delete" turns the create into a delete.
     func createTag(name: String, at hash: String) async throws {
-        try await executor.run(["tag", name, hash])
+        try await executor.run(["tag", "--", name, hash])
     }
 }

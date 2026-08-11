@@ -150,20 +150,23 @@ extension RepoViewModel {
             // discard wipes whatever the worktree holds at execution time —
             // if the file gains changes while the alert sits open (an agent
             // writing, an editor autosave), those must not be swept away.
-            Task {
-                pendingDiscardSnapshot = try? await repository.diffWorking(staged: false, path: change.path)
+            // Stored as the task itself: performDiscard awaits it, and a
+            // superseded request's late result can't clobber a newer one.
+            pendingDiscardSnapshot = Task { [repository] in
+                try? await repository.diffWorking(staged: false, path: change.path)
             }
         }
     }
 
     func performDiscard(_ target: DiscardTarget) {
-        let snapshot = pendingDiscardSnapshot
+        let snapshotTask = pendingDiscardSnapshot
         pendingDiscardSnapshot = nil
         perform(refresh: .workingCopy) {
             switch target {
             case .file(let change) where change.status == .untracked:
                 try await self.repository.removeUntracked([change.path])
             case .file(let change):
+                let snapshot = await snapshotTask?.value
                 let current = try await self.repository.diffWorking(staged: false, path: change.path)
                 if let snapshot, current != snapshot {
                     throw GitError(

@@ -172,7 +172,10 @@ extension RepoViewModel {
                     )
                 case .delta(let delta):
                     reply += delta
-                    commitMessage = reply
+                    // After cancellation (commit ⌘↩ mid-stream) a buffered
+                    // delta must not refill the freshly cleared composer
+                    // with a message for changes that were just committed.
+                    if !Task.isCancelled { commitMessage = reply }
                 case .completed(let text):
                     if !text.isEmpty { reply = text }
                 }

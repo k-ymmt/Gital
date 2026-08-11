@@ -5,7 +5,7 @@ import Foundation
 extension GitRepository {
     func stage(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try await executor.run(["add", "--"] + paths)
+        try await executor.run(["add", "--"] + paths.map(GitPathQuoting.literalPathspec))
     }
 
     func stageAll() async throws {
@@ -17,7 +17,7 @@ extension GitRepository {
         // `reset -- <paths>` instead of `restore --staged`: identical for a
         // normal HEAD, but also works on an unborn branch (fresh repo), where
         // restore fails with "could not resolve 'HEAD'".
-        try await executor.run(["reset", "-q", "--"] + paths)
+        try await executor.run(["reset", "-q", "--"] + paths.map(GitPathQuoting.literalPathspec))
     }
 
     func unstageAll() async throws {
@@ -34,12 +34,14 @@ extension GitRepository {
 
     func discardChanges(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try await executor.run(["checkout", "--"] + paths)
+        try await executor.run(["checkout", "--"] + paths.map(GitPathQuoting.literalPathspec))
     }
 
     func removeUntracked(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
-        try await executor.run(["clean", "-f", "-d", "--"] + paths)
+        // :(literal) matters most here — a globbing pathspec could make
+        // `clean` delete a sibling file the user never confirmed.
+        try await executor.run(["clean", "-f", "-d", "--"] + paths.map(GitPathQuoting.literalPathspec))
     }
 
     /// Applies a patch to the worktree only — hunk/line-level discard uses

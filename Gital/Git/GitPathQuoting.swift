@@ -7,6 +7,17 @@ import Foundation
 /// (diff headers) — the two must agree, because diff-side paths feed row IDs
 /// and staging pathspecs that are later matched against status output.
 enum GitPathQuoting {
+    /// Wraps a concrete file path for use as a git pathspec. `:(literal)` is
+    /// load-bearing: a bare pathspec globs, so "app/[id]/page.tsx" matches
+    /// app/i/page.tsx instead of (or as well as) itself — a stage, diff, or
+    /// worst of all `clean`/`rm` would then hit the wrong file. Every place
+    /// that passes a known path as a pathspec must go through this; paths
+    /// that are NOT pathspecs (blame's positional file, --no-index operands)
+    /// must not.
+    static func literalPathspec(_ path: String) -> String {
+        ":(literal)\(path)"
+    }
+
     /// Unquotes a fully quoted path; returns other strings unchanged.
     static func unquote(_ raw: String) -> String {
         guard raw.hasPrefix("\"") else { return raw }

@@ -41,6 +41,14 @@ struct MergeConflictTests {
         // content) must not trigger the warning.
         #expect(!GitRepository.hasConflictMarkers(in: Data("a\n<<<<<<< HEAD\nb\n".utf8)))
         #expect(!GitRepository.hasConflictMarkers(in: Data("plain\ncontent\n".utf8)))
+
+        // CRLF files: "\r\n" is one grapheme that a Character-based split
+        // never breaks at "\n" — markers after a CRLF line must still be
+        // seen, whether the markers themselves end \r\n or bare \n.
+        let crlf = "line1\r\n<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> b\r\n"
+        #expect(GitRepository.hasConflictMarkers(in: Data(crlf.utf8)), "CRLF conflict markers detected")
+        let mixed = "line1\r\n<<<<<<< HEAD\nours\r\n=======\ntheirs\r\n>>>>>>> b\n"
+        #expect(GitRepository.hasConflictMarkers(in: Data(mixed.utf8)), "LF markers inside CRLF content detected")
     }
 
     @Test func parsesUnmergedEntries() {

@@ -99,7 +99,22 @@ final class RepoViewModel {
     var selectedCommitFilePath: String?
 
     var selectedCommit: Commit? {
-        commits.first { $0.hash == selectedCommitHash }
+        if let commit = commits.first(where: { $0.hash == selectedCommitHash }) { return commit }
+        // A parent-hash chip can select a commit outside the loaded log page
+        // (an older commit, or any hash the 400-commit window doesn't hold).
+        // loadCommitDetail resolves it fine, so synthesize the row from the
+        // loaded detail instead of blanking the pane to "Select a commit".
+        guard let detail = commitDetail, detail.hash == selectedCommitHash else { return nil }
+        return Commit(
+            hash: detail.hash,
+            parents: detail.parents,
+            author: detail.author,
+            authorEmail: detail.authorEmail,
+            relativeDate: detail.authorDate,
+            subject: detail.message.components(separatedBy: "\n").first ?? "",
+            body: "",
+            refs: detail.refs
+        )
     }
 
     var selectedCommitDiff: FileDiff? {
@@ -185,7 +200,13 @@ final class RepoViewModel {
     /// sheets must check this: with the window closed the presentation flag
     /// would wedge `true` with nothing to present from — or the sheet would
     /// queue invisibly and pop whenever a window reopens.
-    var isWindowHosted = false
+    /// A count, not a flag: ⌘N hosts the same model in a second window, and
+    /// closing either one must not read as "no window left".
+    var isWindowHosted: Bool { hostingWindowCount > 0 }
+    private var hostingWindowCount = 0
+
+    func windowDidAppear() { hostingWindowCount += 1 }
+    func windowDidDisappear() { hostingWindowCount = max(0, hostingWindowCount - 1) }
 
     // MARK: Stash selection
 
@@ -245,6 +266,11 @@ final class RepoViewModel {
     /// wall-clock gate would stop fetching after the clock jumps backwards.
     @ObservationIgnored var lastAutoFetch: ContinuousClock.Instant?
 
+    /// True while a timer-driven fetch is in flight — a slow remote must not
+    /// let the next tick (30s interval vs. 60s fetch timeout) queue a
+    /// duplicate fetch behind it on the serialized network lane.
+    @ObservationIgnored var isAutoFetching = false
+
     // MARK: Load supersession
     //
     // Each load kind runs through its own LatestLoader — a slow stale load
@@ -263,7 +289,10 @@ final class RepoViewModel {
     @ObservationIgnored let logLoader = LatestLoader()
     @ObservationIgnored let stashDiffLoader = LatestLoader()
     @ObservationIgnored private var syncCount = 0
-    @ObservationIgnored var pendingDiscardSnapshot: [FileDiff]?
+    /// In-flight capture of the diff the discard confirmation is about. A
+    /// task, not a value: `performDiscard` awaits it, so confirming before
+    /// the snapshot lands can never skip the changed-while-open guard.
+    @ObservationIgnored var pendingDiscardSnapshot: Task<[FileDiff]?, Never>?
 
     @ObservationIgnored private var watcher: RepoWatcher?
 

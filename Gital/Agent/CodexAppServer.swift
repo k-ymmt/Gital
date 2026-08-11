@@ -348,16 +348,26 @@ actor CodexAppServer {
         // already reset the line buffer) from corrupting the new process's
         // stream.
         let generation = wire.pipeGeneration
-        stdoutPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
+        // Chunks must reach the line buffer in pipe order: a fresh Task per
+        // chunk enqueues onto the actor with NO ordering guarantee, so a
+        // message split across two reads could be buffered swapped —
+        // stranding half a line and desyncing every byte after it. The
+        // stream is the ordered queue; one consumer task drains it.
+        let (chunks, chunkContinuation) = AsyncStream.makeStream(of: Data.self)
+        stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else {
                 // EOF: clear the handler or GCD spins on the closed pipe at
                 // 100% CPU until the app exits.
                 handle.readabilityHandler = nil
+                chunkContinuation.finish()
                 return
             }
-            Task { [weak self] in
-                await self?.consume(data, generation: generation)
+            chunkContinuation.yield(data)
+        }
+        Task { [weak self] in
+            for await chunk in chunks {
+                await self?.consume(chunk, generation: generation)
             }
         }
         // stderr must be drained too: a chatty codex blocks after ~64KB of

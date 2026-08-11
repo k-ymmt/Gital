@@ -42,4 +42,42 @@ struct GitHubServiceTests {
         #expect(detail.commits.first?.hash == "abcdef0", "pr commit hash is truncated to 7 chars")
         #expect(detail.labels.first?.name == "bug", "pr labels decode")
     }
+
+    // A re-requested reviewer's review row carries their display name while
+    // the request carries the login — matching must happen on login, and the
+    // fresh request demotes the stale review state back to pending.
+    @Test func reRequestedReviewerIsNotDuplicated() throws {
+        let json = Data("""
+        {"number": 1, "title": "T", "author": {"login": "alice", "name": null},
+         "state": "OPEN", "isDraft": false, "baseRefName": "main", "headRefName": "b",
+         "createdAt": "2026-07-01T00:00:00Z", "body": "", "additions": 0, "deletions": 0,
+         "changedFiles": 0, "mergeable": "MERGEABLE", "labels": [],
+         "latestReviews": [
+           {"author": {"login": "bob", "name": "Bob B"}, "state": "APPROVED"},
+           {"author": null, "state": "COMMENTED"},
+           {"author": null, "state": "COMMENTED"}
+         ],
+         "reviewRequests": [{"login": "bob"}],
+         "commits": [], "files": []}
+        """.utf8)
+        let detail = try GitHubService.parsePullRequestDetail(json)
+        let bobs = detail.reviewers.filter { $0.login == "bob" }
+        #expect(bobs.count == 1, "re-requested reviewer appears once")
+        #expect(bobs.first?.state == "PENDING", "re-request outranks the stale review state")
+        #expect(bobs.first?.name == "Bob B", "display name is kept")
+        let ids = detail.reviewers.map(\.id)
+        #expect(Set(ids).count == ids.count, "ghost (nil-author) reviewers still get unique row ids")
+    }
+
+    @Test func mergePullRequestLists() {
+        func pr(_ number: Int, state: String) -> PullRequestSummary {
+            PullRequestSummary(number: number, title: "PR \(number)", author: "a", state: state,
+                               isDraft: false, headRefName: "b\(number)", reviewRequestLogins: [])
+        }
+        let merged = GitHubService.mergePullRequestLists(
+            open: [pr(12, state: "OPEN"), pr(3, state: "OPEN")],
+            recent: [pr(12, state: "OPEN"), pr(11, state: "MERGED")]
+        )
+        #expect(merged.map(\.number) == [12, 11, 3], "windows merge de-duplicated, newest first")
+    }
 }

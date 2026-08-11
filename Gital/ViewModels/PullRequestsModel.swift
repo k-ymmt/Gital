@@ -298,7 +298,11 @@ final class PullRequestsModel {
                 detail = loaded
             }
         } catch {
-            loadError = error.localizedDescription
+            // Same guard as the success path: a stale load's failure must
+            // not paint its error over whichever PR is selected now.
+            if selectedNumber == number {
+                loadError = error.localizedDescription
+            }
         }
     }
 

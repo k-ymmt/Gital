@@ -8,7 +8,7 @@ extension GitRepository {
         if staged { args.append("--cached") }
         if let path {
             args.append("--")
-            args.append(path)
+            args.append(GitPathQuoting.literalPathspec(path))
         }
         let (output, valid) = try await executor.runChecked(args)
         return DiffParser.parse(output, scope: staged ? .staged : .unstaged, strictUTF8: valid)
@@ -29,10 +29,10 @@ extension GitRepository {
         var args = ["show", "--patch", "--format=", "--no-color", "--diff-merges=first-parent", hash]
         if let path {
             args.append("--")
-            args.append(path)
+            args.append(GitPathQuoting.literalPathspec(path))
             // A rename needs both sides in the pathspec, or the pair breaks
             // and the file shows as a bare addition (or nothing at all).
-            if let renamedFrom { args.append(renamedFrom) }
+            if let renamedFrom { args.append(GitPathQuoting.literalPathspec(renamedFrom)) }
         }
         let (output, valid) = try await executor.runChecked(args)
         return DiffParser.parse(output, strictUTF8: valid)
@@ -101,8 +101,11 @@ extension GitRepository {
     /// bytes they actually got.
     func fileSize(path: String, at revision: BlobRevision) async throws -> Int {
         guard let spec = Self.blobSpec(path: path, revision: revision) else {
+            // Resolve symlinks first: attributesOfItem reports the link's own
+            // few-byte length while fileContents follows it, so a symlink to
+            // a huge file would sail through the size gate.
             let attributes = try FileManager.default.attributesOfItem(
-                atPath: root.appendingPathComponent(path).path
+                atPath: root.appendingPathComponent(path).resolvingSymlinksInPath().path
             )
             return (attributes[.size] as? Int) ?? 0
         }

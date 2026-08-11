@@ -14,7 +14,11 @@ extension GitRepository {
         output.split(separator: "\n").enumerated().compactMap { index, line in
             let fields = line.components(separatedBy: "\u{1f}")
             guard fields.count >= 3 else { return nil }
-            return Stash(index: index, reference: fields[0], commitHash: fields[1], message: fields[2])
+            // %gs is free text (commit subjects, user stash messages) that
+            // can itself contain the separator byte — components() already
+            // split there, so stitch the tail back together like parseReflog.
+            let message = fields.dropFirst(2).joined(separator: "\u{1f}")
+            return Stash(index: index, reference: fields[0], commitHash: fields[1], message: message)
         }
     }
 

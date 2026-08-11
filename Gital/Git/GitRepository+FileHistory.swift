@@ -16,10 +16,10 @@ extension GitRepository {
             "-n", String(limit), "--pretty=format:\(format)",
         ]
         if let startHash { args.append(startHash) }
-        // :(literal) — a bare pathspec globs, so "app/[id]/page.tsx" would
-        // also pull in app/i/page.tsx's commits AND derail the rename
-        // tracking onto that file. --follow keeps working with it.
-        args.append(contentsOf: ["--", ":(literal)\(path)"])
+        // A bare pathspec globs and would also pull in app/i/page.tsx's
+        // commits AND derail the rename tracking onto that file. --follow
+        // keeps working with the literal form.
+        args.append(contentsOf: ["--", GitPathQuoting.literalPathspec(path)])
         let output: String
         do {
             output = try await executor.run(args)

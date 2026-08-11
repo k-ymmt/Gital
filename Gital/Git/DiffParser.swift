@@ -85,7 +85,12 @@ enum DiffParser {
             ))
         }
 
-        for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        // components, not split: split(separator: "\n") compares grapheme
+        // clusters, so the "\r\n" endings of a CRLF file's content lines never
+        // match and whole hunks would fuse into one context "line". The
+        // trailing "\r" stays part of each line's text — it is file content,
+        // and PatchBuilder needs it to rebuild patches that apply.
+        for line in output.components(separatedBy: "\n") {
             if line.hasPrefix("diff --git ") {
                 flushFile()
                 inFile = true
@@ -204,7 +209,13 @@ enum DiffParser {
                 let prefix = line.prefix(hunkParents)
                 guard prefix.allSatisfy({ $0 == " " || $0 == "+" || $0 == "-" }) else { continue }
                 let text = String(line.dropFirst(hunkParents))
-                let inFirstParent = prefix.first != "+"
+                // A removed line marks `-` only in the columns of parents
+                // that had it — a space there means that parent never did.
+                // Result lines are in the first parent unless its own column
+                // adds them.
+                let inFirstParent = prefix.contains("-")
+                    ? prefix.first == "-"
+                    : prefix.first != "+"
                 if prefix.contains("-") {
                     hunkLines.append(DiffLine(id: String(nextLineID), kind: .deletion, text: text, oldNumber: inFirstParent ? oldNumber : nil, newNumber: nil))
                 } else if prefix.contains("+") {

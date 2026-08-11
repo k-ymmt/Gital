@@ -118,36 +118,44 @@ extension GitRepository {
         guard !paths.isEmpty else { return }
         let stage = side == .ours ? 2 : 3
         let unmerged = Self.parseUnmergedEntries(
-            try await executor.run(["ls-files", "-u", "-z", "--"] + paths)
+            try await executor.run(["ls-files", "-u", "-z", "--"] + paths.map(GitPathQuoting.literalPathspec))
         )
         let sideExists = Set(unmerged.filter { $0.stage == stage }.map(\.path))
         let checkoutPaths = paths.filter { sideExists.contains($0) }
         let deletePaths = paths.filter { !sideExists.contains($0) }
         if !checkoutPaths.isEmpty {
-            try await executor.run(["checkout", "--\(side.rawValue)", "--"] + checkoutPaths)
-            try await executor.run(["add", "--"] + checkoutPaths)
+            try await executor.run(["checkout", "--\(side.rawValue)", "--"] + checkoutPaths.map(GitPathQuoting.literalPathspec))
+            try await executor.run(["add", "--"] + checkoutPaths.map(GitPathQuoting.literalPathspec))
         }
         if !deletePaths.isEmpty {
             // -f: the worktree copy holds the other side's content, which git
             // otherwise refuses to remove as "local modifications".
-            try await executor.run(["rm", "-f", "--"] + deletePaths)
+            try await executor.run(["rm", "-f", "--"] + deletePaths.map(GitPathQuoting.literalPathspec))
         }
     }
 
     /// Whether the working-tree file still contains unresolved conflict
     /// markers. Used to warn before "Mark as Resolved" stages the file as is.
-    func containsConflictMarkers(path: String) -> Bool {
-        guard let data = try? Data(contentsOf: root.appendingPathComponent(path), options: .mappedIfSafe) else {
-            return false
-        }
-        return Self.hasConflictMarkers(in: data)
+    /// Reads and scans the whole file off the main actor — a large conflicted
+    /// file must not stall the UI for the duration.
+    func containsConflictMarkers(path: String) async -> Bool {
+        let url = root.appendingPathComponent(path)
+        return await Task.detached {
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+                return false
+            }
+            return Self.hasConflictMarkers(in: data)
+        }.value
     }
 
-    static func hasConflictMarkers(in data: Data) -> Bool {
+    nonisolated static func hasConflictMarkers(in data: Data) -> Bool {
         let text = String(decoding: data, as: UTF8.self)
         var foundStart = false
         var foundEnd = false
-        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+        // components, not split: in a CRLF file the "\r\n" ending of the line
+        // before a marker is one grapheme that never matches "\n", so the
+        // marker would hide mid-"line" and the warning would never fire.
+        for line in text.components(separatedBy: "\n") {
             if line.hasPrefix("<<<<<<<") { foundStart = true }
             if line.hasPrefix(">>>>>>>") { foundEnd = true }
             if foundStart && foundEnd { return true }

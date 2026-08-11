@@ -27,10 +27,13 @@ struct PullRequestDetail: Hashable {
     }
 
     struct Reviewer: Hashable, Identifiable {
+        /// Stable row identity: the login, or a positional fallback for
+        /// deleted/ghost accounts. Display names are NOT unique — two nil
+        /// authors would otherwise both render as "unknown" with one id.
+        let id: String
         let name: String
         let login: String?
         let state: String    // APPROVED / PENDING / CHANGES_REQUESTED / COMMENTED
-        var id: String { name }
     }
 
     struct CommitInfo: Hashable, Identifiable {
@@ -102,12 +105,32 @@ enum GitHubError: LocalizedError {
 struct GitHubService {
     let repoRoot: URL
 
+    private static let listFields = "number,title,author,state,isDraft,headRefName,reviewRequests"
+
     func listPullRequests() async throws -> [PullRequestSummary] {
-        let data = try await runGH([
-            "pr", "list", "--state", "all", "--limit", "30",
-            "--json", "number,title,author,state,isDraft,headRefName,reviewRequests",
+        // Two windows, not one: a single `--state all` page cannot back the
+        // client-side state filters — on a busy repo the 30 newest PRs can
+        // all be merged/closed, and "Open" would falsely render empty. Open
+        // PRs (the tab's primary object) are fetched to a deeper limit, the
+        // all-state window covers Merged/Closed/All.
+        async let openData = runGH([
+            "pr", "list", "--state", "open", "--limit", "100", "--json", Self.listFields,
         ])
-        return try Self.parsePullRequestList(data)
+        async let recentData = runGH([
+            "pr", "list", "--state", "all", "--limit", "30", "--json", Self.listFields,
+        ])
+        let open = try Self.parsePullRequestList(await openData)
+        let recent = try Self.parsePullRequestList(await recentData)
+        return Self.mergePullRequestLists(open: open, recent: recent)
+    }
+
+    /// Merges the deep open-PR window with the recent all-state window,
+    /// newest first. PR numbers increase with creation, so number order is
+    /// creation order — the same ordering `gh pr list` itself uses.
+    static func mergePullRequestLists(open: [PullRequestSummary], recent: [PullRequestSummary]) -> [PullRequestSummary] {
+        let openNumbers = Set(open.map(\.number))
+        return (open + recent.filter { !openNumbers.contains($0.number) })
+            .sorted { $0.number > $1.number }
     }
 
     static func parsePullRequestList(_ data: Data) throws -> [PullRequestSummary] {
@@ -192,12 +215,28 @@ struct GitHubService {
             return author.name?.isEmpty == false ? author.name! : author.login
         }
 
-        var reviewers: [PullRequestDetail.Reviewer] = (row.latestReviews ?? []).map {
-            PullRequestDetail.Reviewer(name: displayName($0.author), login: $0.author?.login, state: $0.state)
+        var reviewers: [PullRequestDetail.Reviewer] = (row.latestReviews ?? []).enumerated().map { index, review in
+            PullRequestDetail.Reviewer(
+                id: review.author?.login ?? "ghost-review-\(index)",
+                name: displayName(review.author),
+                login: review.author?.login,
+                state: review.state
+            )
         }
         for request in row.reviewRequests ?? [] {
-            if let login = request.login, !reviewers.contains(where: { $0.name == login }) {
-                reviewers.append(PullRequestDetail.Reviewer(name: login, login: login, state: "PENDING"))
+            // Match on login, not display name: a re-requested reviewer's
+            // review row carries their full name, and comparing that against
+            // the request's login would list the same person twice.
+            guard let login = request.login else { continue }
+            if let index = reviewers.firstIndex(where: { $0.login == login }) {
+                // A pending request outranks the stale review it re-requests:
+                // GitHub shows such a reviewer as awaiting review again.
+                let existing = reviewers[index]
+                reviewers[index] = PullRequestDetail.Reviewer(
+                    id: existing.id, name: existing.name, login: existing.login, state: "PENDING"
+                )
+            } else {
+                reviewers.append(PullRequestDetail.Reviewer(id: login, name: login, login: login, state: "PENDING"))
             }
         }
 

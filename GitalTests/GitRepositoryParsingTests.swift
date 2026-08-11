@@ -144,6 +144,12 @@ struct GitRepositoryParsingTests {
         #expect(parsedStashes.count == 2, "stash list parses two stashes")
         #expect(parsedStashes[0].reference == "stash@{0}" && parsedStashes[0].index == 0, "stash reference and index")
         #expect(parsedStashes[1].commitHash == "bbb222" && parsedStashes[1].message == "On feature: other", "stash hash and message")
+
+        // %gs is free text — a separator byte inside the message must not
+        // truncate it (same rejoin rule as parseReflog).
+        let hostileMessage = "On main: subject\u{1f}with separator"
+        let hostileOutput = ["stash@{0}", "ccc333", hostileMessage].joined(separator: "\u{1f}")
+        #expect(GitRepository.parseStashes(hostileOutput)[0].message == hostileMessage, "separator byte in stash message survives")
     }
 
     @Test func commitDetailParsing() {

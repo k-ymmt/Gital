@@ -55,6 +55,17 @@ final class AppModel {
                 openError = "“\(url.lastPathComponent)” is not a Git repository."
                 return
             }
+            // Reopening the already-open repository (gital ., ⌘O on the same
+            // folder) must not rebuild the view model: RootView keys the view
+            // on the root URL, so a replacement model under the same identity
+            // never receives onAppear/.task — window-hosted tracking and the
+            // auto-fetch loop would keep driving the closed model instead.
+            if let current = repoViewModel,
+               current.repository.root.standardizedFileURL.path == repository.root.standardizedFileURL.path {
+                rememberRecent(current.repository.root)
+                await current.refreshAll()
+                return
+            }
             repoViewModel?.close()  // stop the old watcher and codex subprocess
             let viewModel = RepoViewModel(repository: repository)
             repoViewModel = viewModel

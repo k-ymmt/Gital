@@ -133,8 +133,8 @@ struct ContentView: View {
                 await model.autoFetchTick(interval: autoFetchInterval)
             }
         }
-        .onAppear { model.isWindowHosted = true }
-        .onDisappear { model.isWindowHosted = false }
+        .onAppear { model.windowDidAppear() }
+        .onDisappear { model.windowDidDisappear() }
     }
 
 }

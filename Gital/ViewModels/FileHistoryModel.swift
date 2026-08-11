@@ -42,6 +42,11 @@ final class FileHistoryModel: Identifiable {
 
     var blame: BlameFile?
     var isLoadingBlame = false
+    /// The last blame load failed. The view keys its failure placeholder off
+    /// this, not off `blame == nil` — before the first load (and after a
+    /// tab-switch cancellation) blame is nil without anything having failed,
+    /// and the error text would flash where the spinner belongs.
+    var blameLoadFailed = false
     /// Key of the blame currently held/being loaded (selection hash, or ""
     /// for the working tree) — the view re-triggers loading when it drifts
     /// from the selection, and failure/cancellation clears it so the same
@@ -169,6 +174,7 @@ final class FileHistoryModel: Identifiable {
               let entry = selectedEntry else { return }
         loadedBlameKey = key
         isLoadingBlame = true
+        blameLoadFailed = false
         // The previous target's annotations must not sit under the new
         // target's header while the load runs.
         blame = nil
@@ -192,6 +198,7 @@ final class FileHistoryModel: Identifiable {
         case .failure(let error):
             loadedBlameKey = nil
             isLoadingBlame = false
+            blameLoadFailed = true
             errorMessage = error.localizedDescription
         case nil:
             // Superseded or cancelled. A newer call owns the flags now —
@@ -223,7 +230,12 @@ final class FileHistoryModel: Identifiable {
         Task {
             while !isClosed, hasMore, !isLoadingEntries,
                   !entries.contains(where: { $0.hash == hash }) {
+                let before = entries.count
                 await loadMore()
+                // A failed load leaves `entries` and `hasMore` untouched —
+                // without this bail-out the loop would re-run the failing
+                // git command forever with an ever-growing --max-count.
+                if entries.count == before { break }
             }
             if entries.contains(where: { $0.hash == hash }) {
                 selectedHash = hash

@@ -251,7 +251,7 @@ private struct FileBlameView: View {
                     }
                     .frame(minWidth: 700, alignment: .leading)
                 }
-            } else if !model.isLoadingBlame {
+            } else if model.blameLoadFailed {
                 // Failed load. The `.task(id:)` below won't re-fire on its
                 // own (the target didn't change), so offer the retry here.
                 VStack(spacing: 10) {
