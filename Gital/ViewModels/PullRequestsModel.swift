@@ -217,6 +217,38 @@ final class PullRequestsModel {
         await refresh()
     }
 
+    /// True while a user-initiated reload is in flight; drives the sidebar
+    /// reload button's spinner and guards against double-clicks.
+    var isReloading = false
+
+    /// User-initiated reload: unlike `refresh()` (list only), drops the
+    /// detail/diff caches so the visible detail, the expanded sidebar rows,
+    /// and the selected item's diffs all re-fetch from GitHub.
+    func reloadAll() async {
+        guard !isReloading else { return }
+        isReloading = true
+        defer { isReloading = false }
+        detailsCache = [:]
+        diffsCache = [:]
+        async let listTask: () = refresh()
+        // Expanded sidebar rows read straight from detailsCache; refill them
+        // or their commit/file rows would vanish until re-expanded. Errors
+        // stay silent — the list refresh reports connectivity problems.
+        let expandedNumbers = expanded.filter { $0 != selectedNumber }
+        await loadDetail()
+        // After loadDetail so the commit path can resolve short hashes
+        // against the freshly cached detail.
+        if selectedItem != nil {
+            await loadItemDiffs()
+        }
+        for number in expandedNumbers {
+            if let loaded = try? await github.pullRequestDetail(number: number) {
+                detailsCache[number] = loaded
+            }
+        }
+        await listTask
+    }
+
     func refresh() async {
         lastListRefresh = .now
         // The viewer login is fetched once per repo session; a failure

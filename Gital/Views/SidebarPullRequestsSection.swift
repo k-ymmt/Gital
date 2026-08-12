@@ -14,7 +14,10 @@ struct SidebarPullRequestsSection: View {
             ? "Pull Requests \(filtered.count)/\(model.prs.pullRequests.count)"
             : "Pull Requests \(model.prs.pullRequests.count)"
         ) {
-            stateFilterMenu
+            HStack(spacing: 8) {
+                reloadButton
+                stateFilterMenu
+            }
         }
 
         searchField
@@ -40,6 +43,24 @@ struct SidebarPullRequestsSection: View {
             if model.prs.expanded.contains(pr.number), let detail = model.prs.detailsCache[pr.number] {
                 expansion(detail)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var reloadButton: some View {
+        if model.prs.isReloading {
+            ProgressView()
+                .controlSize(.mini)
+        } else {
+            Button {
+                Task { await model.prs.reloadAll() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Reload pull requests")
         }
     }
 
