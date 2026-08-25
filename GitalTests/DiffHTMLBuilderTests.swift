@@ -112,8 +112,23 @@ struct DiffHTMLBuilderTests {
             commentable: nil
         )
         #expect(!page.contains("cmtbtn"), "closed PRs render no comment affordance")
-        #expect(!page.contains("data-id="), "no line IDs without an affordance to use them")
+        #expect(!page.contains(#"data-id="l"#), "no line IDs without an affordance to use them")
         #expect(page.contains("type: 'height'"), "height reporting stays")
+    }
+
+    // The PR pane overlays its native cards (threads, drafts, composers) at
+    // page-reported spacer offsets — opening or closing a card pushes a
+    // spacer via JS instead of re-chunking (and reloading) the page.
+    @Test func reviewUnifiedHostsNativeOverlaySpacers() {
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: nil,
+            askable: true
+        )
+        #expect(page.contains("window.gitalSetSpacers = (specs)"), "dynamic spacers are the real implementation, not the stub")
+        #expect(page.contains("type: 'anchors'"), "spacer offsets are reported for the native overlay layer")
+        #expect(page.contains("window.gitalSetSelected = () => {}"), "host's post-load selection push must be a no-op, not a JS error")
     }
 
     // Mouse text selection frames the rows it spans like the Working Copy,

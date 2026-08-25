@@ -61,6 +61,7 @@ enum DiffHTMLBuilder {
             bodyClass: "",
             interactive: false,
             reportsHeight: true,
+            hostsOverlays: true,
             extraCSS: (commentable != nil ? commentCSS : "")
                 + (askable ? askLineCSS : "")
                 + (framed ? reviewSelectionCSS : ""),
@@ -316,7 +317,7 @@ enum DiffHTMLBuilder {
 
     // MARK: - Page assembly
 
-    private static func assemble(body: String, bodyClass: String, interactive: Bool, reportsHeight: Bool = false, extraCSS: String = "", extraScript: String = "", language: String? = nil) -> String {
+    private static func assemble(body: String, bodyClass: String, interactive: Bool, reportsHeight: Bool = false, hostsOverlays: Bool = false, extraCSS: String = "", extraScript: String = "", language: String? = nil) -> String {
         // data-lang tells the injected Shiki user script what grammar to
         // tokenize with; without it the page stays uncolored.
         let langAttr = language.map { " data-lang=\"\(escapeAttr($0))\"" } ?? ""
@@ -338,7 +339,7 @@ enum DiffHTMLBuilder {
         </head>
         <body\(bodyClass)\(langAttr)>
         \(body)
-        <script>\(script)\(interactive ? bridgeScript : reportsHeight ? heightScript : "")\(extraScript)</script>
+        <script>\(script)\(interactive ? bridgeScript : hostsOverlays ? overlayHostScript : reportsHeight ? heightScript : "")\(extraScript)</script>
         </body>
         </html>
         """
@@ -685,15 +686,11 @@ enum DiffHTMLBuilder {
     window.gitalSetSpacers = () => {};
     """
 
-    /// Interactive pages talk to `WebDiffChunkView` through the `gital`
-    /// message handler: height reports (the chunk always matches content
-    /// height; the outer SwiftUI ScrollView scrolls), line selection clicks,
-    /// and hunk/frame-button clicks. Selection highlight is
-    /// pushed back in via `gitalSetSelected` so a click never reloads the page.
-    /// The page also frames the rows a mouse text selection spans (`.tsel`)
-    /// and, while no text is selected, the hunk under the pointer (`.hsel`),
-    /// both with the same corner buttons ("+" / Stage / Unstage / Discard).
-    private static let bridgeScript = """
+    /// Layout reporting plus native-overlay spacers — everything a page needs
+    /// so a native host can size it and pin overlays into it. Shared by the
+    /// Working Copy's `bridgeScript` and the PR review pages'
+    /// `overlayHostScript`, so the two can never drift apart.
+    private static let layoutScript = """
     const post = (m) => window.webkit.messageHandlers.gital.postMessage(m);
     const reportHeight = () => post({type: 'height', height: document.body.scrollHeight});
     // Spacer offsets, so the host can pin its native overlays to the rows
@@ -709,7 +706,7 @@ enum DiffHTMLBuilder {
     window.addEventListener('load', reportLayout);
     // Reserves page space for the native overlays. Static spacers (file
     // headers, binary previews) exist in the HTML and only resize; dynamic
-    // ones (agent composer/thread cards) are created here, inserted after
+    // ones (composer/thread/review cards) are created here, inserted after
     // the line they anchor to — several cards on one line keep spec order.
     // Dropping a spec removes its dynamic spacer.
     window.gitalSetSpacers = (specs) => {
@@ -744,6 +741,27 @@ enum DiffHTMLBuilder {
         }
         reportLayout();
     };
+    """
+
+    /// PR review pages: layout reporting + spacers, no Working Copy
+    /// interactivity. Native review/agent cards get their page space through
+    /// `gitalSetSpacers`, so opening or closing a composer never reloads the
+    /// page (the reload is what used to flash the whole viewer).
+    /// `gitalSetSelected` is a stub: the host applies its (always empty)
+    /// selection after every load, and the call must not throw.
+    private static let overlayHostScript = layoutScript + """
+    window.gitalSetSelected = () => {};
+    """
+
+    /// Interactive pages talk to `WebDiffChunkView` through the `gital`
+    /// message handler: height reports (the chunk always matches content
+    /// height; the outer SwiftUI ScrollView scrolls), line selection clicks,
+    /// and hunk/frame-button clicks. Selection highlight is
+    /// pushed back in via `gitalSetSelected` so a click never reloads the page.
+    /// The page also frames the rows a mouse text selection spans (`.tsel`)
+    /// and, while no text is selected, the hunk under the pointer (`.hsel`),
+    /// both with the same corner buttons ("+" / Stage / Unstage / Discard).
+    private static let bridgeScript = layoutScript + """
     document.addEventListener('mousedown', (e) => {
         // Clicking the frame's ask/stage/discard buttons must not collapse
         // the text selection that defines their range.

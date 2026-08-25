@@ -197,41 +197,14 @@ struct PullRequestItemDiffView: View {
     private func reviewableContent(_ diff: FileDiff, number: Int, canComment: Bool) -> some View {
         switch model.diffMode {
         case .unified:
-            ForEach(unifiedSegments(for: diff, number: number, canComment: canComment)) { segment in
-                WebDiffChunkView(
-                    html: DiffHTMLBuilder.reviewUnifiedPage(
-                        items: segment.items,
-                        language: DiffSyntaxHighlighting.language(for: diff),
-                        commentable: canComment
-                            ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
-                            : nil,
-                        askable: true
-                    ),
-                    estimatedHeight: CGFloat(segment.items.count) * DiffHTMLBuilder.rowHeight,
-                    onAction: { handleReview($0, in: diff) }
-                )
-                if let line = segment.interleaveAfterLine {
-                    // Published conversations first, then local drafts —
-                    // history above what is still pending, like GitHub —
-                    // then the agent's question threads and composer.
-                    ForEach(model.prs.threads(on: line, path: diff.path, in: number)) { thread in
-                        ReviewThreadCard(model: model, thread: thread, number: number)
-                    }
-                    ForEach(model.prs.pendingComments(on: line, path: diff.path, in: number)) { comment in
-                        PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
-                    }
-                    if canComment, composerIsOpen(at: line, in: diff) {
-                        ReviewCommentComposerView(model: model, number: number)
-                    }
-                    ForEach(model.prAgentThreads(on: line, in: number, itemKey: agentItemKey)) { thread in
-                        AgentThreadView(model: model, thread: thread)
-                    }
-                    if let composer = model.prAgentComposer,
-                       model.isPRAgentComposerOpen(at: line, in: number, itemKey: agentItemKey) {
-                        prAgentComposerCard(composer)
-                    }
-                }
-            }
+            PRReviewFileView(
+                model: model,
+                diff: diff,
+                number: number,
+                canComment: canComment,
+                itemKey: agentItemKey,
+                onAction: { handleReview($0, in: diff) }
+            )
         case .split:
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
@@ -252,10 +225,6 @@ struct PullRequestItemDiffView: View {
                 }
             }
         }
-    }
-
-    private func composerIsOpen(at line: DiffLine, in diff: FileDiff) -> Bool {
-        model.prs.isComposerOpen(at: line, in: diff)
     }
 
     /// Bridge actions a PR page emits (height reports are consumed by the
@@ -322,58 +291,7 @@ struct PullRequestItemDiffView: View {
         diff.hunks.lazy.flatMap(\.lines).first { $0.id == id }
     }
 
-    // MARK: - Web chunk segmentation
-
-    private struct ReviewSegment: Identifiable {
-        let id: String
-        let items: [DiffHTMLBuilder.UnifiedItem]
-        /// Line whose review cards (threads, drafts, composer) render right
-        /// after this chunk.
-        let interleaveAfterLine: DiffLine?
-    }
-
-    /// Splits a file's unified rows into web chunks at every line carrying a
-    /// published thread, a pending draft, an agent thread, or an open
-    /// composer, so those stay native SwiftUI between the chunks (same
-    /// scheme as the Working Copy). The review composer only counts while
-    /// the PR accepts comments — the render side gates it the same way, and
-    /// a boundary with nothing rendered at it would still split the chunk
-    /// and break text selection across it.
-    private func unifiedSegments(for diff: FileDiff, number: Int, canComment: Bool) -> [ReviewSegment] {
-        var segments: [ReviewSegment] = []
-        var items: [DiffHTMLBuilder.UnifiedItem] = []
-        var firstID = ""
-
-        func flush(after line: DiffLine?) {
-            guard !items.isEmpty || line != nil else { return }
-            segments.append(ReviewSegment(
-                id: "\(firstID)→\(line?.id ?? "end")",
-                items: items,
-                interleaveAfterLine: line
-            ))
-            items = []
-            firstID = ""
-        }
-
-        for hunk in diff.hunks {
-            if items.isEmpty { firstID = hunk.id }
-            items.append(.header(hunk))
-            for line in hunk.lines {
-                if items.isEmpty { firstID = line.id }
-                items.append(.line(line))
-                let hasCards = !model.prs.threads(on: line, path: diff.path, in: number).isEmpty
-                    || !model.prs.pendingComments(on: line, path: diff.path, in: number).isEmpty
-                    || (canComment && composerIsOpen(at: line, in: diff))
-                    || !model.prAgentThreads(on: line, in: number, itemKey: agentItemKey).isEmpty
-                    || model.isPRAgentComposerOpen(at: line, in: number, itemKey: agentItemKey)
-                if hasCards {
-                    flush(after: line)
-                }
-            }
-        }
-        flush(after: nil)
-        return segments
-    }
+    // MARK: - Web chunk segmentation (split mode)
 
     private struct ReviewSplitSegment: Identifiable {
         let id: String
@@ -611,5 +529,190 @@ struct PullRequestItemDiffView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(.quaternary.opacity(0.25))
+    }
+}
+
+/// One PR file's unified diff as a single web page, with the native review
+/// pieces — published threads, pending drafts, the review composer, agent
+/// threads, and the ask-composer — overlaid at page-reported spacer offsets
+/// (the Working Copy scheme, see `WorkingDiffPane`).
+///
+/// One page per file instead of card-split chunks because the chunk
+/// boundaries moved every time a card opened or closed, and every moved
+/// boundary changed a chunk's identity — tearing down its `WKWebView` and
+/// reloading from scratch, which flashed the whole pane on each composer
+/// toggle. Here the page HTML depends only on the diff, so a card opening
+/// pushes a spacer via JS and the page just reflows.
+private struct PRReviewFileView: View {
+    @Bindable var model: RepoViewModel
+    let diff: FileDiff
+    let number: Int
+    let canComment: Bool
+    /// `ItemSelection.agentAnchorKey` of the item being shown — the identity
+    /// agent cards anchor to alongside line ID and content.
+    let itemKey: String
+    let onAction: (WebDiffAction) -> Void
+
+    /// Page height, reported after layout; the rows×19 estimate (or a cached
+    /// height from a previous life — LazyVStack recycles this view) holds the
+    /// scroll extent until the first report.
+    @State private var reportedHeight: CGFloat?
+    /// Document offset of every spacer, reported alongside the height.
+    @State private var anchors: [String: CGFloat] = [:]
+    /// Measured native card heights, pushed back as spacer heights.
+    @State private var overlayHeights: [String: CGFloat] = [:]
+    @State private var page = Page(html: "", estimatedHeight: 0)
+
+    private struct Page {
+        let html: String
+        let estimatedHeight: CGFloat
+        /// Height-cache key, hashed once — heights are reported on every
+        /// layout change.
+        let heightCacheKey: String
+
+        init(html: String, estimatedHeight: CGFloat) {
+            self.html = html
+            self.estimatedHeight = estimatedHeight
+            self.heightCacheKey = Gital.heightCacheKey(for: html)
+        }
+    }
+
+    private struct PageInputs: Equatable {
+        let diff: FileDiff
+        let canComment: Bool
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            InteractiveWebView(
+                html: page.html,
+                spacers: spacers,
+                onAction: onAction,
+                onHeight: { height, ready in
+                    reportedHeight = height
+                    // Loading-phase reports can still describe the outgoing
+                    // page; only a post-didFinish report certainly measures
+                    // this one.
+                    if ready {
+                        cacheHeight(height, forKey: page.heightCacheKey)
+                    }
+                },
+                onAnchors: { anchors = $0 }
+            )
+            .frame(height: reportedHeight ?? page.estimatedHeight)
+            ForEach(overlays) { overlay in
+                if let top = anchors[overlay.id] {
+                    overlayContent(overlay)
+                        .onGeometryChange(for: CGFloat.self, of: \.size.height) {
+                            overlayHeights[overlay.id] = $0
+                        }
+                        .frame(maxWidth: .infinity)
+                        .offset(y: top)
+                }
+            }
+        }
+        .onChange(of: PageInputs(diff: diff, canComment: canComment), initial: true) {
+            rebuildPage()
+        }
+    }
+
+    private func rebuildPage() {
+        let html = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: DiffSyntaxHighlighting.language(for: diff),
+            commentable: canComment
+                ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
+                : nil,
+            askable: true
+        )
+        let rows = diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count }
+        page = Page(html: html, estimatedHeight: CGFloat(rows) * DiffHTMLBuilder.rowHeight)
+        reportedHeight = cachedHeight(forKey: page.heightCacheKey)
+    }
+
+    // MARK: - Overlays
+
+    /// One native card positioned over a page spacer. Cards on the same line
+    /// keep this order — published conversations first, then local drafts
+    /// (history above what is still pending, like GitHub), then the agent's
+    /// question threads and composer — because `gitalSetSpacers` inserts
+    /// same-line spacers in spec order.
+    private struct Overlay: Identifiable {
+        enum Kind {
+            case thread(ReviewThread)
+            case pending(PendingReviewComment)
+            case reviewComposer
+            case agentThread(AgentThread)
+            case agentComposer(RepoViewModel.PRAgentComposer)
+        }
+
+        let id: String
+        /// Line the card's dynamic spacer inserts after.
+        let anchorLineID: String
+        let kind: Kind
+
+        /// Space reserved before the native card reports its real height.
+        static let cardEstimate: CGFloat = 150
+    }
+
+    private var overlays: [Overlay] {
+        var out: [Overlay] = []
+        for hunk in diff.hunks {
+            for line in hunk.lines {
+                for thread in model.prs.threads(on: line, path: diff.path, in: number) {
+                    out.append(Overlay(id: "thread:\(thread.id)", anchorLineID: line.id, kind: .thread(thread)))
+                }
+                for comment in model.prs.pendingComments(on: line, path: diff.path, in: number) {
+                    out.append(Overlay(id: "draft:\(comment.id)", anchorLineID: line.id, kind: .pending(comment)))
+                }
+                // The review composer only renders while the PR accepts
+                // comments — the "+" affordances are gated the same way.
+                if canComment, model.prs.isComposerOpen(at: line, in: diff) {
+                    out.append(Overlay(id: "card:composer", anchorLineID: line.id, kind: .reviewComposer))
+                }
+                for thread in model.prAgentThreads(on: line, in: number, itemKey: itemKey) {
+                    out.append(Overlay(id: "agent:\(thread.id)", anchorLineID: line.id, kind: .agentThread(thread)))
+                }
+                if let composer = model.prAgentComposer,
+                   model.isPRAgentComposerOpen(at: line, in: number, itemKey: itemKey) {
+                    out.append(Overlay(id: "card:ask", anchorLineID: line.id, kind: .agentComposer(composer)))
+                }
+            }
+        }
+        return out
+    }
+
+    private var spacers: [WebDiffSpacer] {
+        overlays.map { overlay in
+            WebDiffSpacer(
+                id: overlay.id,
+                line: overlay.anchorLineID,
+                height: overlayHeights[overlay.id] ?? Overlay.cardEstimate
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func overlayContent(_ overlay: Overlay) -> some View {
+        switch overlay.kind {
+        case .thread(let thread):
+            ReviewThreadCard(model: model, thread: thread, number: number)
+        case .pending(let comment):
+            PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
+        case .reviewComposer:
+            ReviewCommentComposerView(model: model, number: number)
+        case .agentThread(let thread):
+            AgentThreadView(model: model, thread: thread)
+        case .agentComposer(let composer):
+            AgentComposerView(
+                text: $model.prAgentDraft,
+                range: composer.range,
+                fileName: (composer.filePath as NSString).lastPathComponent,
+                hint: "Select lines to ask about a range",
+                placeholder: "Ask a question about these lines…",
+                onCancel: { model.cancelPRAgentComposer() },
+                onSend: { model.sendPRAgentQuestion() }
+            )
+        }
     }
 }
