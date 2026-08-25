@@ -169,8 +169,23 @@ final class PullRequestsModel {
     var itemCommitDetail: CommitDetail?
     var itemLoadError: String?
     /// Parsed `gh pr diff` output per PR, so switching between files of the
-    /// same PR doesn't re-run gh each time.
+    /// same PR doesn't re-run gh each time. Bounded LRU (see
+    /// `touchDiffsCache`): a session browsing many large PRs would otherwise
+    /// accumulate every parsed diff for its lifetime.
     var diffsCache: [Int: [FileDiff]] = [:]
+    /// LRU order for `diffsCache`, most recently used last.
+    @ObservationIgnored private var diffsCacheOrder: [Int] = []
+    private static let diffsCacheLimit = 6
+
+    /// Marks a cache entry as used and evicts the least recently used
+    /// entries beyond the limit.
+    private func touchDiffsCache(_ number: Int) {
+        diffsCacheOrder.removeAll { $0 == number }
+        diffsCacheOrder.append(number)
+        while diffsCacheOrder.count > Self.diffsCacheLimit {
+            diffsCache[diffsCacheOrder.removeFirst()] = nil
+        }
+    }
 
     @ObservationIgnored private let itemDiffsLoader = LatestLoader()
     /// In-flight whole-PR diff fetches by PR number: the prefetch fired on
@@ -261,6 +276,7 @@ final class PullRequestsModel {
         let visible = Set(expanded).union(selectedNumber.map { [$0] } ?? [])
         detailsCache = detailsCache.filter { visible.contains($0.key) }
         diffsCache = [:]
+        diffsCacheOrder = []
         // Detach (and stop) in-flight diff fetches: they were started
         // against pre-reload state and must not repopulate the cleared
         // cache when they land.
@@ -336,11 +352,17 @@ final class PullRequestsModel {
     /// The PR's parsed whole diff, from cache or via a single shared gh
     /// fetch. Failures are never cached — the next call simply retries.
     private func wholeDiff(for number: Int) async throws -> [FileDiff] {
-        if let cached = diffsCache[number] { return cached }
+        if let cached = diffsCache[number] {
+            touchDiffsCache(number)
+            return cached
+        }
         let task = diffFetchTasks[number] ?? Task { [github] in
             do {
                 let raw = try await github.pullRequestDiff(number: number)
-                return .success(DiffParser.parse(raw, scope: .snapshot))
+                // Parse off the main thread — a large PR diff takes
+                // hundreds of milliseconds this Task would otherwise
+                // spend on the inherited MainActor.
+                return .success(await Task.detached { DiffParser.parse(raw, scope: .snapshot) }.value)
             } catch {
                 return .failure(error)
             }
@@ -356,6 +378,7 @@ final class PullRequestsModel {
             diffFetchTasks[number] = nil
             if case .success(let diffs) = result {
                 diffsCache[number] = diffs
+                touchDiffsCache(number)
             }
         }
         return try result.get()
@@ -366,6 +389,7 @@ final class PullRequestsModel {
     /// repopulated by) a fetch started against pre-invalidation state.
     private func invalidateDiff(for number: Int) {
         diffsCache[number] = nil
+        diffsCacheOrder.removeAll { $0 == number }
         diffFetchTasks[number]?.cancel()
         diffFetchTasks[number] = nil
     }
@@ -850,6 +874,9 @@ final class PullRequestsModel {
     /// Review-progress flags per PR number, persisted across launches.
     var viewedStates: [Int: PRViewedState] = [:]
     @ObservationIgnored private var viewedStore: PRViewedStore?
+    /// Toggles made before the async store open/load lands; replayed into
+    /// the store in order once it arrives, so nothing is lost.
+    @ObservationIgnored private var pendingViewedApplies: [(old: PRViewedState, new: PRViewedState, number: Int)] = []
 
     func isFileViewed(_ path: String, in number: Int) -> Bool {
         viewedStates[number]?.files.contains(path) == true
@@ -885,12 +912,33 @@ final class PullRequestsModel {
         var state = old
         mutate(&state)
         viewedStates[number] = state.isEmpty ? nil : state
-        viewedStore?.apply(from: old, to: state, for: number)
+        if let viewedStore {
+            viewedStore.apply(from: old, to: state, for: number)
+        } else {
+            pendingViewedApplies.append((old, state, number))
+        }
     }
 
+    /// Opens the store and reads the saved flags off the main thread: the
+    /// open (CREATE TABLE) and the load both honor the 1s busy timeout, so
+    /// doing them inline stalled opening a repository whenever a second
+    /// instance held the database.
     private func loadViewedStates() {
-        let store = PRViewedStore(repoRoot: repository.root)
-        viewedStore = store
-        viewedStates = store.load()
+        let root = repository.root
+        Task { [weak self] in
+            let (store, states) = await Task.detached(priority: .utility) {
+                let store = PRViewedStore(repoRoot: root)
+                return (store, store.load())
+            }.value
+            guard let self else { return }
+            self.viewedStore = store
+            for entry in self.pendingViewedApplies {
+                store.apply(from: entry.old, to: entry.new, for: entry.number)
+            }
+            self.pendingViewedApplies = []
+            // A toggle that raced the load already updated the in-memory
+            // state — the disk snapshot must not roll it back.
+            self.viewedStates = states.merging(self.viewedStates) { _, local in local }
+        }
     }
 }

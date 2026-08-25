@@ -343,17 +343,29 @@ final class RepoViewModel {
 
     /// Refreshes state whenever files change on disk (editors, terminals,
     /// agents). FSEvents coalesces bursts via its latency window. Refs, log,
-    /// and stashes refresh too: external commits, branches, and `git stash`
-    /// runs must be reflected, or positional references (stash@{N}) in the UI
-    /// go stale and target the wrong object.
+    /// and stashes refresh too when git metadata changed: external commits,
+    /// branches, and `git stash` runs must be reflected, or positional
+    /// references (stash@{N}) in the UI go stale and target the wrong
+    /// object. A burst touching only worktree files (an editor save) skips
+    /// the log/refs re-fetch — with a deep history paged in, every save
+    /// otherwise re-ran a full `git log` plus the graph layout.
     private func startWatching() {
-        watcher = RepoWatcher(root: repository.root) { [weak self] in
+        watcher = RepoWatcher(root: repository.root) { [weak self] paths in
+            // Substring match, not a root-prefix compare: FSEvents reports
+            // symlink-resolved paths (/private/tmp vs /tmp), which would
+            // defeat a prefix built from the repo root. A nested repo's
+            // .git also matches — refreshing more than needed is safe.
+            // An empty path list means "unknown" and refreshes everything.
+            let touchesGitMetadata = paths.isEmpty
+                || paths.contains { $0.contains("/.git/") || $0.hasSuffix("/.git") }
             Task { @MainActor in
                 guard let self else { return }
                 await self.refreshStatus()
                 await self.loadWorkingDiffs()
-                await self.refreshLog()
-                await self.refreshRefs()
+                if touchesGitMetadata {
+                    await self.refreshLog()
+                    await self.refreshRefs()
+                }
             }
         }
         if watcher?.isWatching != true {
@@ -363,14 +375,28 @@ final class RepoViewModel {
 
     // MARK: - Filtering
 
+    /// Memoized: this is read on every body evaluation while searching, and
+    /// lowercasing every subject/author per keystroke costs tens of
+    /// milliseconds at 10k commits. The key checks needle + list identity
+    /// (count and head hash — any history rewrite changes the head hash);
+    /// fields the filter doesn't read (relative dates, refs) may go stale in
+    /// the cached array without affecting which commits match.
+    @ObservationIgnored private var commitFilterCache: (needle: String, count: Int, headHash: String?, result: [Commit])?
+
     var filteredCommits: [Commit] {
         guard !searchText.isEmpty else { return commits }
         let needle = searchText.lowercased()
-        return commits.filter {
+        if let cache = commitFilterCache, cache.needle == needle,
+           cache.count == commits.count, cache.headHash == commits.first?.hash {
+            return cache.result
+        }
+        let result = commits.filter {
             $0.subject.lowercased().contains(needle)
                 || $0.author.lowercased().contains(needle)
                 || $0.hash.hasPrefix(needle)
         }
+        commitFilterCache = (needle, commits.count, commits.first?.hash, result)
+        return result
     }
 
     // MARK: - Avatars

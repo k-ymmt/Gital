@@ -6,7 +6,7 @@ import Foundation
 /// `GitRepository` (name-status / file-history output) and `DiffParser`
 /// (diff headers) — the two must agree, because diff-side paths feed row IDs
 /// and staging pathspecs that are later matched against status output.
-enum GitPathQuoting {
+nonisolated enum GitPathQuoting {
     /// Wraps a concrete file path for use as a git pathspec. `:(literal)` is
     /// load-bearing: a bare pathspec globs, so "app/[id]/page.tsx" matches
     /// app/i/page.tsx instead of (or as well as) itself — a stage, diff, or

@@ -31,7 +31,7 @@ enum ReviewEvent: String, CaseIterable, Identifiable {
 /// on that side. Anchoring by coordinates instead of `DiffLine.id` lets the
 /// same comment surface in both the Files Changed diff and a commit diff,
 /// whose parsed line IDs differ for the same physical line.
-struct ReviewCommentAnchor: Hashable, Codable {
+nonisolated struct ReviewCommentAnchor: Hashable, Codable {
     enum Side: String, Codable {
         case left = "LEFT"
         case right = "RIGHT"
@@ -77,7 +77,7 @@ struct ReviewCommentAnchor: Hashable, Codable {
 /// time — it lets display reject same-number-different-content lines and
 /// lets submission re-anchor drafts whose line numbers no longer match the
 /// PR's whole diff.
-struct PendingReviewComment: Identifiable, Hashable, Codable {
+nonisolated struct PendingReviewComment: Identifiable, Hashable, Codable {
     let id: UUID
     /// For a multi-line comment this is the LAST line of the range — the line
     /// GitHub hangs the published comment under, and the one the draft card

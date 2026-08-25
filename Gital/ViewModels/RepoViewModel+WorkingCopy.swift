@@ -75,8 +75,16 @@ extension RepoViewModel {
     }
 
     func selectedLineIDs(in diff: FileDiff) -> Set<String> {
+        // Empty selection is the common case, and this runs from the pinned
+        // header on every scroll frame — the O(lines) scan below must not.
+        guard !selectedDiffLineIDs.isEmpty else { return [] }
+        // Line IDs embed their file path ("path@n"), so the diff's own
+        // candidates fall out of the (small) selection set first.
+        let prefix = diff.path + "@"
+        let candidates = selectedDiffLineIDs.filter { $0.hasPrefix(prefix) }
+        guard !candidates.isEmpty else { return [] }
         let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
-        return selectedDiffLineIDs.intersection(changed)
+        return candidates.intersection(changed)
     }
 
     func clearLineSelection(in diff: FileDiff) {

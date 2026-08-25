@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Refs
 
-struct GitRef: Hashable, Identifiable {
+nonisolated struct GitRef: Hashable, Identifiable {
     enum Kind: Hashable {
         case head          // current branch (HEAD -> ...)
         case branch        // local branch
@@ -18,7 +18,7 @@ struct GitRef: Hashable, Identifiable {
 
 // MARK: - Commit
 
-struct Commit: Hashable, Identifiable {
+nonisolated struct Commit: Hashable, Identifiable {
     let hash: String
     let parents: [String]
     let author: String
@@ -34,7 +34,7 @@ struct Commit: Hashable, Identifiable {
 
 /// Full metadata for one commit, loaded on selection: absolute dates, the
 /// committer, and the whole message — none of which the log list carries.
-struct CommitDetail: Hashable {
+nonisolated struct CommitDetail: Hashable {
     let hash: String
     let parents: [String]
     let author: String
@@ -55,7 +55,7 @@ struct CommitDetail: Hashable {
 
 // MARK: - Working copy status
 
-struct FileChange: Hashable, Identifiable {
+nonisolated struct FileChange: Hashable, Identifiable {
     enum Status: Hashable {
         case modified, added, deleted, renamed, copied, typeChanged, untracked, conflicted
 
@@ -82,7 +82,7 @@ struct FileChange: Hashable, Identifiable {
     var directory: String { (path as NSString).deletingLastPathComponent }
 }
 
-struct WorkingStatus {
+nonisolated struct WorkingStatus {
     var branch: String?
     /// Commit HEAD points at; nil on an unborn branch. On a detached HEAD
     /// (`branch == nil`) this is the only way the UI can say where HEAD is.
@@ -100,7 +100,7 @@ struct WorkingStatus {
 
 /// A multi-step git operation that can stop on conflicts and then must be
 /// continued or aborted.
-enum RepoOperation: String, Hashable {
+nonisolated enum RepoOperation: String, Hashable {
     case merge, rebase, cherryPick = "cherry-pick", revert
 
     var displayName: String {
@@ -125,14 +125,14 @@ enum RepoOperation: String, Hashable {
 }
 
 /// Which side of a conflict to take wholesale (`git checkout --ours/--theirs`).
-enum ConflictSide: String {
+nonisolated enum ConflictSide: String {
     case ours, theirs
 }
 
 // MARK: - Interactive rebase
 
 /// One commit in the span an interactive rebase would rewrite.
-struct RebaseCommit: Hashable, Identifiable {
+nonisolated struct RebaseCommit: Hashable, Identifiable {
     let hash: String
     let subject: String
     /// Full message (subject + body) — prefills the reword editor and feeds
@@ -152,7 +152,7 @@ struct RebaseCommit: Hashable, Identifiable {
 }
 
 /// What to do with one commit in an interactive rebase plan.
-enum RebaseAction: String, CaseIterable, Identifiable {
+nonisolated enum RebaseAction: String, CaseIterable, Identifiable {
     case pick, reword, squash, fixup, drop
 
     var id: String { rawValue }
@@ -172,7 +172,7 @@ enum RebaseAction: String, CaseIterable, Identifiable {
 /// message draft. The draft is prefilled with the original message; it is
 /// consulted for reword (the rewritten message) and squash (appended to the
 /// target commit's message), and ignored otherwise.
-struct RebaseStep: Hashable, Identifiable {
+nonisolated struct RebaseStep: Hashable, Identifiable {
     let commit: RebaseCommit
     var action: RebaseAction = .pick
     var message: String
@@ -182,7 +182,7 @@ struct RebaseStep: Hashable, Identifiable {
 
 // MARK: - Branches / tags / stashes
 
-struct Branch: Hashable, Identifiable {
+nonisolated struct Branch: Hashable, Identifiable {
     let name: String
     let isCurrent: Bool
     let upstream: String?
@@ -198,21 +198,21 @@ struct Branch: Hashable, Identifiable {
     var tracksLocalBranch: Bool { upstreamRemote == "." }
 }
 
-struct RemoteInfo: Hashable, Identifiable {
+nonisolated struct RemoteInfo: Hashable, Identifiable {
     let name: String
     let branches: [String]
 
     var id: String { name }
 }
 
-struct Tag: Hashable, Identifiable {
+nonisolated struct Tag: Hashable, Identifiable {
     let name: String
     let tipHash: String
 
     var id: String { name }
 }
 
-struct Stash: Hashable, Identifiable {
+nonisolated struct Stash: Hashable, Identifiable {
     let index: Int
     let reference: String  // stash@{0} — positional, valid only for the list it came from
     /// Commit hash of the stash — the stable identity used to re-resolve the
@@ -227,7 +227,7 @@ struct Stash: Hashable, Identifiable {
 /// One HEAD-reflog entry. Like `Stash`, the positional selector (HEAD@{N})
 /// is display-only and valid only for the list it came from — every action
 /// targets `hash`, which stays correct no matter how stale the list is.
-struct ReflogEntry: Hashable, Identifiable {
+nonisolated struct ReflogEntry: Hashable, Identifiable {
     let index: Int
     let hash: String
     /// When the entry was recorded ("5 minutes ago"), not the commit's own
@@ -245,7 +245,7 @@ struct ReflogEntry: Hashable, Identifiable {
 
 // MARK: - Diff
 
-struct DiffLine: Hashable, Identifiable {
+nonisolated struct DiffLine: Hashable, Identifiable {
     enum Kind: Hashable {
         case context, addition, deletion
     }
@@ -268,7 +268,7 @@ struct DiffLine: Hashable, Identifiable {
     }
 }
 
-struct DiffHunk: Hashable, Identifiable {
+nonisolated struct DiffHunk: Hashable, Identifiable {
     let id: String
     let header: String
     let oldStart: Int
@@ -278,14 +278,14 @@ struct DiffHunk: Hashable, Identifiable {
 
 /// Which comparison a `FileDiff` came from — decides whether hunks can be
 /// staged, unstaged, or are read-only.
-enum DiffScope: Hashable {
+nonisolated enum DiffScope: Hashable {
     case unstaged   // worktree vs index (`git diff`)
     case staged     // index vs HEAD (`git diff --cached`)
     case untracked  // synthetic all-additions diff for an untracked file
     case snapshot   // commit / stash / any read-only diff
 }
 
-struct FileDiff: Hashable, Identifiable {
+nonisolated struct FileDiff: Hashable, Identifiable {
     let path: String
     let oldPath: String?
     let isBinary: Bool
@@ -308,18 +308,45 @@ struct FileDiff: Hashable, Identifiable {
     var newBlobHash: String? = nil
     let hunks: [DiffHunk]
     var scope: DiffScope = .snapshot
+    /// Counted once at construction: these render in file headers that
+    /// re-evaluate on every scroll frame (the pinned header), where an
+    /// O(lines) recount per frame made scrolling large files stutter.
+    let additions: Int
+    let deletions: Int
+
+    init(
+        path: String, oldPath: String?, isBinary: Bool,
+        containsInvalidUTF8: Bool = false, isCombined: Bool = false,
+        oldBlobHash: String? = nil, newBlobHash: String? = nil,
+        hunks: [DiffHunk], scope: DiffScope = .snapshot
+    ) {
+        self.path = path
+        self.oldPath = oldPath
+        self.isBinary = isBinary
+        self.containsInvalidUTF8 = containsInvalidUTF8
+        self.isCombined = isCombined
+        self.oldBlobHash = oldBlobHash
+        self.newBlobHash = newBlobHash
+        self.hunks = hunks
+        self.scope = scope
+        var additions = 0
+        var deletions = 0
+        for hunk in hunks {
+            for line in hunk.lines {
+                switch line.kind {
+                case .addition: additions += 1
+                case .deletion: deletions += 1
+                case .context: break
+                }
+            }
+        }
+        self.additions = additions
+        self.deletions = deletions
+    }
 
     var id: String { path }
     var fileName: String { (path as NSString).lastPathComponent }
     var directory: String { (path as NSString).deletingLastPathComponent }
-
-    var additions: Int {
-        hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .addition }.count }
-    }
-
-    var deletions: Int {
-        hunks.reduce(0) { $0 + $1.lines.filter { $0.kind == .deletion }.count }
-    }
 }
 
 extension FileDiff {
@@ -361,7 +388,7 @@ extension FileDiff {
 /// Which version of a file's bytes to read. Each side of a binary diff maps
 /// to one revision; the pairing depends on the comparison the diff came from
 /// (worktree vs index, index vs HEAD, commit vs its first parent).
-enum BlobRevision: Hashable, Sendable {
+nonisolated enum BlobRevision: Hashable, Sendable {
     case worktree
     case index
     /// Anything git resolves in `<rev>:<path>` form — a hash, `HEAD`, `abc^`.
@@ -373,7 +400,7 @@ enum BlobRevision: Hashable, Sendable {
 /// One commit in a single file's history (`git log --follow`), carrying the
 /// path the file had *at that commit* — pathspecs against older commits must
 /// use the pre-rename name or the diff comes back empty.
-struct FileHistoryEntry: Hashable, Identifiable {
+nonisolated struct FileHistoryEntry: Hashable, Identifiable {
     let hash: String
     let author: String
     let authorEmail: String
@@ -390,7 +417,7 @@ struct FileHistoryEntry: Hashable, Identifiable {
     var shortHash: String { String(hash.prefix(7)) }
 }
 
-struct BlameLine: Hashable, Identifiable {
+nonisolated struct BlameLine: Hashable, Identifiable {
     /// Line number in the blamed revision of the file.
     let number: Int
     let hash: String
@@ -404,20 +431,20 @@ struct BlameLine: Hashable, Identifiable {
     var isUncommitted: Bool { hash.allSatisfy { $0 == "0" } }
 }
 
-struct BlameAnnotation: Hashable {
+nonisolated struct BlameAnnotation: Hashable {
     let author: String
     let date: String
     let summary: String
 }
 
-struct BlameFile: Hashable {
+nonisolated struct BlameFile: Hashable {
     let lines: [BlameLine]
     /// Commit metadata keyed by hash; porcelain output emits it once per
     /// commit, not per line.
     let annotations: [String: BlameAnnotation]
 }
 
-struct CommitFileStat: Hashable, Identifiable {
+nonisolated struct CommitFileStat: Hashable, Identifiable {
     let path: String
     /// Pre-rename path when status is `.renamed`; needed as a pathspec so the
     /// commit diff for the file isn't empty.
@@ -432,7 +459,7 @@ struct CommitFileStat: Hashable, Identifiable {
 
 // MARK: - Split diff rows
 
-struct SplitDiffRow: Hashable, Identifiable {
+nonisolated struct SplitDiffRow: Hashable, Identifiable {
     struct Side: Hashable {
         let number: Int?
         let text: String?

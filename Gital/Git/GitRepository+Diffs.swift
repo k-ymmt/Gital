@@ -14,14 +14,21 @@ extension GitRepository {
         return DiffParser.parse(output, scope: staged ? .staged : .unstaged, strictUTF8: valid)
     }
 
+    /// All-additions diff for an untracked file, synthesized straight from
+    /// its bytes. This used to shell out to `git diff --no-index /dev/null`
+    /// once per untracked file — a refresh of a repo with hundreds of
+    /// untracked files serialized hundreds of subprocess spawns.
     func diffUntracked(path: String) async throws -> [FileDiff] {
-        // Show new-file contents for untracked files. `--no-index` exits 1
-        // when the files differ (which is the expected case here).
-        let (output, valid) = try await executor.runChecked(
-            ["diff", "--no-index", "--", "/dev/null", path],
-            successCodes: [0, 1]
-        )
-        return DiffParser.parse(output, scope: .untracked, strictUTF8: valid)
+        let url = root.appendingPathComponent(path)
+        // Only regular files (following symlinks) are read: Data(contentsOf:)
+        // on a FIFO would block forever, where git just errors.
+        let resolved = url.resolvingSymlinksInPath()
+        let type = try FileManager.default.attributesOfItem(atPath: resolved.path)[.type] as? FileAttributeType
+        guard type == .typeRegular else { return [] }
+        try Task.checkCancellation()
+        let data = try await Task.detached { try Data(contentsOf: url) }.value
+        try Task.checkCancellation()
+        return [DiffParser.untrackedFile(path: path, data: data)]
     }
 
     func diffCommit(_ hash: String, path: String? = nil, renamedFrom: String? = nil) async throws -> [FileDiff] {

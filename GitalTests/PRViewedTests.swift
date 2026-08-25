@@ -74,18 +74,26 @@ struct PRViewedStoreTests {
         let repoA = URL(fileURLWithPath: "/repos/a")
         let repoB = URL(fileURLWithPath: "/repos/b")
 
+        // Writes are enqueued asynchronously; flushing makes them visible to
+        // the separate reader instances below.
+        func write(repo: URL, from old: PRViewedState, to new: PRViewedState, pr: Int) {
+            let store = PRViewedStore(repoRoot: repo, databaseURL: file)
+            store.apply(from: old, to: new, for: pr)
+            store.flush()
+        }
+
         let empty = PRViewedState()
         var stateA = PRViewedState()
         stateA.setCommitViewed(true, hash: "abc1234")
         stateA.toggleFile("a.swift")
         stateA.toggleCommitFile(commit: "0badf00", path: "p.swift", allPaths: ["p.swift", "q.swift"])
-        PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: empty, to: stateA, for: 7)
+        write(repo: repoA, from: empty, to: stateA, pr: 7)
 
         var stateB = PRViewedState()
         stateB.toggleCommitFile(commit: "def5678", path: "x.swift", allPaths: ["x.swift", "y.swift"])
-        PRViewedStore(repoRoot: repoB, databaseURL: file).apply(from: empty, to: stateB, for: 3)
+        write(repo: repoB, from: empty, to: stateB, pr: 3)
         // Same PR number as repo A's — must stay separate per repository.
-        PRViewedStore(repoRoot: repoB, databaseURL: file).apply(from: empty, to: stateB, for: 7)
+        write(repo: repoB, from: empty, to: stateB, pr: 7)
 
         let loadedA = PRViewedStore(repoRoot: repoA, databaseURL: file).load()
         #expect(loadedA[7] == stateA, "state round-trips through disk")
@@ -106,7 +114,7 @@ struct PRViewedStoreTests {
         // flags it touched — it must not wipe rows it never knew about.
         var stale = PRViewedState()
         stale.toggleFile("z.swift")
-        PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: empty, to: stale, for: 7)
+        write(repo: repoA, from: empty, to: stale, pr: 7)
         var merged = stateA2
         merged.toggleFile("z.swift")
         #expect(storeA.load()[7] == merged, "stale-instance delta does not clobber other rows")
@@ -115,7 +123,7 @@ struct PRViewedStoreTests {
         // file) must not abort the transaction.
         var reinsert = stale
         reinsert.toggleFile("b.swift")
-        PRViewedStore(repoRoot: repoA, databaseURL: file).apply(from: stale, to: reinsert, for: 7)
+        write(repo: repoA, from: stale, to: reinsert, pr: 7)
         #expect(storeA.load()[7] == merged, "duplicate insert is absorbed, not fatal")
 
         storeA.apply(from: merged, to: empty, for: 7)

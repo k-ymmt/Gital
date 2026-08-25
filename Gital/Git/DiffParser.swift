@@ -1,6 +1,7 @@
+import CryptoKit
 import Foundation
 
-enum DiffParser {
+nonisolated enum DiffParser {
     /// Parses `git diff` / `git show --patch` unified output into per-file diffs.
     /// Pass `strictUTF8: false` when the raw git output was not valid UTF-8 and
     /// had to be decoded lossily — affected files are flagged so callers don't
@@ -253,6 +254,74 @@ enum DiffParser {
         }
         flushFile()
         return files
+    }
+
+    /// Synthesizes the `FileDiff` that parsing `git diff --no-index
+    /// /dev/null <path>` would yield for an untracked file, straight from
+    /// its bytes — one subprocess per untracked file made every refresh of
+    /// a repo with many untracked files take seconds. Mirrors git where it
+    /// matters: an empty file is a header-only diff, a NUL byte in the
+    /// first 8000 means binary, invalid UTF-8 decodes lossily and flags
+    /// the file (staging is disabled for it), a missing final newline
+    /// marks the last line, and the blob OID matches git's abbreviated
+    /// hash so image previews re-key on content changes.
+    static func untrackedFile(path: String, data: Data) -> FileDiff {
+        let newBlob = blobOID(data)
+        let zeroBlob = "0000000"
+        if data.prefix(8000).contains(0) {
+            return FileDiff(
+                path: path, oldPath: nil, isBinary: true,
+                oldBlobHash: zeroBlob, newBlobHash: newBlob, hunks: [], scope: .untracked
+            )
+        }
+        guard !data.isEmpty else {
+            return FileDiff(
+                path: path, oldPath: nil, isBinary: false,
+                oldBlobHash: zeroBlob, newBlobHash: newBlob, hunks: [], scope: .untracked
+            )
+        }
+        let decodedStrictly = String(data: data, encoding: .utf8) != nil
+        let text = String(decoding: data, as: UTF8.self)
+        // Same slicing rule as parse(): components keeps CRLF content's
+        // trailing "\r" as part of each line.
+        var rawLines = text.components(separatedBy: "\n")
+        var noNewlineAtEnd = false
+        if rawLines.last == "" {
+            rawLines.removeLast()
+        } else {
+            noNewlineAtEnd = true
+        }
+        let lines = rawLines.enumerated().map { index, lineText in
+            DiffLine(
+                id: "\(path)@\(index)",
+                kind: .addition,
+                text: lineText,
+                oldNumber: nil,
+                newNumber: index + 1,
+                noNewline: noNewlineAtEnd && index == rawLines.count - 1
+            )
+        }
+        let header = lines.count == 1 ? "@@ -0,0 +1 @@" : "@@ -0,0 +1,\(lines.count) @@"
+        return FileDiff(
+            path: path,
+            oldPath: nil,
+            isBinary: false,
+            containsInvalidUTF8: !decodedStrictly,
+            oldBlobHash: zeroBlob,
+            newBlobHash: newBlob,
+            hunks: [DiffHunk(id: "\(path)@0", header: header, oldStart: 0, newStart: 1, lines: lines)],
+            scope: .untracked
+        )
+    }
+
+    /// Git's abbreviated blob OID for the bytes (SHA-1 of
+    /// "blob <size>\0<content>"), truncated like the `index` header line.
+    private static func blobOID(_ data: Data) -> String {
+        var hasher = Insecure.SHA1()
+        hasher.update(data: Data("blob \(data.count)\u{0}".utf8))
+        hasher.update(data: data)
+        let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return String(hex.prefix(7))
     }
 
     private static func stripHeaderTab(_ raw: String) -> String {

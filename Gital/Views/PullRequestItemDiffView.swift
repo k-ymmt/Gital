@@ -580,7 +580,7 @@ private struct PRReviewFileView: View {
     @State private var overlayHeights: [String: CGFloat] = [:]
     @State private var page = Page(html: "", estimatedHeight: 0)
 
-    private struct Page {
+    private nonisolated struct Page {
         let html: String
         let estimatedHeight: CGFloat
         /// Height-cache key, hashed once — heights are reported on every
@@ -600,10 +600,14 @@ private struct PRReviewFileView: View {
     }
 
     var body: some View {
+        // Computed once and shared between the spacer specs and the card
+        // views — each body evaluation used to run the full overlay scan
+        // twice (spacers + ForEach).
+        let overlays = computeOverlays()
         ZStack(alignment: .topLeading) {
             InteractiveWebView(
                 html: page.html,
-                spacers: spacers,
+                spacers: spacers(for: overlays),
                 onAction: onAction,
                 onHeight: { height, ready in
                     reportedHeight = height
@@ -634,18 +638,30 @@ private struct PRReviewFileView: View {
         }
     }
 
+    /// Builds the page HTML off the main thread — a big PR file's string
+    /// assembly is O(file size), and LazyVStack materializes several of
+    /// these views in one frame while scrolling.
     private func rebuildPage() {
-        let html = DiffHTMLBuilder.reviewUnifiedPage(
-            items: DiffHTMLBuilder.unifiedItems(for: diff),
-            language: DiffSyntaxHighlighting.language(for: diff),
-            commentable: canComment
-                ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
-                : nil,
-            askable: true
-        )
-        let rows = diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count }
-        page = Page(html: html, estimatedHeight: CGFloat(rows) * DiffHTMLBuilder.rowHeight)
-        reportedHeight = cachedHeight(forKey: page.heightCacheKey)
+        let diff = diff
+        let canComment = canComment
+        Task {
+            let built = await Task.detached { () -> Page in
+                let html = DiffHTMLBuilder.reviewUnifiedPage(
+                    items: DiffHTMLBuilder.unifiedItems(for: diff),
+                    language: DiffSyntaxHighlighting.language(for: diff),
+                    commentable: canComment
+                        ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
+                        : nil,
+                    askable: true
+                )
+                let rows = diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count }
+                return Page(html: html, estimatedHeight: CGFloat(rows) * DiffHTMLBuilder.rowHeight)
+            }.value
+            // Inputs superseded mid-build (file switch, permissions change).
+            guard PageInputs(diff: self.diff, canComment: self.canComment) == PageInputs(diff: diff, canComment: canComment) else { return }
+            page = built
+            reportedHeight = cachedHeight(forKey: built.heightCacheKey)
+        }
     }
 
     // MARK: - Overlays
@@ -673,10 +689,49 @@ private struct PRReviewFileView: View {
         static let cardEstimate: CGFloat = 150
     }
 
-    private var overlays: [Overlay] {
+    /// The card anchors, pre-bucketed so the exact (and unchanged) per-line
+    /// matching predicates only run on lines that can possibly hold a card.
+    /// Without the gate, every body evaluation ran every predicate on every
+    /// line — O(rows × cards) twice over on a big file.
+    private func computeOverlays() -> [Overlay] {
+        let threads = model.prs.threads(for: number)
+        let drafts = model.prs.pendingComments(for: number)
+        let reviewComposer = canComment ? model.prs.composer : nil
+        let askComposer = model.prAgentComposer
+
+        // Old/new line numbers that may anchor a thread, draft, or the
+        // review composer on this file, and the line IDs agent cards hang
+        // on. Supersets are fine — matched lines still run the predicates.
+        var leftNumbers = Set<Int>()
+        var rightNumbers = Set<Int>()
+        func note(side: ReviewCommentAnchor.Side, line: Int) {
+            if side == .left { leftNumbers.insert(line) } else { rightNumbers.insert(line) }
+        }
+        for thread in threads where thread.path == diff.path {
+            if let line = thread.line { note(side: thread.side, line: line) }
+        }
+        for draft in drafts where draft.anchor.path == diff.path {
+            note(side: draft.anchor.side, line: draft.anchor.line)
+        }
+        if let anchor = reviewComposer?.anchor, anchor.path == diff.path {
+            note(side: anchor.side, line: anchor.line)
+        }
+        var agentLineIDs = Set<String>()
+        for thread in model.agentThreads where thread.prNumber == number {
+            agentLineIDs.insert(thread.anchorLineID)
+        }
+        if let askComposer, askComposer.number == number {
+            agentLineIDs.insert(askComposer.anchorLineID)
+        }
+        guard !leftNumbers.isEmpty || !rightNumbers.isEmpty || !agentLineIDs.isEmpty else { return [] }
+
         var out: [Overlay] = []
         for hunk in diff.hunks {
             for line in hunk.lines {
+                let mayAnchor = line.oldNumber.map(leftNumbers.contains) == true
+                    || line.newNumber.map(rightNumbers.contains) == true
+                    || agentLineIDs.contains(line.id)
+                guard mayAnchor else { continue }
                 for thread in model.prs.threads(on: line, path: diff.path, in: number) {
                     out.append(Overlay(id: "thread:\(thread.id)", anchorLineID: line.id, kind: .thread(thread)))
                 }
@@ -691,16 +746,15 @@ private struct PRReviewFileView: View {
                 for thread in model.prAgentThreads(on: line, in: number, itemKey: itemKey) {
                     out.append(Overlay(id: "agent:\(thread.id)", anchorLineID: line.id, kind: .agentThread(thread)))
                 }
-                if let composer = model.prAgentComposer,
-                   model.isPRAgentComposerOpen(at: line, in: number, itemKey: itemKey) {
-                    out.append(Overlay(id: "card:ask", anchorLineID: line.id, kind: .agentComposer(composer)))
+                if let askComposer, model.isPRAgentComposerOpen(at: line, in: number, itemKey: itemKey) {
+                    out.append(Overlay(id: "card:ask", anchorLineID: line.id, kind: .agentComposer(askComposer)))
                 }
             }
         }
         return out
     }
 
-    private var spacers: [WebDiffSpacer] {
+    private func spacers(for overlays: [Overlay]) -> [WebDiffSpacer] {
         overlays.map { overlay in
             WebDiffSpacer(
                 id: overlay.id,

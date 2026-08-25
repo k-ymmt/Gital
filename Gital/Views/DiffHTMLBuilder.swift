@@ -7,7 +7,7 @@ import Foundation
 /// Line numbers and +/- signs are drawn with CSS pseudo-elements from data
 /// attributes, so text selection (and therefore copy) picks up only the code
 /// itself — the main capability the SwiftUI `Text`-per-line renderer lacks.
-enum DiffHTMLBuilder {
+nonisolated enum DiffHTMLBuilder {
     // MARK: - Read-only pages
 
     static func page(for diff: FileDiff, mode: DiffMode) -> String {
@@ -640,22 +640,14 @@ enum DiffHTMLBuilder {
             if (ask) { post({type: 'askRange', start: ask.dataset.start, end: ask.dataset.end}); }
             """ : "")
         });
-        const selectsTextIn = (range, el) => {
-            const bounds = document.createRange();
-            bounds.selectNodeContents(el);
-            const r = range.cloneRange();
-            if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
-            if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
-            return r.toString().length > 0;
-        };
+        \(selectionRowsScript)
         document.addEventListener('selectionchange', () => {
             document.querySelectorAll('.rbtn').forEach((el) => el.remove());
             document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
             const sel = window.getSelection();
             if (!sel.rangeCount || sel.isCollapsed) { return; }
             const range = sel.getRangeAt(0);
-            const hits = [...document.querySelectorAll('.line')]
-                .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+            const hits = selectedRows(range, '.line');
             hits.forEach((el, i) => {
                 el.classList.add('tsel');
                 if (i === 0 || el.previousElementSibling !== hits[i - 1]) { el.classList.add('tsel-first'); }
@@ -680,6 +672,55 @@ enum DiffHTMLBuilder {
         });
         """
     }
+
+    /// Shared text-selection row scan, interpolated into both selection
+    /// scripts so the two can never drift apart. `selectedRows` resolves the
+    /// selection's endpoint rows and walks the siblings between them —
+    /// O(selection) — instead of testing every row on the page against the
+    /// range: on a 50k-line page the full scan made every selectionchange
+    /// event (fired continuously while dragging) do 50k Range intersections.
+    /// Endpoints outside any row (hunk headers, cross-container drags) fall
+    /// back to the exhaustive scan, which stays the source of truth.
+    private static let selectionRowsScript = """
+    const selectsTextIn = (range, el) => {
+        const bounds = document.createRange();
+        bounds.selectNodeContents(el);
+        const r = range.cloneRange();
+        if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
+        if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
+        return r.toString().length > 0;
+    };
+    const selectedRows = (range, selector) => {
+        const rowAt = (node) => {
+            while (node && node.nodeType !== 1) { node = node.parentNode; }
+            return node && node.closest ? node.closest(selector) : null;
+        };
+        const walk = (from, to, pick) => {
+            const rows = [];
+            for (let el = from; el; el = el.nextElementSibling) {
+                const row = pick(el);
+                if (row && selectsTextIn(range, row)) { rows.push(row); }
+                if (el === to) { return rows; }
+            }
+            return null;  // never reached `to` — structure assumption failed
+        };
+        const start = rowAt(range.startContainer);
+        const end = rowAt(range.endContainer);
+        if (start && end) {
+            let rows = null;
+            if (start.parentElement === end.parentElement) {
+                // Unified: the rows themselves are siblings.
+                rows = walk(start, end, (el) => el.matches(selector) ? el : null);
+            } else if (start.parentElement.parentElement === end.parentElement.parentElement) {
+                // Split: one matching side per row; the rows are siblings.
+                rows = walk(start.parentElement, end.parentElement, (el) => el.querySelector(selector));
+            }
+            if (rows) { return rows; }
+        }
+        return [...document.querySelectorAll(selector)]
+            .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+    };
+    """
 
     /// Height reporting alone, for read-only pages hosted in a
     /// `WebDiffChunkView`. `gitalSetSelected` is a stub: the host applies its
@@ -818,14 +859,7 @@ enum DiffHTMLBuilder {
         if (!row || !row.classList.contains('row')) { return null; }
         return row.querySelector(el.classList.contains('left') ? '.side.left' : '.side.right');
     };
-    const selectsTextIn = (range, el) => {
-        const bounds = document.createRange();
-        bounds.selectNodeContents(el);
-        const r = range.cloneRange();
-        if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
-        if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
-        return r.toString().length > 0;
-    };
+    \(selectionRowsScript)
     // Corner buttons for a row-range frame — the range "+" plus the Stage/
     // Unstage/Discard capsules cloned from the Swift-rendered template.
     // Shared by the text-selection frame and the hover-hunk frame; "hov"
@@ -914,8 +948,7 @@ enum DiffHTMLBuilder {
         const range = sel.getRangeAt(0);
         const rowSelector = document.body.classList.contains('sel-left') ? '.side.left'
             : document.body.classList.contains('sel-right') ? '.side.right' : '.line';
-        let hits = [...document.querySelectorAll(rowSelector)]
-            .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+        let hits = selectedRows(range, rowSelector);
         // A drag can cross into the next file on the multi-file page, but a
         // frame's actions (stage/discard/ask) are per-file — clip the frame
         // to the file the selection starts in.

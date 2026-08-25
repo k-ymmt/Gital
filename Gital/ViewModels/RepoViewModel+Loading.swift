@@ -40,11 +40,18 @@ extension RepoViewModel {
         // Re-fetch at least as many commits as are already loaded so a
         // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
         let limit = max(Self.logPageSize, commits.count)
-        switch await logLoader.run({ try await self.repository.log(limit: limit) }) {
-        case .success(let loaded):
+        // Graph layout is O(commits × lanes) — computed inside the
+        // supersedable load, off the main thread, so a 10k-commit refresh
+        // doesn't stall the UI (and a superseded layout is just dropped).
+        switch await logLoader.run({ [repository] in
+            let loaded = try await repository.log(limit: limit)
+            let graph = await Task.detached { CommitGraph(commits: loaded) }.value
+            return (loaded, graph)
+        }) {
+        case .success(let (loaded, graph)):
             commits = loaded
             hasMoreCommits = loaded.count >= limit
-            graph = CommitGraph(commits: commits)
+            self.graph = graph
         case .failure(let error):
             report(error)
         case nil:
@@ -72,8 +79,12 @@ extension RepoViewModel {
                 let known = Set(commits.map(\.hash))
                 let fresh = page.filter { !known.contains($0.hash) }
                 if !fresh.isEmpty {
-                    commits.append(contentsOf: fresh)
-                    graph = CommitGraph(commits: commits)
+                    let merged = commits + fresh
+                    commits = merged
+                    let graph = await Task.detached { CommitGraph(commits: merged) }.value
+                    // A refresh that landed during the off-main layout owns
+                    // `commits` now — its own graph must not be overwritten.
+                    if commits == merged { self.graph = graph }
                     return
                 }
                 guard hasMoreCommits else { return }
@@ -176,15 +187,17 @@ extension RepoViewModel {
             } else {
                 diffs = try await repository.diffWorking(staged: false)
                 let stagedDiffs = try await repository.diffWorking(staged: true)
-                for diff in stagedDiffs where !diffs.contains(where: { $0.path == diff.path }) {
+                var knownPaths = Set(diffs.map(\.path))
+                for diff in stagedDiffs where knownPaths.insert(diff.path).inserted {
                     diffs.append(diff)
                 }
                 // Untracked files never appear in `git diff`; show them as
                 // all-additions like Fork does.
                 for change in status.unstaged where change.status == .untracked {
-                    guard !diffs.contains(where: { $0.path == change.path }),
+                    guard !knownPaths.contains(change.path),
                           let untracked = try? await repository.diffUntracked(path: change.path) else { continue }
                     diffs.append(contentsOf: untracked)
+                    knownPaths.formUnion(untracked.map(\.path))
                 }
             }
             return diffs

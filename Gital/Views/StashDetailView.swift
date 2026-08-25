@@ -47,11 +47,7 @@ struct StashDetailView: View {
                                         )
                                     )
                                 } else {
-                                    WebDiffChunkView(
-                                        html: DiffHTMLBuilder.chunkPage(for: diff, mode: model.diffMode),
-                                        estimatedHeight: estimatedHeight(for: diff),
-                                        onAction: { _ in }
-                                    )
+                                    StashChunkView(diff: diff, mode: model.diffMode)
                                 }
                             } header: {
                                 FileSectionHeader(diff: diff)
@@ -65,14 +61,46 @@ struct StashDetailView: View {
         }
     }
 
-    /// Rows × line height, exact unless lines wrap; holds the chunk's frame
-    /// only until the page reports its real height.
-    private func estimatedHeight(for diff: FileDiff) -> CGFloat {
-        switch model.diffMode {
-        case .unified:
-            CGFloat(DiffHTMLBuilder.unifiedItems(for: diff).count) * DiffHTMLBuilder.rowHeight
-        case .split:
-            CGFloat(SplitDiffRow.rows(for: diff.hunks).count) * DiffHTMLBuilder.rowHeight
-        }
+}
+
+/// One stash file's chunk page, built off the main thread and memoized on
+/// (diff, mode) — the HTML used to be rebuilt inside `body` on every
+/// evaluation, costing O(file size) per visible file on any state change.
+private struct StashChunkView: View {
+    let diff: FileDiff
+    let mode: DiffMode
+
+    @State private var html = ""
+    @State private var estimatedHeight: CGFloat = 0
+
+    private struct Inputs: Equatable {
+        let diff: FileDiff
+        let mode: DiffMode
+    }
+
+    var body: some View {
+        WebDiffChunkView(html: html, estimatedHeight: estimatedHeight, onAction: { _ in })
+            .onChange(of: Inputs(diff: diff, mode: mode), initial: true) {
+                // Cheap row-count estimate holds the frame until the build
+                // (and later the page's own height report) replaces it.
+                if html.isEmpty {
+                    let rows = diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count }
+                    estimatedHeight = CGFloat(rows) * DiffHTMLBuilder.rowHeight
+                }
+                let diff = diff
+                let mode = mode
+                Task {
+                    let built = await Task.detached { () -> (html: String, height: CGFloat) in
+                        let html = DiffHTMLBuilder.chunkPage(for: diff, mode: mode)
+                        let rows = mode == .split
+                            ? SplitDiffRow.rows(for: diff.hunks).count
+                            : DiffHTMLBuilder.unifiedItems(for: diff).count
+                        return (html, CGFloat(rows) * DiffHTMLBuilder.rowHeight)
+                    }.value
+                    guard Inputs(diff: self.diff, mode: self.mode) == Inputs(diff: diff, mode: mode) else { return }
+                    html = built.html
+                    estimatedHeight = built.height
+                }
+            }
     }
 }

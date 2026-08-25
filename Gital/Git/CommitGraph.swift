@@ -1,7 +1,7 @@
 import Foundation
 
 /// Lane layout for the commit graph, computed once per log load.
-struct CommitGraph {
+nonisolated struct CommitGraph {
     struct Edge: Hashable {
         enum Shape: Hashable {
             /// Straight line through the whole row in one lane.

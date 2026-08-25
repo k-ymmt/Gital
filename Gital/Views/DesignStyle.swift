@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension Color {
+nonisolated extension Color {
     init(hex: UInt32, opacity: Double = 1) {
         self.init(
             .sRGB,
@@ -13,7 +13,9 @@ extension Color {
 }
 
 /// Palette lifted from the reference design.
-enum DesignStyle {
+// nonisolated so `DiffHTMLBuilder` (which builds pages off the main thread)
+// can read the CSS palette; everything here is immutable Sendable data.
+nonisolated enum DesignStyle {
     // Raw hex values, shared between the SwiftUI colors and the CSS mirror
     // below so the WKWebView diff pages can never drift from the palette.
     static let additionHex: UInt32 = 0x3fb950

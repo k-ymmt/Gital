@@ -27,28 +27,30 @@ private final class HeightFittingWebView: WKWebView {
 /// estimate (wrong whenever lines wrap) would visibly jump the layout.
 /// Heights are width-dependent, but a stale entry only mis-sizes the chunk
 /// until the live page re-reports.
-private let heightCache = NSCache<NSString, NSNumber>()
+// nonisolated(unsafe): NSCache is thread-safe by contract; the annotation
+// lets page builds running off the main thread hash and pre-warm heights.
+nonisolated(unsafe) private let heightCache = NSCache<NSString, NSNumber>()
 
 /// Hashing is O(html length) — the Working Copy page can be megabytes, and
 /// heights are reported on every layout change, so callers with a long-lived
 /// page precompute the key once instead of re-hashing per report.
-func heightCacheKey(for html: String) -> String {
+nonisolated func heightCacheKey(for html: String) -> String {
     String(html.hashValue)
 }
 
-func cachedHeight(forKey key: String) -> CGFloat? {
+nonisolated func cachedHeight(forKey key: String) -> CGFloat? {
     heightCache.object(forKey: key as NSString).map { CGFloat($0.doubleValue) }
 }
 
-func cacheHeight(_ height: CGFloat, forKey key: String) {
+nonisolated func cacheHeight(_ height: CGFloat, forKey key: String) {
     heightCache.setObject(NSNumber(value: height), forKey: key as NSString)
 }
 
-func cachedHeight(for html: String) -> CGFloat? {
+nonisolated func cachedHeight(for html: String) -> CGFloat? {
     cachedHeight(forKey: heightCacheKey(for: html))
 }
 
-func cacheHeight(_ height: CGFloat, for html: String) {
+nonisolated func cacheHeight(_ height: CGFloat, for html: String) {
     cacheHeight(height, forKey: heightCacheKey(for: html))
 }
 

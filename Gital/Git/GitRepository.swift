@@ -12,7 +12,13 @@ struct BranchOperationError: LocalizedError {
 /// High-level git operations backed by the git CLI. Split by domain into
 /// `GitRepository+*.swift` extension files; this file holds the stored
 /// state and the few helpers shared across domains.
-final class GitRepository: @unchecked Sendable {
+///
+/// `nonisolated`: the app module defaults to MainActor, which put every
+/// output parse (log, diffs, status, blame) on the main thread — a 50k-line
+/// diff parse stalled the UI for hundreds of milliseconds on every refresh.
+/// With the class opted out, awaited calls from the UI run parsing on the
+/// concurrent executor and only the results hop back.
+nonisolated final class GitRepository: @unchecked Sendable {
     let root: URL
     /// Internal (not private) so the domain extension files can reach it.
     let executor: GitExecutor

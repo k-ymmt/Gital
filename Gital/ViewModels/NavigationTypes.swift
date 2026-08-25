@@ -34,7 +34,7 @@ enum CommitDetailTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-enum DiffMode: String, CaseIterable, Identifiable {
+nonisolated enum DiffMode: String, CaseIterable, Identifiable {
     case unified = "Unified"
     case split = "Split"
 

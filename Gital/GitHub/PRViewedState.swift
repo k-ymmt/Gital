@@ -8,7 +8,7 @@ import SQLite3
 /// file of a commit viewed promotes the commit itself. A commit's file list
 /// is only known once its diff has been loaded, so a commit in `commits`
 /// counts as "all of its files viewed" without enumerating them.
-struct PRViewedState: Equatable {
+nonisolated struct PRViewedState: Equatable {
     /// Viewed paths in the PR-wide "Files Changed" list.
     var files: Set<String> = []
     /// Fully viewed commits (short hashes).
@@ -88,18 +88,19 @@ struct PRViewedState: Equatable {
 /// touched, never wipe another instance's progress wholesale. Failures make
 /// the store inert rather than surfacing: losing review progress is never
 /// worth failing an interaction over.
-final class PRViewedStore: @unchecked Sendable {
+nonisolated final class PRViewedStore: @unchecked Sendable {
     /// `sqlite3_bind_text` destructor telling SQLite to copy the string —
     /// required because Swift's bridged C strings die when the call returns.
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     /// All SQLite access is confined to this serial queue — a raw sqlite3
     /// handle is not safe for concurrent use, and nothing else pins this
-    /// class to one isolation domain. Calls stay synchronous (`queue.sync`)
-    /// so callers keep today's ordering guarantees; the documented worst
-    /// case remains the 1s busy timeout when a second instance holds the
-    /// database.
-    private let queue = DispatchQueue(label: "app.kymmt.Gital.PRViewedStore")
+    /// class to one isolation domain. Writes are enqueued asynchronously
+    /// (the serial queue preserves their order, and the row-delta scheme
+    /// needs nothing back), so a contended database (busy timeout up to 1s)
+    /// can never stall the toggling UI; `load()` stays synchronous and
+    /// serializes behind any pending writes.
+    private let queue = DispatchQueue(label: "app.kymmt.Gital.PRViewedStore", qos: .utility)
 
     private enum Kind: Int32 {
         case file = 0        // PR-wide "Files Changed" path (no commit)
@@ -194,7 +195,14 @@ final class PRViewedStore: @unchecked Sendable {
     /// PR survive. INSERT OR IGNORE absorbs the race where both instances
     /// viewed the same flag.
     func apply(from old: PRViewedState, to new: PRViewedState, for number: Int) {
-        queue.sync { applyLocked(from: old, to: new, for: number) }
+        queue.async { self.applyLocked(from: old, to: new, for: number) }
+    }
+
+    /// Waits until every write enqueued so far has committed. `load()` on
+    /// THIS instance already serializes behind its own queue; this exists
+    /// for cross-instance ordering (tests reading through a second handle).
+    func flush() {
+        queue.sync {}
     }
 
     private func applyLocked(from old: PRViewedState, to new: PRViewedState, for number: Int) {

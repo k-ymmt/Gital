@@ -113,7 +113,7 @@ struct WorkingDiffPane: View {
         let mode: DiffMode
     }
 
-    private struct BuiltPage {
+    private nonisolated struct BuiltPage {
         let html: String
         let estimatedHeight: CGFloat
         /// The diffs this page was rendered from. Bridge actions resolve
@@ -136,22 +136,32 @@ struct WorkingDiffPane: View {
         }
     }
 
+    /// Builds the page HTML off the main thread — on a 50k-line diff the
+    /// string assembly takes hundreds of milliseconds, and this fires on
+    /// every diff refresh (i.e. every save the file watcher sees). A build
+    /// whose inputs were superseded mid-flight is dropped.
     private func rebuildPage() {
         let mode = model.diffMode
         let diffs = model.workingDiffs
         let files = diffs.map { diff in
             DiffHTMLBuilder.WorkingFile(diff: diff, options: options(for: diff, mode: mode))
         }
-        let html = DiffHTMLBuilder.workingCopyPage(files: files, mode: mode)
-        page = BuiltPage(html: html, estimatedHeight: Self.estimatedHeight(for: diffs, mode: mode), diffs: diffs)
-        if let cached = cachedHeight(forKey: page.heightCacheKey) {
-            pageHeight = cached
+        Task {
+            let built = await Task.detached {
+                let html = DiffHTMLBuilder.workingCopyPage(files: files, mode: mode)
+                return BuiltPage(html: html, estimatedHeight: Self.estimatedHeight(for: diffs, mode: mode), diffs: diffs)
+            }.value
+            guard PageInputs(diffs: model.workingDiffs, mode: model.diffMode) == PageInputs(diffs: diffs, mode: mode) else { return }
+            page = built
+            if let cached = cachedHeight(forKey: built.heightCacheKey) {
+                pageHeight = cached
+            }
         }
     }
 
     /// rows × row height plus the header spacers — only holds the scroll
     /// extent until the first real height report (wrong whenever lines wrap).
-    private static func estimatedHeight(for diffs: [FileDiff], mode: DiffMode) -> CGFloat {
+    private nonisolated static func estimatedHeight(for diffs: [FileDiff], mode: DiffMode) -> CGFloat {
         diffs.reduce(0) { total, diff in
             let rows: CGFloat
             if diff.isBinary {
@@ -238,8 +248,8 @@ struct WorkingDiffPane: View {
         let kind: Kind
 
         /// Space reserved before the native view reports its real height.
-        static let binaryEstimate: CGFloat = 120
-        static let cardEstimate: CGFloat = 150
+        nonisolated static let binaryEstimate: CGFloat = 120
+        nonisolated static let cardEstimate: CGFloat = 150
 
         var defaultHeight: CGFloat {
             switch kind {

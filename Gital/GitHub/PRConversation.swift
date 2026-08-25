@@ -4,7 +4,7 @@ import Foundation
 /// (unlike `PendingReviewComment`, which is a local draft). Threads come from
 /// the GraphQL API because REST exposes neither the resolved state nor the
 /// thread node ID that the resolve/unresolve mutations need.
-struct ReviewThread: Identifiable, Hashable {
+nonisolated struct ReviewThread: Identifiable, Hashable {
     struct Comment: Identifiable, Hashable {
         /// REST `databaseId`, the ID the reply endpoint takes.
         let id: Int

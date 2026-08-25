@@ -28,14 +28,16 @@ enum DiffSyntaxHighlighting {
     /// deletion rows interleave both merge parents, so no coherent "old
     /// file" exists to tokenize — the colors would smear misleadingly on
     /// exactly the conflict-resolution screen.
-    static func language(for diff: FileDiff) -> String? {
+    /// nonisolated (unlike `install`, which touches WebKit): page builds
+    /// running off the main thread call this.
+    nonisolated static func language(for diff: FileDiff) -> String? {
         diff.isCombined ? nil : language(forPath: diff.path)
     }
 
     /// Shiki language id for a repo-relative path, or nil when the file's
     /// language isn't bundled. Ids must exist in `LANGS` in
     /// `Scripts/shiki/entry.mjs`.
-    static func language(forPath path: String) -> String? {
+    nonisolated static func language(forPath path: String) -> String? {
         let name = (path as NSString).lastPathComponent.lowercased()
         if let id = byFilename[name] { return id }
         let ext = (name as NSString).pathExtension
@@ -43,7 +45,7 @@ enum DiffSyntaxHighlighting {
         return byExtension[ext]
     }
 
-    private static let byFilename: [String: String] = [
+    private nonisolated static let byFilename: [String: String] = [
         "dockerfile": "docker",
         "makefile": "make",
         "gnumakefile": "make",
@@ -54,7 +56,7 @@ enum DiffSyntaxHighlighting {
         "brewfile": "ruby",
     ]
 
-    private static let byExtension: [String: String] = [
+    private nonisolated static let byExtension: [String: String] = [
         "swift": "swift",
         "kt": "kotlin", "kts": "kotlin",
         "java": "java",
