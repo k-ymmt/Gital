@@ -55,7 +55,11 @@ struct ReviewThread: Identifiable, Hashable {
     /// content line (file-level comments carry only the `@@` header).
     static func lineText(fromDiffHunk hunk: String?) -> String? {
         guard let hunk else { return nil }
-        let lines = hunk.split(separator: "\n", omittingEmptySubsequences: false)
+        // components, not split: "\r\n" is a single grapheme to
+        // split(separator:), so a CRLF hunk would collapse into one blob and
+        // the content match against DiffParser's per-line text (which keeps
+        // the trailing "\r") could never succeed.
+        let lines = hunk.components(separatedBy: "\n")
         guard let last = lines.last(where: { line in
             guard let first = line.first else { return false }
             return first == "+" || first == "-" || first == " "

@@ -40,6 +40,14 @@ struct SidebarPullRequestsSection: View {
 
         ForEach(filtered) { pr in
             summaryRow(pr)
+            if let expandError = model.prs.expandError, expandError.number == pr.number {
+                Text(expandError.message)
+                    .font(.system(size: 11))
+                    .foregroundStyle(DesignStyle.deletion)
+                    .padding(.leading, 34)
+                    .padding(.trailing, 16)
+                    .padding(.vertical, 2)
+            }
             if model.prs.expanded.contains(pr.number), let detail = model.prs.detailsCache[pr.number] {
                 expansion(detail)
             }

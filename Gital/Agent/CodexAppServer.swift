@@ -67,6 +67,11 @@ actor CodexAppServer {
     /// Bumped whenever `initTask` is replaced; lets awaiting callers detect
     /// that the task they waited on is no longer the current one.
     private var initGeneration = 0
+    /// Bumped by `shutdown()`; a launch that was suspended (executable
+    /// lookup, environment capture) when the shutdown landed checks this
+    /// before spawning — spawning afterwards would leave a codex process
+    /// nobody ever terminates.
+    private var shutdownGeneration = 0
     private var threadIDsByConversation: [UUID: String] = [:]
 
     // MARK: - Public API
@@ -115,6 +120,7 @@ actor CodexAppServer {
     /// Repo close: every turn dies, even ones still in setup — unlike the
     /// narrower process-replacement and exit sweeps below.
     func shutdown() {
+        shutdownGeneration += 1
         initTask = nil
         threadIDsByConversation = [:]
         let old = wire.retire(with: CodexError.terminated)
@@ -345,6 +351,7 @@ actor CodexAppServer {
     }
 
     private func launchProcess() async throws {
+        let launchGeneration = shutdownGeneration
         // Replace any previous (dead or stale) process WITHOUT sweeping
         // turns still in setup: a first turn registers itself in
         // `activeTurns` before setup reaches this point, and the full
@@ -437,6 +444,13 @@ actor CodexAppServer {
                 await self?.processDidExit(process)
             }
         }
+
+        // A shutdown that landed while this launch was suspended above (the
+        // executable lookup and environment capture both await) must win:
+        // there is no suspension point between here and `wire.adopt`, so
+        // this check is race-free — without it the spawned process would
+        // outlive the retired wire with nobody left to terminate it.
+        guard shutdownGeneration == launchGeneration else { throw CodexError.terminated }
 
         do {
             try process.run()
@@ -586,10 +600,14 @@ actor CodexAppServer {
     /// Denies when the approval belongs to a text-only turn. Attribution
     /// mirrors `deliver(_:)`: by threadId when the request carries one,
     /// otherwise by the single active turn. When attribution fails entirely,
-    /// the presence of ANY running text-only turn denies — wrongly denying
-    /// an agent turn degrades one answer, wrongly approving a text-only turn
-    /// grants repository changes nobody asked for. Pure and static so the
-    /// mixed-turn branches are unit-testable without a live codex process.
+    /// the presence of ANY running text-only turn denies, and no running
+    /// turns at all denies too — a cancelled text-only turn's record leaves
+    /// `activeTurns` before its interrupt lands, so a late approval request
+    /// can arrive with nothing running, and approving it would grant
+    /// repository changes nobody is watching. Wrongly denying degrades one
+    /// answer for a turn the user already abandoned; wrongly approving a
+    /// text-only turn grants repository changes nobody asked for. Pure and
+    /// static so the branches are unit-testable without a live codex process.
     static func approvalDecision(
         requestThreadID: String?,
         running: [(threadID: String?, textOnly: Bool)]
@@ -601,7 +619,7 @@ actor CodexAppServer {
         } else if running.count == 1, let only = running.first {
             textOnly = only.textOnly
         } else {
-            textOnly = running.contains { $0.textOnly }
+            textOnly = running.isEmpty || running.contains { $0.textOnly }
         }
         return textOnly ? "denied" : "approved"
     }

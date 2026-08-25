@@ -56,20 +56,34 @@ extension RepoViewModel {
         guard hasMoreCommits, !isLoadingMoreCommits, !commits.isEmpty else { return }
         isLoadingMoreCommits = true
         defer { isLoadingMoreCommits = false }
-        let skip = commits.count
-        // Shares logLoader with refreshLog: a refresh that started later has
-        // replaced `commits`, and appending a page computed against the old
-        // offsets would rewind or duplicate.
-        switch await logLoader.run({ try await self.repository.log(limit: Self.logPageSize, skip: skip) }) {
-        case .success(let page):
-            hasMoreCommits = page.count >= Self.logPageSize
-            let known = Set(commits.map(\.hash))
-            commits.append(contentsOf: page.filter { !known.contains($0.hash) })
-            graph = CommitGraph(commits: commits)
-        case .failure(let error):
-            report(error)
-        case nil:
-            break
+        var skip = commits.count
+        // A page can dedupe to nothing (history rewritten between pages):
+        // keep advancing the offset until something new lands or the log
+        // runs out. The view's trigger is keyed on the commit count, which
+        // an all-duplicate page leaves unchanged — returning without
+        // progress would strand the spinner row forever.
+        while true {
+            // Shares logLoader with refreshLog: a refresh that started later
+            // has replaced `commits`, and appending a page computed against
+            // the old offsets would rewind or duplicate.
+            switch await logLoader.run({ try await self.repository.log(limit: Self.logPageSize, skip: skip) }) {
+            case .success(let page):
+                hasMoreCommits = page.count >= Self.logPageSize
+                let known = Set(commits.map(\.hash))
+                let fresh = page.filter { !known.contains($0.hash) }
+                if !fresh.isEmpty {
+                    commits.append(contentsOf: fresh)
+                    graph = CommitGraph(commits: commits)
+                    return
+                }
+                guard hasMoreCommits else { return }
+                skip += Self.logPageSize
+            case .failure(let error):
+                report(error)
+                return
+            case nil:
+                return
+            }
         }
     }
 
@@ -92,6 +106,7 @@ extension RepoViewModel {
     }
 
     func loadCommitDetail() async {
+        commitDetailError = nil
         guard let hash = selectedCommitHash else {
             commitDetail = nil
             commitFiles = []
@@ -119,7 +134,15 @@ extension RepoViewModel {
                 selectedCommitFilePath = commitFiles.first?.path
             }
         case .failure(let error):
-            report(error)
+            // The previous commit's data must not keep rendering under the
+            // failed selection's header, and the pane needs a visible,
+            // persistent failure state — a dismissed alert alone left an
+            // eternal spinner with no retry short of re-selecting.
+            commitDetail = nil
+            commitFiles = []
+            commitDiffs = []
+            commitDiffsHash = nil
+            commitDetailError = error.localizedDescription
         case nil:
             break
         }

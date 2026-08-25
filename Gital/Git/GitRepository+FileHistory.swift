@@ -26,7 +26,7 @@ extension GitRepository {
         } catch let error as GitError {
             // Unborn HEAD (fresh repo): no commits touch anything. Probed
             // like `log()` does rather than matching stderr wording.
-            guard startHash == nil, await !headExists() else { throw error }
+            guard startHash == nil, try await !headExists() else { throw error }
             return []
         }
         return Self.parseFileHistory(output, queryPath: path)

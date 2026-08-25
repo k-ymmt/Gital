@@ -8,7 +8,7 @@ struct BranchOperationsTests {
 
     @Test func pushWithUpstreamIsPlain() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "main", upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: false
+            currentBranch: "main", pushRemote: nil, upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: false
         ) == ["push"])
     }
 
@@ -17,25 +17,25 @@ struct BranchOperationsTests {
     // an explicit refspec naming only the confirmed branch.
     @Test func forcePushCarriesExplicitRefspec() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "main", upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: true
+            currentBranch: "main", pushRemote: nil, upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: true
         ) == ["push", "--force-with-lease", "origin", "main:refs/heads/main"])
     }
 
     @Test func forcePushHonorsDifferentlyNamedUpstream() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "local", upstreamRemote: "fork", upstreamMerge: "refs/heads/other", force: true
+            currentBranch: "local", pushRemote: nil, upstreamRemote: "fork", upstreamMerge: "refs/heads/other", force: true
         ) == ["push", "--force-with-lease", "fork", "local:refs/heads/other"])
     }
 
     @Test func pushWithoutUpstreamSetsUpstreamOnOrigin() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "feature/x", upstreamRemote: nil, upstreamMerge: nil, force: false
+            currentBranch: "feature/x", pushRemote: nil, upstreamRemote: nil, upstreamMerge: nil, force: false
         ) == ["push", "--set-upstream", "origin", "feature/x"])
     }
 
     @Test func forcePushWithoutUpstreamKeepsBothFlags() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "main", upstreamRemote: nil, upstreamMerge: nil, force: true
+            currentBranch: "main", pushRemote: nil, upstreamRemote: nil, upstreamMerge: nil, force: true
         ) == ["push", "--force-with-lease", "--set-upstream", "origin", "main"])
     }
 
@@ -43,7 +43,7 @@ struct BranchOperationsTests {
     // upstream" — matching git's own @{upstream} resolution.
     @Test func partialUpstreamConfigReadsAsNoUpstream() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "main", upstreamRemote: "origin", upstreamMerge: nil, force: false
+            currentBranch: "main", pushRemote: nil, upstreamRemote: "origin", upstreamMerge: nil, force: false
         ) == ["push", "--set-upstream", "origin", "main"])
     }
 
@@ -51,14 +51,38 @@ struct BranchOperationsTests {
     // push lets git report the real problem.
     @Test func detachedHeadPushStaysPlain() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "HEAD", upstreamRemote: nil, upstreamMerge: nil, force: false
+            currentBranch: "HEAD", pushRemote: nil, upstreamRemote: nil, upstreamMerge: nil, force: false
         ) == ["push"])
     }
 
     @Test func detachedHeadForcePushStaysPlain() {
         #expect(GitRepository.pushArguments(
-            currentBranch: "HEAD", upstreamRemote: nil, upstreamMerge: nil, force: true
+            currentBranch: "HEAD", pushRemote: nil, upstreamRemote: nil, upstreamMerge: nil, force: true
         ) == ["push", "--force-with-lease"])
+    }
+
+    // Triangular workflow: the push destination (branch.<n>.pushRemote /
+    // remote.pushDefault) wins over the fetch remote — a force push must go
+    // where a plain `git push` would go, never force-with-lease the upstream
+    // repo the user never pushes to.
+    @Test func forcePushHonorsTriangularPushRemote() {
+        #expect(GitRepository.pushArguments(
+            currentBranch: "main", pushRemote: "fork", upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: true
+        ) == ["push", "--force-with-lease", "fork", "main:refs/heads/main"])
+    }
+
+    @Test func plainPushWithTriangularRemoteStaysBare() {
+        #expect(GitRepository.pushArguments(
+            currentBranch: "main", pushRemote: "fork", upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: false
+        ) == ["push"])
+    }
+
+    // A broken "." push destination falls back to the upstream path instead
+    // of pushing into the repository itself.
+    @Test func dotPushRemoteIsIgnored() {
+        #expect(GitRepository.pushArguments(
+            currentBranch: "main", pushRemote: ".", upstreamRemote: "origin", upstreamMerge: "refs/heads/main", force: true
+        ) == ["push", "--force-with-lease", "origin", "main:refs/heads/main"])
     }
 
     // MARK: - Specific-branch push arguments

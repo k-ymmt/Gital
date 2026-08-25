@@ -488,6 +488,15 @@ extension RepoViewModel {
             if self.selectedBranchName == branch.name {
                 self.selectedBranchName = trimmed
             }
+            // The multi-selection and the ⇧-click anchor resolve by name —
+            // left stale, the renamed branch silently drops out of "Delete N
+            // Branches…" and shift-extension falls back to single-select.
+            if self.selectedBranchNames.remove(branch.name) != nil {
+                self.selectedBranchNames.insert(trimmed)
+            }
+            if self.branchSelectionAnchor == branch.name {
+                self.branchSelectionAnchor = trimmed
+            }
         }
     }
 

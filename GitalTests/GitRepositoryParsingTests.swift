@@ -70,8 +70,8 @@ struct GitRepositoryParsingTests {
 
     @Test func logParsing() {
         let logOutput = [
-            ["aaa111", "bbb222", "Kenji Mori", "kenji@aurora.app", "2 hours ago", "Polish welcome carousel", "HEAD -> feature/onboarding, origin/feature/onboarding"].joined(separator: "\u{0}"),
-            ["bbb222", "ccc333 ddd444", "Aiko Tanaka", "aiko@aurora.app", "Yesterday", "Merge branch 'main'", "tag: v1.2.0, main"].joined(separator: "\u{0}"),
+            ["aaa111", "bbb222", "Kenji Mori", "kenji@aurora.app", "2 hours ago", "Polish welcome carousel", "HEAD -> feature/onboarding\u{1f}origin/feature/onboarding"].joined(separator: "\u{0}"),
+            ["bbb222", "ccc333 ddd444", "Aiko Tanaka", "aiko@aurora.app", "Yesterday", "Merge branch 'main'", "tag: v1.2.0\u{1f}main"].joined(separator: "\u{0}"),
         ].joined(separator: "\n")
 
         let commits = GitRepository.parseLog(logOutput, remotes: ["origin"])
@@ -87,6 +87,15 @@ struct GitRepositoryParsingTests {
     @Test func refKindClassification() {
         #expect(GitRepository.parseRefs("feature/login", remotes: ["origin"]).first?.kind == .branch, "slash-named local branch stays local")
         #expect(GitRepository.parseRefs("origin/main", remotes: ["origin"]).first?.kind == .remoteBranch, "known remote prefix is remote")
+    }
+
+    // Ref names may legally contain commas; the 0x1F decorate separator keeps
+    // them whole where %D's ", " would shatter them into phantom refs.
+    @Test func commaInRefNameSurvives() {
+        let refs = GitRepository.parseRefs("tag: v1,2\u{1f}br,anch", remotes: [])
+        #expect(refs.count == 2, "comma refs stay two refs")
+        #expect(refs.contains { $0.kind == .tag && $0.name == "v1,2" }, "comma tag intact")
+        #expect(refs.contains { $0.kind == .branch && $0.name == "br,anch" }, "comma branch intact")
     }
 
     // A subject containing legacy 0x1E/0x1F separator bytes must not corrupt
@@ -158,7 +167,7 @@ struct GitRepositoryParsingTests {
             "p1p1p1 p2p2p2",
             "Kenji Mori", "kenji@aurora.app", "2026-07-25 10:30:00",
             "GitHub", "noreply@github.com", "2026-07-25 11:00:00",
-            "HEAD -> main, tag: v2.0.0",
+            "HEAD -> main\u{1f}tag: v2.0.0",
             "Polish welcome carousel\n\nMulti-line body with details.\nSecond body line.\n",
         ].joined(separator: "\u{0}")
 

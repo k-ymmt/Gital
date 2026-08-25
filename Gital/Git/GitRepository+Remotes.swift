@@ -29,7 +29,9 @@ extension GitRepository {
     /// only way to reach commits of PRs from forks (their remote is never
     /// configured locally); the ref namespace is GitHub-specific.
     func fetchPullRequestHead(number: Int) async throws {
-        try await executor.run(["fetch", "origin", "refs/pull/\(number)/head"], lane: .network)
+        // --no-write-fetch-head for the same reason as fetch(): a FETCH_HEAD
+        // write turns opening a PR into a spurious full watcher refresh.
+        try await executor.run(["fetch", "origin", "refs/pull/\(number)/head", "--no-write-fetch-head"], lane: .network)
     }
 
     func pull() async throws {
@@ -41,14 +43,18 @@ extension GitRepository {
 
     func push(force: Bool = false) async throws {
         let branch = try await currentBranch()
+        var pushRemote: String?
         var remote: String?
         var merge: String?
         if branch != "HEAD" {
+            pushRemote = try await configValue("branch.\(branch).pushRemote")
+            if pushRemote == nil { pushRemote = try await configValue("remote.pushDefault") }
             remote = try await configValue("branch.\(branch).remote")
             merge = try await configValue("branch.\(branch).merge")
         }
         try await executor.run(Self.pushArguments(
-            currentBranch: branch, upstreamRemote: remote, upstreamMerge: merge, force: force
+            currentBranch: branch, pushRemote: pushRemote,
+            upstreamRemote: remote, upstreamMerge: merge, force: force
         ), lane: .network)
     }
 
@@ -57,13 +63,23 @@ extension GitRepository {
     /// remote commits that were never fetched locally. A forced push always
     /// carries an explicit refspec — a bare `push --force-with-lease` obeys
     /// `push.default`, and under "matching" that force-pushes every matching
-    /// branch, not just the one the user confirmed.
-    static func pushArguments(currentBranch: String?, upstreamRemote: String?, upstreamMerge: String?, force: Bool) -> [String] {
+    /// branch, not just the one the user confirmed. A triangular push
+    /// destination (`branch.<name>.pushRemote` / `remote.pushDefault`) wins
+    /// over the fetch remote, mirroring where a plain `git push` would go.
+    static func pushArguments(currentBranch: String?, pushRemote: String?, upstreamRemote: String?, upstreamMerge: String?, force: Bool) -> [String] {
         var args = ["push"]
         if force { args.append("--force-with-lease") }
         // Detached HEAD ("HEAD" pseudo-branch): plain push lets git report
         // the real problem instead of creating a branch literally named "HEAD".
         guard let branch = currentBranch, branch != "HEAD" else { return args }
+        if let pushRemote, pushRemote != "." {
+            // Triangular workflow: the branch lands under its own name on the
+            // push remote (push.default "simple"/"current" semantics). A
+            // plain push already routes there via the config, so only the
+            // forced form needs the explicit refspec.
+            if force { args += [pushRemote, "\(branch):refs/heads/\(branch)"] }
+            return args
+        }
         guard let remote = upstreamRemote, let merge = upstreamMerge else {
             args += ["--set-upstream", "origin", branch]
             return args

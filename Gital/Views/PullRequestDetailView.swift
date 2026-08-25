@@ -292,30 +292,36 @@ struct PullRequestDetailView: View {
     }
 
     private var mergeBox: some View {
-        HStack(spacing: 11) {
-            Image(systemName: "arrow.triangle.merge")
-                .font(.system(size: 17))
-                .foregroundStyle(canMerge ? DesignStyle.addition : Color.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(mergeTitle)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(mergeNote)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                model.prs.merge(detail.number)
-            } label: {
-                if isMerging {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text("Merge pull request")
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 11) {
+                Image(systemName: "arrow.triangle.merge")
+                    .font(.system(size: 17))
+                    .foregroundStyle(canMerge ? DesignStyle.addition : Color.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(mergeTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(mergeNote)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
                 }
+                Spacer()
+                Button {
+                    model.prs.merge(detail.number)
+                } label: {
+                    if isMerging {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Merge pull request")
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .tint(DesignStyle.addition)
+                .disabled(!canMerge || isMerging)
             }
-            .buttonStyle(.glassProminent)
-            .tint(DesignStyle.addition)
-            .disabled(!canMerge || isMerging)
+            if let error = model.prs.mergeError {
+                InlineErrorText(error)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .padding(16)
         .glassEffect(in: .rect(cornerRadius: 12))

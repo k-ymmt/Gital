@@ -7,7 +7,9 @@ extension GitRepository {
         async let remotes = remoteNames()
         // NUL field separators: none of these fields can ever contain a NUL,
         // unlike 0x1E/0x1F which a hostile subject could carry.
-        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%s%x00%D"
+        // Decorations use 0x1F between refs instead of %D's ", " — ref names
+        // may legally contain commas, but never control bytes.
+        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%s%x00\(Self.decorateFormat)"
         var args = [
             "log", "--branches", "--remotes", "--tags", "HEAD",
             "--topo-order", "--date=relative",
@@ -25,7 +27,7 @@ extension GitRepository {
             // doesn't resolve; list reachable refs only, which may be empty.
             // Probed with rev-parse instead of matching stderr wording, which
             // varies across git versions and locales.
-            guard await !headExists() else { throw error }
+            guard try await !headExists() else { throw error }
             var retryArgs = args
             retryArgs.removeAll { $0 == "HEAD" }
             output = try await executor.run(retryArgs)
@@ -50,10 +52,15 @@ extension GitRepository {
         }
     }
 
+    /// `%D` separates refs with ", ", which a ref name can itself contain
+    /// (e.g. a tag "v1,2"); 0x1F is unambiguous because git forbids control
+    /// bytes in ref names. Keeps %D's item shapes ("HEAD -> x", "tag: y").
+    static let decorateFormat = "%(decorate:prefix=,suffix=,separator=%x1f)"
+
     static func parseRefs(_ decoration: String, remotes: Set<String> = []) -> [GitRef] {
         guard !decoration.isEmpty else { return [] }
         var refs: [GitRef] = []
-        for part in decoration.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+        for part in decoration.split(separator: "\u{1f}").map({ $0.trimmingCharacters(in: .whitespaces) }) {
             if part.hasPrefix("HEAD -> ") {
                 refs.append(GitRef(kind: .head, name: String(part.dropFirst("HEAD -> ".count))))
             } else if part == "HEAD" {
@@ -75,7 +82,7 @@ extension GitRepository {
         async let remotes = remoteNames()
         // NUL separators as in `log`; %B goes last so the multi-line message
         // can't split the record even though it contains newlines.
-        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00%D%x00%B"
+        let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00\(Self.decorateFormat)%x00%B"
         let output = try await executor.run([
             "show", "-s", "--no-color",
             "--date=format-local:%Y-%m-%d %H:%M:%S",

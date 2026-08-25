@@ -48,8 +48,17 @@ final class GitRepository: @unchecked Sendable {
     }
 
     /// Whether HEAD resolves to a commit — false on an unborn branch.
-    func headExists() async -> Bool {
-        (try? await executor.run(["rev-parse", "--verify", "--quiet", "HEAD"])) != nil
+    /// Throws only on cancellation: a cancelled probe must not read as
+    /// "unborn HEAD", which would make reflog() return empty and log()
+    /// retry a command the caller already abandoned.
+    func headExists() async throws -> Bool {
+        do {
+            _ = try await executor.run(["rev-parse", "--verify", "--quiet", "HEAD"])
+            return true
+        } catch {
+            try Task.checkCancellation()
+            return false
+        }
     }
 
     /// Names of configured remotes. Failure degrades to an empty set — refs

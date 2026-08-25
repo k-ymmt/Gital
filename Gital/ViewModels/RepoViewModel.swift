@@ -96,6 +96,10 @@ final class RepoViewModel {
     /// load, and pairing new-selection revisions with old-selection diffs
     /// would briefly render one commit's file header over another's blobs.
     var commitDiffsHash: String?
+    /// Failure of the selected commit's detail load, rendered in place of
+    /// the detail panes — without it the Commit tab spins forever and the
+    /// Files tab keeps the previous commit's data after a dismissed alert.
+    var commitDetailError: String?
     var selectedCommitFilePath: String?
 
     var selectedCommit: Commit? {

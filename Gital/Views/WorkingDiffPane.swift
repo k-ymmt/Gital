@@ -38,6 +38,14 @@ struct WorkingDiffPane: View {
             ScrollView {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: 0).id(Self.diffTopID)
+                    // A clean working copy with live agent cards (the reason
+                    // ChangesView still shows this pane): say why the diff
+                    // area is empty instead of rendering a blank page.
+                    if model.workingDiffs.isEmpty {
+                        EmptyStateView("No changes in the working copy", systemImage: "checkmark.circle")
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 40)
+                    }
                     ZStack(alignment: .topLeading) {
                         InteractiveWebView(
                             html: page.html,
@@ -262,7 +270,8 @@ struct WorkingDiffPane: View {
         }
         // Agent cards interleave in unified mode only (split rows carry no
         // line IDs to insert after) — matching the chunked pane before it.
-        guard model.diffMode == .unified else { return out }
+        // In split mode they render in the trailing section instead.
+        guard cardsAreInline else { return out }
         if let anchorID = model.composerAnchorID, let range = model.composerRange, let file = model.composerFile,
            model.workingDiffLineIDs.contains(anchorID) {
             out.append(Overlay(
@@ -314,23 +323,31 @@ struct WorkingDiffPane: View {
         )
     }
 
+    /// Whether agent cards render inline over the page — only unified mode
+    /// has line spacers to hang them on. In split mode every card falls
+    /// through to the trailing section; hiding them entirely there would
+    /// make a mode toggle swallow a streaming answer or a half-typed box.
+    private var cardsAreInline: Bool { model.diffMode == .unified }
+
     /// Threads whose anchor line no longer exists (the agent's own edit
     /// re-shaped the diff) must stay reachable — the answer would otherwise
     /// vanish. Same for the composer: a background diff refresh must not
     /// silently swallow the box mid-typing. Both render below the page.
     private var trailingCards: some View {
         VStack(spacing: 0) {
-            ForEach(orphanedThreads) { thread in
+            ForEach(trailingThreads) { thread in
                 AgentThreadView(model: model, thread: thread)
             }
             if let range = model.composerRange, let file = model.composerFile,
-               let anchorID = model.composerAnchorID, !model.workingDiffLineIDs.contains(anchorID) {
+               let anchorID = model.composerAnchorID,
+               !cardsAreInline || !model.workingDiffLineIDs.contains(anchorID) {
                 workingCopyComposer(range: range, fileName: (file as NSString).lastPathComponent)
             }
         }
     }
 
-    private var orphanedThreads: [AgentThread] {
+    private var trailingThreads: [AgentThread] {
+        guard cardsAreInline else { return model.agentThreads }
         let visible = model.workingDiffLineIDs
         return model.agentThreads.filter { !visible.contains($0.anchorLineID) }
     }

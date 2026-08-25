@@ -76,9 +76,11 @@ struct CodexApprovalDecisionTests {
         ) == "approved")
     }
 
-    @Test func noRunningTurnsApproves() {
-        // Nothing to protect: an approval with no live turn cannot belong to
-        // a text-only contract.
-        #expect(CodexAppServer.approvalDecision(requestThreadID: nil, running: []) == "approved")
+    @Test func noRunningTurnsDenies() {
+        // A cancelled text-only turn's record leaves activeTurns before the
+        // interrupt reaches codex; a late approval request then arrives with
+        // nothing running. Approving it would execute a repository-changing
+        // command nobody is watching — fail closed.
+        #expect(CodexAppServer.approvalDecision(requestThreadID: nil, running: []) == "denied")
     }
 }

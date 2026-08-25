@@ -50,8 +50,10 @@ extension GitRepository {
 
         return names.map { name in
             let prefix = name + "/"
+            // Only the remote's own symref ("origin/HEAD") is synthetic; a
+            // genuine branch can legally be named ".../HEAD" (e.g. foo/HEAD).
             let owned = branches
-                .filter { $0.hasPrefix(prefix) && !$0.hasSuffix("/HEAD") }
+                .filter { $0.hasPrefix(prefix) && $0 != name + "/HEAD" }
                 .map { String($0.dropFirst(prefix.count)) }
             return RemoteInfo(name: name, branches: owned)
         }
@@ -91,7 +93,7 @@ extension GitRepository {
     func reflog(limit: Int = GitRepository.reflogDisplayLimit) async throws -> [ReflogEntry] {
         // An unborn branch has no reflog and `git reflog` fatals on it —
         // that's the empty state, not an error to alert about.
-        guard await headExists() else { return [] }
+        guard try await headExists() else { return [] }
         let output = try await executor.run([
             "reflog", "--date=relative", "--format=\(Self.reflogFormat)", "-n", String(limit + 1),
         ])

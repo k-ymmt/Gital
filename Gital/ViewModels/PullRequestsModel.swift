@@ -131,6 +131,7 @@ final class PullRequestsModel {
                 // newly selected one while its threads load.
                 threadsLoadError = nil
                 detailLoadError = nil
+                mergeError = nil
                 Task { await loadDetail() }
             }
         }
@@ -207,10 +208,15 @@ final class PullRequestsModel {
     /// PR number currently being merged, or nil; drives the merge button's
     /// spinner and guards against double-submission.
     var mergingNumber: Int?
+    /// Merge failure, rendered inside the merge box. Routed here rather than
+    /// `loadError`, which only shows while no PR is selected — and merging
+    /// requires a selection, so a failure there would be invisible.
+    var mergeError: String?
 
     func merge(_ number: Int) {
         guard mergingNumber == nil else { return }
         mergingNumber = number
+        mergeError = nil
         Task {
             defer { mergingNumber = nil }
             do {
@@ -222,7 +228,7 @@ final class PullRequestsModel {
                 await loadDetail()
                 await refresh()
             } catch {
-                loadError = error.localizedDescription
+                mergeError = error.localizedDescription
             }
         }
     }
@@ -472,7 +478,14 @@ final class PullRequestsModel {
         }
     }
 
+    /// Detail-fetch failure for a sidebar expansion, shown under that PR's
+    /// row. Routed here rather than `loadError`, which never shows while the
+    /// list is non-empty — a silent failure left the chevron rotated over
+    /// nothing.
+    var expandError: (number: Int, message: String)?
+
     func expand(_ number: Int) async {
+        expandError = nil
         if expanded.contains(number) {
             expanded.remove(number)
             return
@@ -483,7 +496,10 @@ final class PullRequestsModel {
             do {
                 detailsCache[number] = try await github.pullRequestDetail(number: number)
             } catch {
-                loadError = error.localizedDescription
+                // Collapse back — an expanded chevron over nothing reads as
+                // "this PR has no commits or files".
+                expanded.remove(number)
+                expandError = (number, error.localizedDescription)
             }
         }
     }
@@ -622,7 +638,15 @@ final class PullRequestsModel {
         let body = current.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return }
         var comments = pendingComments(for: number)
-        if let id = current.editingCommentID, let index = comments.firstIndex(where: { $0.id == id }) {
+        if let id = current.editingCommentID {
+            guard let index = comments.firstIndex(where: { $0.id == id }) else {
+                // The draft being edited no longer exists — the review was
+                // submitted (or the draft deleted) while this composer stayed
+                // open. Appending would resurrect the already-published
+                // comment as a fresh draft and post it a second time.
+                closeReviewComposer()
+                return
+            }
             comments[index].body = body
         } else {
             let comment = PendingReviewComment(

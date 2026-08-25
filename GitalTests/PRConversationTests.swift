@@ -147,6 +147,10 @@ struct PRConversationTests {
         #expect(ReviewThread.lineText(fromDiffHunk: "@@ -1,1 +1,1 @@\n+last\n\\ No newline at end of file") == "last")
         #expect(ReviewThread.lineText(fromDiffHunk: "@@ -0,0 +1 @@") == nil, "header-only excerpt has no content line")
         #expect(ReviewThread.lineText(fromDiffHunk: nil) == nil)
+        // CRLF files: "\r\n" is one grapheme to split(separator:), so the
+        // hunk must be sliced with components — and the trailing "\r" stays,
+        // matching DiffParser's per-line text.
+        #expect(ReviewThread.lineText(fromDiffHunk: "@@ -1,2 +1,2 @@\n ctx\r\n-old\r\n+new\r") == "new\r")
     }
 
     @Test func threadAnchoring() {

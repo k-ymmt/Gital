@@ -13,7 +13,10 @@ struct ChangesView: View {
                 Divider()
             }
 
-            if model.workingDiffs.isEmpty {
+            // Agent thread cards and the open composer live inside the pane's
+            // trailing section — replacing the pane with the empty state when
+            // the last change is committed or discarded would swallow them.
+            if model.workingDiffs.isEmpty && !model.hasWorkingCopyAgentCards {
                 emptyState
             } else {
                 WorkingDiffPane(model: model)

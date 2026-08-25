@@ -65,7 +65,13 @@ actor ExecutableLocator {
         shellCaptureTimeout + Subprocess.terminateGracePeriod + Subprocess.drainGracePeriod + 2
 
     func find(_ name: String) async -> URL? {
-        if let hit = hits[name] { return hit }
+        // A hit is revalidated before reuse: an upgrade/uninstall can remove
+        // the cached binary mid-session, and a stale path would fail every
+        // spawn until app restart.
+        if let hit = hits[name] {
+            if FileManager.default.isExecutableFile(atPath: hit.path) { return hit }
+            hits[name] = nil
+        }
         if let deadline = missDeadlines[name], deadline > Date() { return nil }
 
         let fileManager = FileManager.default

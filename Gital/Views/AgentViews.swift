@@ -72,9 +72,7 @@ struct AgentComposerView: View {
 
 struct AgentThreadView: View {
     @Bindable var model: RepoViewModel
-    let thread: AgentThread
-
-    @State private var replyText = ""
+    @Bindable var thread: AgentThread
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -135,13 +133,13 @@ struct AgentThreadView: View {
             if !thread.isRunning {
                 Divider()
                 HStack(spacing: 8) {
-                    TextField("Reply to the agent…", text: $replyText)
+                    TextField("Reply to the agent…", text: $thread.replyDraft)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                         .onSubmit(sendReply)
                     Button("Send", action: sendReply)
                         .controlSize(.small)
-                        .disabled(replyText.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .disabled(thread.replyDraft.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
@@ -153,8 +151,8 @@ struct AgentThreadView: View {
     }
 
     private func sendReply() {
-        let text = replyText
-        replyText = ""
+        let text = thread.replyDraft
+        thread.replyDraft = ""
         model.reply(to: thread, text: text)
     }
 }

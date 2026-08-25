@@ -161,15 +161,19 @@ enum DiffParser {
                     currentPath = unquotePath(String(line.dropFirst(prefix.count)))
                     continue
                 }
+                // Git appends a literal TAB after the filename on ---/+++ lines
+                // when the name contains a space; a real trailing tab in a
+                // filename is always emitted inside quotes, so a raw trailing
+                // tab here is only ever that separator.
                 if line.hasPrefix("--- ") {
-                    let path = unquotePath(String(line.dropFirst(4)))
+                    let path = unquotePath(stripHeaderTab(String(line.dropFirst(4))))
                     if path != "/dev/null" {
                         currentOldPath = stripPathPrefix(path)
                     }
                     continue
                 }
                 if line.hasPrefix("+++ ") {
-                    let path = unquotePath(String(line.dropFirst(4)))
+                    let path = unquotePath(stripHeaderTab(String(line.dropFirst(4))))
                     if path != "/dev/null" {
                         currentPath = stripPathPrefix(path)
                     } else if let old = currentOldPath {
@@ -249,6 +253,10 @@ enum DiffParser {
         }
         flushFile()
         return files
+    }
+
+    private static func stripHeaderTab(_ raw: String) -> String {
+        raw.hasSuffix("\t") ? String(raw.dropLast()) : raw
     }
 
     private static func stripPathPrefix(_ path: String) -> String {

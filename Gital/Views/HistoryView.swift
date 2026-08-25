@@ -114,7 +114,9 @@ struct HistoryView: View {
         }
         .frame(height: 32)
         // Keyed on the commit count so the trigger re-fires after each page
-        // lands while the row is still on screen (e.g. a page of duplicates).
+        // lands while the row is still on screen. An all-duplicate page
+        // leaves the count unchanged — loadMoreCommits itself advances past
+        // those, so every call either makes progress or ends the paging.
         .task(id: model.commits.count) {
             await model.loadMoreCommits()
         }
@@ -341,15 +343,29 @@ struct CommitDetailView: View {
             if let commit = model.selectedCommit {
                 detailHeader(commit)
                 Divider()
-                switch model.commitDetailTab {
-                case .commit:
-                    commitInfoPane(commit)
-                case .files:
-                    HSplitView {
-                        filesList
-                            .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
-                        diffPane
-                            .frame(minWidth: 320, maxWidth: .infinity)
+                if let error = model.commitDetailError {
+                    EmptyStateView(error, systemImage: "exclamationmark.triangle")
+                } else {
+                    switch model.commitDetailTab {
+                    case .commit:
+                        commitInfoPane(commit)
+                    case .files:
+                        // Same stale-pairing guard as commitInfoPane: while a
+                        // new selection's load is in flight, commitFiles and
+                        // the diff still hold the previous commit's data —
+                        // rendering them would pair them with this header.
+                        if model.commitDiffsHash == commit.hash {
+                            HSplitView {
+                                filesList
+                                    .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+                                diffPane
+                                    .frame(minWidth: 320, maxWidth: .infinity)
+                            }
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     }
                 }
             } else {

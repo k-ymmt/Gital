@@ -125,6 +125,40 @@ index 1111111..2222222 100644
         #expect(quotedPath.first?.additions == 1 && quotedPath.first?.deletions == 1, "quoted path hunk parsed")
     }
 
+    // Git appends a literal TAB after the filename on ---/+++ lines whenever
+    // the name contains a space; the tab is the separator, not the path.
+    @Test func spacedPathTrailingHeaderTab() {
+        let spacedDiff = """
+diff --git a/foo bar.txt b/foo bar.txt
+index 422c2b7..0f7bc76 100644
+--- a/foo bar.txt\t
++++ b/foo bar.txt\t
+@@ -1,2 +1,2 @@
+ a
+-b
++c
+"""
+        let spaced = DiffParser.parse(spacedDiff)
+        #expect(spaced.count == 1 && spaced[0].path == "foo bar.txt", "trailing header tab stripped from path")
+        #expect(spaced[0].oldPath == nil || spaced[0].oldPath == "foo bar.txt", "old path carries no tab")
+    }
+
+    // Quoted headers carry the same separator tab outside the quotes; a real
+    // trailing tab in a filename is always emitted inside the quotes.
+    @Test func quotedSpacedPathTrailingHeaderTab() {
+        let quotedTabDiff = """
+diff --git "a/we\\"ird name.txt" "b/we\\"ird name.txt"
+new file mode 100644
+index 0000000..587be6b
+--- /dev/null
++++ "b/we\\"ird name.txt"\t
+@@ -0,0 +1 @@
++x
+"""
+        let quotedTab = DiffParser.parse(quotedTabDiff)
+        #expect(quotedTab.count == 1 && quotedTab[0].path == "we\"ird name.txt", "tab after quoted header stripped before unquoting")
+    }
+
     // Renames: pure rename has no hunks; edited rename reads paths from ---/+++.
     @Test func pureRename() {
         let renameDiff = """

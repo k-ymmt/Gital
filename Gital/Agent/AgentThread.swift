@@ -32,6 +32,10 @@ final class AgentThread: Identifiable {
     var messages: [AgentMessage] = []
     var statusText: String?
     var isRunning = false
+    /// The reply field's draft. Lives on the thread, not as view @State —
+    /// thread cards render inside lazy containers, so a view-local draft
+    /// would be destroyed by scrolling the card off screen and back.
+    var replyDraft = ""
 
     init(
         filePath: String, lineRange: ClosedRange<Int>, anchorLineID: String,

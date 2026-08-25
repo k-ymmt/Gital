@@ -3,6 +3,15 @@ import Foundation
 // MARK: - AI Agent
 
 extension RepoViewModel {
+    /// Whether any working-copy agent UI exists — thread cards or the open
+    /// ask-composer. The Changes pane must keep rendering the diff pane for
+    /// these even when the working copy itself is clean: committing or
+    /// discarding everything must not swallow an answer (or a half-typed
+    /// question).
+    var hasWorkingCopyAgentCards: Bool {
+        !agentThreads.isEmpty || composerAnchorID != nil
+    }
+
     func openComposer(file: String, lines: ClosedRange<Int>, anchorID: String) {
         composerFile = file
         composerRange = lines
