@@ -472,6 +472,22 @@ nonisolated struct SplitDiffRow: Hashable, Identifiable {
     let left: Side
     let right: Side
 
+    /// The row's sides as `DiffLine`s — the left side carries only its old
+    /// number, the right only its new — so review-card anchoring can reuse
+    /// the one coordinates-AND-content rule (`isAnchored`) instead of
+    /// re-deriving it per column, where the two copies could drift. The
+    /// synthetic IDs are never rendered or compared.
+    var anchorableLines: [DiffLine] {
+        var lines: [DiffLine] = []
+        if let kind = left.kind, let text = left.text {
+            lines.append(DiffLine(id: "", kind: kind, text: text, oldNumber: left.number, newNumber: nil))
+        }
+        if let kind = right.kind, let text = right.text {
+            lines.append(DiffLine(id: "", kind: kind, text: text, oldNumber: nil, newNumber: right.number))
+        }
+        return lines
+    }
+
     static func rows(for hunks: [DiffHunk]) -> [SplitDiffRow] {
         var rows: [SplitDiffRow] = []
         var nextID = 0

@@ -282,11 +282,15 @@ struct WorkingDiffPane: View {
         // line IDs to insert after) — matching the chunked pane before it.
         // In split mode they render in the trailing section instead.
         guard cardsAreInline else { return out }
-        if let anchorID = model.composerAnchorID, let range = model.composerRange, let file = model.composerFile,
-           model.workingDiffLineIDs.contains(anchorID) {
+        if let composer = model.agentComposer,
+           model.workingDiffLineIDs.contains(composer.anchorLineID) {
             out.append(Overlay(
                 id: "card:composer",
-                kind: .composer(range: range, fileName: (file as NSString).lastPathComponent, anchorLineID: anchorID)
+                kind: .composer(
+                    range: composer.range,
+                    fileName: (composer.file as NSString).lastPathComponent,
+                    anchorLineID: composer.anchorLineID
+                )
             ))
         }
         for thread in model.agentThreads where model.workingDiffLineIDs.contains(thread.anchorLineID) {
@@ -348,10 +352,9 @@ struct WorkingDiffPane: View {
             ForEach(trailingThreads) { thread in
                 AgentThreadView(model: model, thread: thread)
             }
-            if let range = model.composerRange, let file = model.composerFile,
-               let anchorID = model.composerAnchorID,
-               !cardsAreInline || !model.workingDiffLineIDs.contains(anchorID) {
-                workingCopyComposer(range: range, fileName: (file as NSString).lastPathComponent)
+            if let composer = model.agentComposer,
+               !cardsAreInline || !model.workingDiffLineIDs.contains(composer.anchorLineID) {
+                workingCopyComposer(range: composer.range, fileName: (composer.file as NSString).lastPathComponent)
             }
         }
     }

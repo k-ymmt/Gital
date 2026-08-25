@@ -222,10 +222,30 @@ final class RepoViewModel {
     // MARK: Agent
 
     var agentThreads: [AgentThread] = []
-    var composerFile: String?
-    var composerRange: ClosedRange<Int>?
-    var composerAnchorID: String?
-    var agentDraft = ""
+
+    /// The working-copy ask-composer's whole state as one value, mirroring
+    /// `PRAgentComposer` and `ReviewComposer`: every open/close transition
+    /// swaps the value atomically, so a field can never be updated in one
+    /// transition and forgotten in another (the previous four parallel
+    /// optionals had to be kept in sync by hand).
+    struct WorkingAgentComposer: Equatable {
+        var file: String
+        var range: ClosedRange<Int>
+        /// Line the composer hangs under — the range's LAST line.
+        var anchorLineID: String
+        var text = ""
+    }
+
+    /// Nil when the composer is closed. Owned by the model so the box (and
+    /// its half-typed text) survives view teardown and diff refreshes.
+    var agentComposer: WorkingAgentComposer?
+
+    /// Non-optional passthrough for the composer's text so SwiftUI can bind
+    /// to it; writes while the composer is closed are dropped.
+    var agentDraft: String {
+        get { agentComposer?.text ?? "" }
+        set { agentComposer?.text = newValue }
+    }
 
     /// "Ask AI Agent" question threads opened from PR diffs; separate from
     /// the working-copy `agentThreads` because line IDs are positional

@@ -40,12 +40,11 @@ struct PullRequestItemDiffView: View {
                 itemTitle
                 Spacer()
                 if case .commit(let hash) = item, let number = model.prs.selectedNumber {
-                    Toggle("Viewed", isOn: Binding(
-                        get: { model.prs.isCommitViewed(hash, in: number) },
-                        set: { _ in model.prs.toggleCommitViewed(hash, in: number) }
-                    ))
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                    viewedCheckbox(
+                        fontSize: 12,
+                        isViewed: { model.prs.isCommitViewed(hash, in: number) },
+                        toggle: { model.prs.toggleCommitViewed(hash, in: number) }
+                    )
                     .help("Mark the whole commit as viewed")
                 }
                 if let number = model.prs.selectedNumber,
@@ -115,7 +114,7 @@ struct PullRequestItemDiffView: View {
                                 // No imageContext: PR diffs come from
                                 // `gh pr diff` and neither side's blob is
                                 // guaranteed to exist locally.
-                                FileDiffContentView(diff: diff, mode: model.diffMode)
+                                FileDiffContentView(diff: diff)
                             }
                         } header: {
                             FileSectionHeader(diff: diff) {
@@ -173,15 +172,7 @@ struct PullRequestItemDiffView: View {
     }
 
     private func prAgentComposerCard(_ composer: RepoViewModel.PRAgentComposer) -> some View {
-        AgentComposerView(
-            text: $model.prAgentDraft,
-            range: composer.range,
-            fileName: (composer.filePath as NSString).lastPathComponent,
-            hint: "Select lines to ask about a range",
-            placeholder: "Ask a question about these lines…",
-            onCancel: { model.cancelPRAgentComposer() },
-            onSend: { model.sendPRAgentQuestion() }
-        )
+        PRAgentComposerCard(model: model, composer: composer)
     }
 
     /// Whether the selected PR accepts new review comments (open, including
@@ -323,33 +314,26 @@ struct PullRequestItemDiffView: View {
         return segments
     }
 
+    // Both matchers delegate to the same coordinates-AND-content rule the
+    // unified pane uses (`isAnchored`), via the row's sides expressed as
+    // `DiffLine`s — the display-safety rule must have exactly one
+    // implementation.
+
     private func splitRowThreads(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [ReviewThread] {
         guard !row.isHunkHeader else { return [] }
+        let lines = row.anchorableLines
+        guard !lines.isEmpty else { return [] }
         return model.prs.threads(for: number).filter { thread in
-            guard thread.path == diff.path, let line = thread.line else { return false }
-            switch thread.side {
-            case .left:
-                return row.left.kind == .deletion && row.left.number == line
-                    && (thread.lineText.map { row.left.text == $0 } ?? true)
-            case .right:
-                return row.right.kind != nil && row.right.number == line
-                    && (thread.lineText.map { row.right.text == $0 } ?? true)
-            }
+            lines.contains { thread.isAnchored(to: $0, path: diff.path) }
         }
     }
 
     private func splitRowComments(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [PendingReviewComment] {
         guard !row.isHunkHeader else { return [] }
+        let lines = row.anchorableLines
+        guard !lines.isEmpty else { return [] }
         return model.prs.pendingComments(for: number).filter { comment in
-            guard comment.anchor.path == diff.path else { return false }
-            switch comment.anchor.side {
-            case .left:
-                return row.left.kind == .deletion && row.left.number == comment.anchor.line
-                    && row.left.text == comment.lineText
-            case .right:
-                return row.right.kind != nil && row.right.number == comment.anchor.line
-                    && row.right.text == comment.lineText
-            }
+            lines.contains { comment.isAnchored(to: $0, path: diff.path) }
         }
     }
 
@@ -378,6 +362,17 @@ struct PullRequestItemDiffView: View {
         }
     }
 
+    /// The one "Viewed" checkbox spelling — three call sites once repeated
+    /// the Toggle + Binding + style chain. (Not `Controls.ViewedToggle`:
+    /// that is the icon-only variant used by the sidebar rows.)
+    private func viewedCheckbox(
+        fontSize: CGFloat, isViewed: @escaping () -> Bool, toggle: @escaping () -> Void
+    ) -> some View {
+        Toggle("Viewed", isOn: Binding(get: isViewed, set: { _ in toggle() }))
+            .toggleStyle(.checkbox)
+            .font(.system(size: fontSize))
+    }
+
     /// Per-file "Viewed" checkbox in a diff section header. Inside a commit it
     /// toggles the commit-scoped flag (promoting the commit when its last file
     /// is viewed); on a Files Changed selection it toggles the PR-wide flag.
@@ -386,9 +381,10 @@ struct PullRequestItemDiffView: View {
         if let number = model.prs.selectedNumber {
             switch item {
             case .commit(let hash):
-                Toggle("Viewed", isOn: Binding(
-                    get: { model.prs.isCommitFileViewed(commit: hash, path: diff.path, in: number) },
-                    set: { _ in
+                viewedCheckbox(
+                    fontSize: 11.5,
+                    isViewed: { model.prs.isCommitFileViewed(commit: hash, path: diff.path, in: number) },
+                    toggle: {
                         model.prs.toggleCommitFileViewed(
                             commit: hash,
                             path: diff.path,
@@ -396,16 +392,13 @@ struct PullRequestItemDiffView: View {
                             in: number
                         )
                     }
-                ))
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5))
+                )
             case .file(let path):
-                Toggle("Viewed", isOn: Binding(
-                    get: { model.prs.isFileViewed(path, in: number) },
-                    set: { _ in model.prs.toggleFileViewed(path, in: number) }
-                ))
-                .toggleStyle(.checkbox)
-                .font(.system(size: 11.5))
+                viewedCheckbox(
+                    fontSize: 11.5,
+                    isViewed: { model.prs.isFileViewed(path, in: number) },
+                    toggle: { model.prs.toggleFileViewed(path, in: number) }
+                )
             }
         }
     }
@@ -547,6 +540,25 @@ private func cachedCardHeight(_ id: String) -> CGFloat? {
 
 private func cacheCardHeight(_ height: CGFloat, id: String) {
     cardHeightCache.setObject(NSNumber(value: height), forKey: id as NSString)
+}
+
+/// The PR ask-composer card — one spelling for the inline overlay and the
+/// trailing section, so the two can't drift.
+private struct PRAgentComposerCard: View {
+    @Bindable var model: RepoViewModel
+    let composer: RepoViewModel.PRAgentComposer
+
+    var body: some View {
+        AgentComposerView(
+            text: $model.prAgentDraft,
+            range: composer.range,
+            fileName: (composer.filePath as NSString).lastPathComponent,
+            hint: "Select lines to ask about a range",
+            placeholder: "Ask a question about these lines…",
+            onCancel: { model.cancelPRAgentComposer() },
+            onSend: { model.sendPRAgentQuestion() }
+        )
+    }
 }
 
 /// One PR file's unified diff as a single web page, with the native review
@@ -776,15 +788,7 @@ private struct PRReviewFileView: View {
         case .agentThread(let thread):
             AgentThreadView(model: model, thread: thread)
         case .agentComposer(let composer):
-            AgentComposerView(
-                text: $model.prAgentDraft,
-                range: composer.range,
-                fileName: (composer.filePath as NSString).lastPathComponent,
-                hint: "Select lines to ask about a range",
-                placeholder: "Ask a question about these lines…",
-                onCancel: { model.cancelPRAgentComposer() },
-                onSend: { model.sendPRAgentQuestion() }
-            )
+            PRAgentComposerCard(model: model, composer: composer)
         }
     }
 }

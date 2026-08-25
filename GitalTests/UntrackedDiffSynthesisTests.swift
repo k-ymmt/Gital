@@ -73,7 +73,7 @@ struct UntrackedDiffSynthesisTests {
         #expect(diff.path == "dir/new.txt" && diff.scope == .untracked)
         #expect(diff.hunks.count == 1)
         let hunk = diff.hunks[0]
-        #expect(hunk.id == "dir/new.txt@0" && hunk.header == "@@ -0,0 +1,2 @@")
+        #expect(hunk.id == "dir/new.txt@h0" && hunk.header == "@@ -0,0 +1,2 @@")
         #expect(hunk.lines.map(\.id) == ["dir/new.txt@0", "dir/new.txt@1"], "line IDs follow the path@n scheme")
         #expect(hunk.lines.allSatisfy { $0.kind == .addition })
         #expect(hunk.lines.last?.noNewline == true)

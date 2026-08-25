@@ -130,6 +130,15 @@ extension View {
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             .overlay(RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(.separator, lineWidth: 1))
     }
+
+    /// Margins of a review card hanging under a diff line (threads, drafts,
+    /// the comment composer): indented past the gutter, one spelling.
+    func reviewCardInset() -> some View {
+        self
+            .padding(.leading, 60)
+            .padding(.trailing, 16)
+            .padding(.vertical, 5)
+    }
 }
 
 /// Small tinted capsule badge (PR labels, reviewer states, thread states,

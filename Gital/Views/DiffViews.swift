@@ -1,123 +1,14 @@
 import SwiftUI
 
-private let diffFont = Font.system(size: 12, design: .monospaced)
-private let lineNumberColor = Color.secondary.opacity(0.55)
+// MARK: - Binary / empty diff placeholder (read-only panes)
 
-// MARK: - Unified
-
-struct UnifiedDiffLineView: View {
-    let line: DiffLine
-
-    var body: some View {
-        HStack(spacing: 0) {
-            Text(line.oldNumber.map(String.init) ?? "")
-                .frame(width: 46, alignment: .trailing)
-                .padding(.trailing, 10)
-                .foregroundStyle(lineNumberColor)
-            Text(line.newNumber.map(String.init) ?? "")
-                .frame(width: 46, alignment: .trailing)
-                .padding(.trailing, 10)
-                .foregroundStyle(lineNumberColor)
-            Text(line.sign)
-                .frame(width: 14)
-                .foregroundStyle(signColor)
-            // Wrapped + selectable: truncating left long lines unreadable and
-            // nothing in a diff could be copied.
-            Text(line.text.isEmpty ? " " : line.text)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.trailing, 16)
-            Spacer(minLength: 0)
-        }
-        .font(diffFont)
-        .frame(minHeight: 19, alignment: .top)
-        .background(background)
-    }
-
-    private var signColor: Color {
-        switch line.kind {
-        case .addition: DesignStyle.addition
-        case .deletion: DesignStyle.deletion
-        case .context: .clear
-        }
-    }
-
-    private var background: Color {
-        switch line.kind {
-        case .addition: DesignStyle.additionBackground
-        case .deletion: DesignStyle.deletionBackground
-        case .context: .clear
-        }
-    }
-}
-
-struct HunkHeaderView: View {
-    let text: String
-
-    var body: some View {
-        HStack {
-            Text(text)
-                .font(diffFont)
-                .foregroundStyle(DesignStyle.hunkText)
-                .padding(.leading, 12)
-                .lineLimit(1)
-                .textSelection(.enabled)
-            Spacer(minLength: 0)
-        }
-        .frame(height: 19)
-        .background(DesignStyle.hunkBackground)
-    }
-}
-
-// MARK: - Split
-
-struct SplitDiffRowView: View {
-    let row: SplitDiffRow
-
-    var body: some View {
-        if row.isHunkHeader {
-            HunkHeaderView(text: row.hunkText)
-        } else {
-            HStack(spacing: 0) {
-                sideView(row.left)
-                Divider()
-                sideView(row.right)
-            }
-            .frame(minHeight: 19)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private func sideView(_ side: SplitDiffRow.Side) -> some View {
-        HStack(alignment: .top, spacing: 0) {
-            Text(side.number.map(String.init) ?? "")
-                .frame(width: 40, alignment: .trailing)
-                .padding(.trailing, 9)
-                .foregroundStyle(lineNumberColor)
-            Text(side.text ?? " ")
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .font(diffFont)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(sideBackground(side))
-    }
-
-    private func sideBackground(_ side: SplitDiffRow.Side) -> Color {
-        switch side.kind {
-        case .addition: DesignStyle.additionBackground
-        case .deletion: DesignStyle.deletionBackground
-        default: .clear
-        }
-    }
-}
-
-// MARK: - Whole-file diff (read-only, used by History / Stash / plain views)
-
+/// Every text diff renders on the WKWebView path; this view covers the two
+/// cases that path can't serve — a binary file (image preview or "Binary
+/// file not shown") and a diff with no textual hunks. It once carried a
+/// SwiftUI `Text`-per-line renderer too, but no reachable call site fed it
+/// a text diff, and a second renderer only drifts from the real one.
 struct FileDiffContentView: View {
     let diff: FileDiff
-    let mode: DiffMode
     /// Blob sources for image previews of binary files; nil keeps the plain
     /// "Binary file not shown" placeholder.
     var imageContext: ImageDiffContext? = nil
@@ -125,30 +16,12 @@ struct FileDiffContentView: View {
     var body: some View {
         if diff.isBinary {
             BinaryFileContentView(diff: diff, imageContext: imageContext)
-        } else if diff.hunks.isEmpty {
+        } else {
             Text("No textual changes")
                 .font(.system(size: 12.5))
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity)
                 .padding(40)
-        } else {
-            switch mode {
-            case .unified:
-                LazyVStack(spacing: 0) {
-                    ForEach(diff.hunks) { hunk in
-                        HunkHeaderView(text: hunk.header)
-                        ForEach(hunk.lines) { line in
-                            UnifiedDiffLineView(line: line)
-                        }
-                    }
-                }
-            case .split:
-                LazyVStack(spacing: 0) {
-                    ForEach(SplitDiffRow.rows(for: diff.hunks)) { row in
-                        SplitDiffRowView(row: row)
-                    }
-                }
-            }
         }
     }
 }
@@ -167,7 +40,7 @@ struct SingleFileDiffContent: View {
     var body: some View {
         if diff.isBinary || diff.hunks.isEmpty {
             ScrollView([.vertical, .horizontal]) {
-                FileDiffContentView(diff: diff, mode: mode, imageContext: imageContext)
+                FileDiffContentView(diff: diff, imageContext: imageContext)
                     .frame(minWidth: 600, alignment: .leading)
             }
         } else {

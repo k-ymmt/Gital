@@ -9,28 +9,29 @@ extension RepoViewModel {
     /// discarding everything must not swallow an answer (or a half-typed
     /// question).
     var hasWorkingCopyAgentCards: Bool {
-        !agentThreads.isEmpty || composerAnchorID != nil
+        !agentThreads.isEmpty || agentComposer != nil
     }
 
     func openComposer(file: String, lines: ClosedRange<Int>, anchorID: String) {
-        composerFile = file
-        composerRange = lines
-        composerAnchorID = anchorID
+        // Re-opening at another line keeps the typed text, like before.
+        agentComposer = WorkingAgentComposer(
+            file: file, range: lines, anchorLineID: anchorID,
+            text: agentComposer?.text ?? ""
+        )
     }
 
     func cancelComposer() {
-        composerFile = nil
-        composerRange = nil
-        composerAnchorID = nil
-        agentDraft = ""
+        agentComposer = nil
     }
 
     func sendToAgent() {
-        guard let file = composerFile, let range = composerRange, let anchorID = composerAnchorID else { return }
-        let instruction = agentDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let composer = agentComposer else { return }
+        let instruction = composer.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !instruction.isEmpty else { return }
+        let file = composer.file
+        let range = composer.range
 
-        let thread = AgentThread(filePath: file, lineRange: range, anchorLineID: anchorID)
+        let thread = AgentThread(filePath: file, lineRange: range, anchorLineID: composer.anchorLineID)
         thread.messages.append(AgentMessage(role: .user, text: instruction))
         thread.isRunning = true
         thread.statusText = "Waiting for Codex…"

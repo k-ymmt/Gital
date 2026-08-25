@@ -50,9 +50,7 @@ struct ReviewThreadCard: View {
             }
         }
         .cardStyle()
-        .padding(.leading, 60)
-        .padding(.trailing, 16)
-        .padding(.vertical, 5)
+        .reviewCardInset()
     }
 
     private var header: some View {

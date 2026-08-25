@@ -74,9 +74,7 @@ struct PendingReviewCommentCard: View {
                 .padding(12)
         }
         .cardStyle()
-        .padding(.leading, 60)
-        .padding(.trailing, 16)
-        .padding(.vertical, 5)
+        .reviewCardInset()
     }
 }
 
@@ -120,9 +118,7 @@ struct ReviewCommentComposerView: View {
         }
         .padding(12)
         .cardStyle()
-        .padding(.leading, 60)
-        .padding(.trailing, 16)
-        .padding(.vertical, 5)
+        .reviewCardInset()
         .onAppear { focused = true }
     }
 }

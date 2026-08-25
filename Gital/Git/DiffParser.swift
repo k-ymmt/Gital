@@ -30,10 +30,13 @@ nonisolated enum DiffParser {
 
         func flushHunk() {
             guard let header = hunkHeader else { return }
-            // IDs embed the file path so SwiftUI never confuses rows across files.
+            // IDs embed the file path so SwiftUI never confuses rows across
+            // files. The "h" keeps hunk IDs out of the line-ID namespace —
+            // "path@0" used to mean both the first hunk and the first line,
+            // and WorkingDiffPane.diff(containing:) searches across both.
             let fileKey = currentPath ?? currentOldPath ?? "?"
             currentHunks.append(DiffHunk(
-                id: "\(fileKey)@\(nextHunkID)",
+                id: "\(fileKey)@h\(nextHunkID)",
                 header: header,
                 oldStart: hunkOldStart,
                 newStart: hunkNewStart,
@@ -309,7 +312,7 @@ nonisolated enum DiffParser {
             containsInvalidUTF8: !decodedStrictly,
             oldBlobHash: zeroBlob,
             newBlobHash: newBlob,
-            hunks: [DiffHunk(id: "\(path)@0", header: header, oldStart: 0, newStart: 1, lines: lines)],
+            hunks: [DiffHunk(id: "\(path)@h0", header: header, oldStart: 0, newStart: 1, lines: lines)],
             scope: .untracked
         )
     }

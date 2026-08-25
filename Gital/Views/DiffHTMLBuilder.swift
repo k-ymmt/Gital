@@ -414,28 +414,62 @@ nonisolated enum DiffHTMLBuilder {
     /// macOS 27 no longer accepts `-webkit-focus-ring-color`, and an unknown
     /// color silently drops the whole declaration. The rgb() fallbacks
     /// (DesignStyle.brandBlue) cover engines without AccentColor.
+    /// The 17px square corner/hover button, shared by every diff-page button
+    /// class (`.ask`, `.cmtbtn`, `.askbtn`, `.rbtn`) — one spelling of the
+    /// geometry so a tweak can't miss a page flavor. `extra` carries the
+    /// per-class differences (z-index, hover-only display).
+    private static func cornerButtonCSS(_ selector: String, background: String, extra: String) -> String {
+        """
+        \(selector) {
+            position: absolute;
+            left: 3px;
+            top: 1px;
+            width: 17px;
+            height: 17px;
+            border-radius: 4px;
+            background: \(background);
+            color: white;
+            font: 700 11px/17px -apple-system, system-ui;
+            text-align: center;
+            cursor: pointer;
+            -webkit-user-select: none;
+            user-select: none;
+            \(extra)
+        }
+        """
+    }
+
+    /// The accent selection frame (side borders on every spanned row,
+    /// top/bottom at run edges) for the given row classes — shared between
+    /// the interactive pages (`.tsel`/`.hsel`) and the review pages (`.tsel`).
+    private static func selectionFrameCSS(_ classes: [String]) -> String {
+        let base = classes.map { ".\($0)" }.joined(separator: ", ")
+        let after = classes.map { ".\($0)::after" }.joined(separator: ", ")
+        let first = classes.map { ".\($0)-first::after" }.joined(separator: ", ")
+        let last = classes.map { ".\($0)-last::after" }.joined(separator: ", ")
+        return """
+        \(base) { position: relative; }
+        \(after) {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            border: 0 solid \(DesignStyle.CSS.brandBlue);
+            border-left-width: 1.5px;
+            border-right-width: 1.5px;
+        }
+        \(first) { border-top-width: 1.5px; }
+        \(last) { border-bottom-width: 1.5px; }
+        """
+    }
+
     private static let interactiveCSS = """
     .line.i:hover { background-image: linear-gradient(color-mix(in srgb, CanvasText 4%, transparent), color-mix(in srgb, CanvasText 4%, transparent)); }
     .line.sel, .line.sel:hover {
         background-image: linear-gradient(\(DesignStyle.CSS.rgba(DesignStyle.brandBlueHex, 0.16)), \(DesignStyle.CSS.rgba(DesignStyle.brandBlueHex, 0.16)));
         box-shadow: inset 2.5px 0 0 0 \(DesignStyle.CSS.brandBlue);
     }
-    .ask {
-        position: absolute;
-        left: 3px;
-        top: 1px;
-        width: 17px;
-        height: 17px;
-        border-radius: 4px;
-        background: \(DesignStyle.CSS.brandBlue);
-        color: white;
-        font: 700 11px/17px -apple-system, system-ui;
-        text-align: center;
-        cursor: pointer;
-        -webkit-user-select: none;
-        user-select: none;
-        z-index: 2;
-    }
+    \(cornerButtonCSS(".ask", background: DesignStyle.CSS.brandBlue, extra: "z-index: 2;"))
     .hunkbtns {
         display: flex;
         gap: 6px;
@@ -453,18 +487,7 @@ nonisolated enum DiffHTMLBuilder {
         cursor: pointer;
     }
     .hb.destructive { color: \(DesignStyle.CSS.deletion); border-color: \(DesignStyle.CSS.rgba(DesignStyle.deletionHex, 0.4)); }
-    .tsel, .hsel { position: relative; }
-    .tsel::after, .hsel::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        border: 0 solid \(DesignStyle.CSS.brandBlue);
-        border-left-width: 1.5px;
-        border-right-width: 1.5px;
-    }
-    .tsel-first::after, .hsel-first::after { border-top-width: 1.5px; }
-    .tsel-last::after, .hsel-last::after { border-bottom-width: 1.5px; }
+    \(selectionFrameCSS(["tsel", "hsel"]))
     .selbar {
         position: absolute;
         left: 24px;
@@ -506,23 +529,7 @@ nonisolated enum DiffHTMLBuilder {
     /// `.line:hover`) needs no JS hover tracking; unselectable so copies of
     /// the code never pick up a stray "+".
     private static let commentCSS = """
-    .cmtbtn {
-        position: absolute;
-        left: 3px;
-        top: 1px;
-        width: 17px;
-        height: 17px;
-        border-radius: 4px;
-        background: \(DesignStyle.CSS.brandBlue);
-        color: white;
-        font: 700 11px/17px -apple-system, system-ui;
-        text-align: center;
-        cursor: pointer;
-        -webkit-user-select: none;
-        user-select: none;
-        z-index: 2;
-        display: none;
-    }
+    \(cornerButtonCSS(".cmtbtn", background: DesignStyle.CSS.brandBlue, extra: "z-index: 2; display: none;"))
     .line:hover .cmtbtn { display: block; }
     .line.tsel .cmtbtn { display: none; }
     .cmtbtn + .askbtn { left: 22px; }
@@ -543,23 +550,7 @@ nonisolated enum DiffHTMLBuilder {
     /// thread cards' avatar, so the two hover buttons read as different
     /// actions at a glance.
     private static let askLineCSS = """
-    .askbtn {
-        position: absolute;
-        left: 3px;
-        top: 1px;
-        width: 17px;
-        height: 17px;
-        border-radius: 4px;
-        background: \(DesignStyle.CSS.mergedPurple);
-        color: white;
-        font: 700 11px/17px -apple-system, system-ui;
-        text-align: center;
-        cursor: pointer;
-        -webkit-user-select: none;
-        user-select: none;
-        z-index: 2;
-        display: none;
-    }
+    \(cornerButtonCSS(".askbtn", background: DesignStyle.CSS.mergedPurple, extra: "z-index: 2; display: none;"))
     .line:hover .askbtn { display: block; }
     .line.tsel .askbtn { display: none; }
     """
@@ -580,34 +571,8 @@ nonisolated enum DiffHTMLBuilder {
     /// hover buttons hide on framed rows so the two sets never stack on the
     /// frame's corner.
     private static let reviewSelectionCSS = """
-    .tsel { position: relative; }
-    .tsel::after {
-        content: "";
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-        border: 0 solid \(DesignStyle.CSS.brandBlue);
-        border-left-width: 1.5px;
-        border-right-width: 1.5px;
-    }
-    .tsel-first::after { border-top-width: 1.5px; }
-    .tsel-last::after { border-bottom-width: 1.5px; }
-    .rbtn {
-        position: absolute;
-        left: 3px;
-        top: 1px;
-        width: 17px;
-        height: 17px;
-        border-radius: 4px;
-        background: \(DesignStyle.CSS.brandBlue);
-        color: white;
-        font: 700 11px/17px -apple-system, system-ui;
-        text-align: center;
-        cursor: pointer;
-        -webkit-user-select: none;
-        user-select: none;
-        z-index: 3;
-    }
+    \(selectionFrameCSS(["tsel"]))
+    \(cornerButtonCSS(".rbtn", background: DesignStyle.CSS.brandBlue, extra: "z-index: 3;"))
     .rbtn + .rbtn { left: 22px; }
     .rbtn.rask { background: \(DesignStyle.CSS.mergedPurple); }
     @supports (color: AccentColor) {

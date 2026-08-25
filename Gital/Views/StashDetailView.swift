@@ -38,7 +38,6 @@ struct StashDetailView: View {
                                     // fallback.
                                     FileDiffContentView(
                                         diff: diff,
-                                        mode: model.diffMode,
                                         imageContext: ImageDiffContext(
                                             repository: model.repository,
                                             oldRevision: .commit("\(stash.commitHash)^"),
