@@ -24,6 +24,13 @@ actor CodexAppServer {
         /// instruction to change the repository" justification does not hold
         /// for commit-message generation.
         let textOnly: Bool
+        /// The turn's contract is "answer, don't modify" (PR review
+        /// questions): its thread runs in codex's read-only sandbox, and its
+        /// approval requests — escalations out of that sandbox, or anything
+        /// at all on an old codex whose thread/start predates the sandbox
+        /// parameter — are denied like text-only ones. Unlike textOnly,
+        /// read commands still run (inside the sandbox, no approval needed).
+        let readOnly: Bool
         let continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         var completed = false
         var handle: ((CodexNotification) -> Void)?
@@ -31,10 +38,12 @@ actor CodexAppServer {
         init(
             oneShotConversationID: UUID?,
             textOnly: Bool,
+            readOnly: Bool,
             continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         ) {
             self.oneShotConversationID = oneShotConversationID
             self.textOnly = textOnly
+            self.readOnly = readOnly
             self.continuation = continuation
         }
     }
@@ -74,8 +83,15 @@ actor CodexAppServer {
     /// `textOnly` marks a turn whose contract is "reply with text, touch
     /// nothing" (commit-message generation): its approval requests are
     /// denied instead of auto-approved.
+    /// `readOnly` marks a turn whose contract is "answer, don't modify" (PR
+    /// review questions): its thread is started in codex's read-only sandbox
+    /// — writes are blocked mechanically while read commands still run — and
+    /// its approval requests are denied. Pass it on EVERY turn of such a
+    /// conversation (replies included): the sandbox rides on the thread, but
+    /// the approval denial rides on the turn.
     func runTurn(
-        prompt: String, repoRoot: URL, conversationID: UUID, oneShot: Bool = false, textOnly: Bool = false
+        prompt: String, repoRoot: URL, conversationID: UUID, oneShot: Bool = false,
+        textOnly: Bool = false, readOnly: Bool = false
     ) -> AsyncThrowingStream<CodexTurnEvent, Error> {
         AsyncThrowingStream { continuation in
             Task {
@@ -86,6 +102,7 @@ actor CodexAppServer {
                         conversationID: conversationID,
                         oneShot: oneShot,
                         textOnly: textOnly,
+                        readOnly: readOnly,
                         continuation: continuation
                     )
                 } catch {
@@ -118,12 +135,14 @@ actor CodexAppServer {
         conversationID: UUID,
         oneShot: Bool,
         textOnly: Bool,
+        readOnly: Bool,
         continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
     ) async throws {
         let turnID = UUID()
         let record = TurnRecord(
             oneShotConversationID: oneShot ? conversationID : nil,
             textOnly: textOnly,
+            readOnly: readOnly,
             continuation: continuation
         )
         // Registered before the (slow) setup awaits: this producer task is
@@ -139,7 +158,7 @@ actor CodexAppServer {
         let threadID: String
         do {
             try await ensureInitialized()
-            threadID = try await ensureThread(conversationID: conversationID, repoRoot: repoRoot)
+            threadID = try await ensureThread(conversationID: conversationID, repoRoot: repoRoot, readOnly: readOnly)
         } catch {
             cleanUpTurn(turnID)
             throw error
@@ -236,16 +255,48 @@ actor CodexAppServer {
         threadIDsByConversation[conversationID] = nil
     }
 
-    private func ensureThread(conversationID: UUID, repoRoot: URL) async throws -> String {
+    /// Set when a sandboxed thread/start was rejected but the bare retry
+    /// succeeded — the running codex predates the sandbox parameters, so
+    /// later read-only threads skip straight to the bare form. Reset per
+    /// launch: a relaunch may be a newer codex.
+    private var sandboxParamUnsupported = false
+
+    private func ensureThread(conversationID: UUID, repoRoot: URL, readOnly: Bool) async throws -> String {
         if let existing = threadIDsByConversation[conversationID] { return existing }
-        let result = try await sendRequest(method: "thread/start", params: [
-            "cwd": repoRoot.path,
-        ])
+        // Read-only conversations (PR review questions) start their thread
+        // in codex's read-only sandbox: read commands run without approvals,
+        // writes are blocked by codex itself regardless of the user's
+        // config.toml. approvalPolicy "never" makes escalation attempts fail
+        // instead of asking (our answer would be a denial anyway).
+        var params: [String: Any] = ["cwd": repoRoot.path]
+        if readOnly && !sandboxParamUnsupported {
+            params["sandbox"] = "read-only"
+            params["approvalPolicy"] = "never"
+        }
+        let threadID: String
+        do {
+            threadID = try await startThread(params: params)
+        } catch let error as CodexError where readOnly && !sandboxParamUnsupported {
+            // Older codex releases predate thread/start's sandbox parameters
+            // and reject the whole request. Retry bare — the turn then runs
+            // on the app-side fallback (TurnRecord.readOnly denies every
+            // approval request). The flag is only set once the bare retry
+            // succeeds, so an unrelated failure (bad cwd, dead process)
+            // doesn't disable sandboxing for the rest of the session.
+            guard case .protocolError = error else { throw error }
+            threadID = try await startThread(params: ["cwd": repoRoot.path])
+            sandboxParamUnsupported = true
+        }
+        threadIDsByConversation[conversationID] = threadID
+        return threadID
+    }
+
+    private func startThread(params: [String: Any]) async throws -> String {
+        let result = try await sendRequest(method: "thread/start", params: params)
         guard let thread = result["thread"] as? [String: Any],
               let threadID = thread["id"] as? String else {
             throw CodexError.protocolError("thread/start returned no thread id")
         }
-        threadIDsByConversation[conversationID] = threadID
         return threadID
     }
 
@@ -308,6 +359,9 @@ actor CodexAppServer {
         // skipped when the exit races a relaunch past the identity guard —
         // without this, such turns leak as spinners that never finish).
         threadIDsByConversation = [:]
+        // A relaunch may be a newer codex install — re-probe the sandbox
+        // parameters instead of carrying the old process's verdict over.
+        sandboxParamUnsupported = false
         let old = wire.retire(with: CodexError.terminated)
         failStartedTurns(with: CodexError.terminated)
         if let old {
@@ -517,8 +571,12 @@ actor CodexAppServer {
     private func approvalDecision(params: [String: Any]) -> String {
         // A completed record can linger in activeTurns until its async
         // cleanup runs; it must not speak for the thread it used to own.
+        // Read-only turns deny like text-only ones: an approval there is an
+        // escalation out of the read-only sandbox — or, on an old codex
+        // whose thread/start ignored the sandbox parameters, the only
+        // write protection the turn has left.
         let running = activeTurns.values.filter { !$0.completed }
-            .map { (threadID: $0.threadID, textOnly: $0.textOnly) }
+            .map { (threadID: $0.threadID, textOnly: $0.textOnly || $0.readOnly) }
         return Self.approvalDecision(
             requestThreadID: params["threadId"] as? String,
             running: running

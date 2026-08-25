@@ -159,8 +159,11 @@ extension RepoViewModel {
     /// Prompt for a PR review question. Unlike the working-copy ask, the
     /// contract is answer-only: the diff belongs to the pull request, which
     /// the checked-out working tree may not contain, so an edit would land in
-    /// the wrong place. Sentinel markers instead of a ``` fence for the same
-    /// reason as `sendToAgent`.
+    /// the wrong place. Enforced mechanically by the turn's read-only codex
+    /// sandbox (see `runAgentTurn`); the prompt states it anyway — defense in
+    /// depth, and the agent should explain rather than fail cryptically when
+    /// asked to change something. Sentinel markers instead of a ``` fence for
+    /// the same reason as `sendToAgent`.
     static func prAgentPrompt(
         question: String, file: String, range: ClosedRange<Int>,
         prNumber: Int, prTitle: String?, diffContext: String
@@ -211,7 +214,15 @@ extension RepoViewModel {
         }
 
         do {
-            for try await event in await codex.runTurn(prompt: prompt, repoRoot: repository.root, conversationID: thread.id) {
+            // PR question threads run in codex's read-only sandbox (reads
+            // allowed, writes mechanically blocked) with approvals denied —
+            // the prompt's "do NOT modify" contract is the fallback, not the
+            // enforcement. Working-copy threads keep the write-capable turn:
+            // applying the requested change is their whole point.
+            for try await event in await codex.runTurn(
+                prompt: prompt, repoRoot: repository.root, conversationID: thread.id,
+                readOnly: thread.prNumber != nil
+            ) {
                 switch event {
                 case .status(let text), .sideEffect(let text):
                     thread.statusText = text
