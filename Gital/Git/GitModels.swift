@@ -340,6 +340,22 @@ extension FileDiff {
     var isImage: Bool {
         Self.isImagePath(path) || (oldPath.map(Self.isImagePath) ?? false)
     }
+
+    /// New-file coordinate for a diff line, used to describe "Ask AI Agent"
+    /// ranges. Deletions have no new number, so they anchor to the new-file
+    /// position they were removed at — mixing old and new coordinates in one
+    /// range produced prompts pointing at regions the user never selected.
+    func newFileLineNumber(of line: DiffLine) -> Int {
+        if let number = line.newNumber { return number }
+        for hunk in hunks {
+            guard let index = hunk.lines.firstIndex(where: { $0.id == line.id }) else { continue }
+            for prior in hunk.lines[..<index].reversed() {
+                if let number = prior.newNumber { return number }
+            }
+            return hunk.newStart
+        }
+        return line.oldNumber ?? 0
+    }
 }
 
 /// Which version of a file's bytes to read. Each side of a binary diff maps

@@ -113,9 +113,61 @@ struct PullRequestItemDiffView: View {
                             }
                         }
                     }
+                    trailingAgentCards
                 }
             }
         }
+    }
+
+    /// Agent threads of this PR whose anchor line isn't part of the
+    /// displayed diffs (asked while viewing another commit/file of the PR)
+    /// must stay reachable — the answer would otherwise vanish. Same for the
+    /// open composer. Both render below the diff, like the Working Copy's
+    /// orphaned cards.
+    @ViewBuilder
+    private var trailingAgentCards: some View {
+        if let number = model.prs.selectedNumber {
+            ForEach(orphanedAgentThreads(in: number)) { thread in
+                AgentThreadView(model: model, thread: thread)
+            }
+            if let composer = model.prAgentComposer, composer.number == number,
+               !anchorIsDisplayed(id: composer.anchorLineID, text: composer.anchorLineText) {
+                prAgentComposerCard(composer)
+            }
+        }
+    }
+
+    private func orphanedAgentThreads(in number: Int) -> [AgentThread] {
+        let threads = model.prAgentThreads.filter { $0.prNumber == number }
+        guard !threads.isEmpty else { return [] }
+        return threads.filter {
+            !anchorIsDisplayed(id: $0.anchorLineID, text: $0.anchorLineText ?? "")
+        }
+    }
+
+    /// Whether a card's anchor (line ID AND content, like review comments)
+    /// is rendered by the inline interleave — which exists in unified mode
+    /// only, so in split mode every agent card falls through to the trailing
+    /// section instead of vanishing.
+    private func anchorIsDisplayed(id: String, text: String) -> Bool {
+        guard model.diffMode == .unified else { return false }
+        return model.prs.itemDiffs.contains { diff in
+            diff.hunks.contains { hunk in
+                hunk.lines.contains { $0.id == id && $0.text == text }
+            }
+        }
+    }
+
+    private func prAgentComposerCard(_ composer: RepoViewModel.PRAgentComposer) -> some View {
+        AgentComposerView(
+            text: $model.prAgentDraft,
+            range: composer.range,
+            fileName: (composer.filePath as NSString).lastPathComponent,
+            hint: "Select lines to ask about a range",
+            placeholder: "Ask a question about these lines…",
+            onCancel: { model.cancelPRAgentComposer() },
+            onSend: { model.sendPRAgentQuestion() }
+        )
     }
 
     /// Whether the selected PR accepts new review comments (open, including
@@ -138,14 +190,16 @@ struct PullRequestItemDiffView: View {
                         language: DiffSyntaxHighlighting.language(for: diff),
                         commentable: canComment
                             ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
-                            : nil
+                            : nil,
+                        askable: true
                     ),
                     estimatedHeight: CGFloat(segment.items.count) * DiffHTMLBuilder.rowHeight,
                     onAction: { handleReview($0, in: diff) }
                 )
                 if let line = segment.interleaveAfterLine {
                     // Published conversations first, then local drafts —
-                    // history above what is still pending, like GitHub.
+                    // history above what is still pending, like GitHub —
+                    // then the agent's question threads and composer.
                     ForEach(model.prs.threads(on: line, path: diff.path, in: number)) { thread in
                         ReviewThreadCard(model: model, thread: thread, number: number)
                     }
@@ -154,6 +208,13 @@ struct PullRequestItemDiffView: View {
                     }
                     if canComment, composerIsOpen(at: line, in: diff) {
                         ReviewCommentComposerView(model: model, number: number)
+                    }
+                    ForEach(model.prAgentThreads(on: line, in: number)) { thread in
+                        AgentThreadView(model: model, thread: thread)
+                    }
+                    if let composer = model.prAgentComposer,
+                       model.isPRAgentComposerOpen(at: line, in: number) {
+                        prAgentComposerCard(composer)
                     }
                 }
             }
@@ -188,7 +249,8 @@ struct PullRequestItemDiffView: View {
     /// composer at that line, and `commentRange` from the selection frame's
     /// corner "+" opens it for the whole selected range — the composer (and
     /// the eventual comment) anchors to the range's LAST line, GitHub-style,
-    /// with the first line carried as the range start.
+    /// with the first line carried as the range start. `askLine` / `askRange`
+    /// are the hover "✦"'s agent-question counterparts.
     private func handleReview(_ action: WebDiffAction, in diff: FileDiff) {
         switch action {
         case .hunk(let act, let id) where act == "commentLine":
@@ -210,9 +272,31 @@ struct PullRequestItemDiffView: View {
                 startAnchor: startAnchor,
                 startLineText: start.text
             )
+        case .hunk(let act, let id) where act == "askLine":
+            guard let line = line(id, in: diff) else { return }
+            openAskComposer(start: line, end: line, in: diff)
+        case .askRange(let startID, let endID):
+            guard let start = line(startID, in: diff), let end = line(endID, in: diff) else { return }
+            openAskComposer(start: start, end: end, in: diff)
         default:
             break
         }
+    }
+
+    /// Opens the agent composer for a line span, anchored at the range's
+    /// LAST line so it sits right below the selection — the same anchoring
+    /// as review comments and the Working Copy ask.
+    private func openAskComposer(start: DiffLine, end: DiffLine, in diff: FileDiff) {
+        guard let number = model.prs.selectedNumber else { return }
+        let first = diff.newFileLineNumber(of: start)
+        let last = diff.newFileLineNumber(of: end)
+        model.openPRAgentComposer(
+            number: number,
+            file: diff.path,
+            range: min(first, last)...max(first, last),
+            anchorID: end.id,
+            anchorText: end.text
+        )
     }
 
     private func line(_ id: String, in diff: FileDiff) -> DiffLine? {
@@ -230,11 +314,12 @@ struct PullRequestItemDiffView: View {
     }
 
     /// Splits a file's unified rows into web chunks at every line carrying a
-    /// published thread, a pending draft, or the open composer, so those stay
-    /// native SwiftUI between the chunks (same scheme as the Working Copy).
-    /// The composer only counts while the PR accepts comments — the render
-    /// side gates it the same way, and a boundary with nothing rendered at it
-    /// would still split the chunk and break text selection across it.
+    /// published thread, a pending draft, an agent thread, or an open
+    /// composer, so those stay native SwiftUI between the chunks (same
+    /// scheme as the Working Copy). The review composer only counts while
+    /// the PR accepts comments — the render side gates it the same way, and
+    /// a boundary with nothing rendered at it would still split the chunk
+    /// and break text selection across it.
     private func unifiedSegments(for diff: FileDiff, number: Int, canComment: Bool) -> [ReviewSegment] {
         var segments: [ReviewSegment] = []
         var items: [DiffHTMLBuilder.UnifiedItem] = []
@@ -260,6 +345,8 @@ struct PullRequestItemDiffView: View {
                 let hasCards = !model.prs.threads(on: line, path: diff.path, in: number).isEmpty
                     || !model.prs.pendingComments(on: line, path: diff.path, in: number).isEmpty
                     || (canComment && composerIsOpen(at: line, in: diff))
+                    || !model.prAgentThreads(on: line, in: number).isEmpty
+                    || model.isPRAgentComposerOpen(at: line, in: number)
                 if hasCards {
                     flush(after: line)
                 }

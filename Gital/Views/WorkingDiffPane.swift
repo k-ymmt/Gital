@@ -297,10 +297,21 @@ struct WorkingDiffPane: View {
                 imageContext: ImageDiffContext.working(repository: model.repository, scope: diff.scope)
             )
         case .composer(let range, let fileName, _):
-            AgentComposerView(model: model, range: range, fileName: fileName)
+            workingCopyComposer(range: range, fileName: fileName)
         case .thread(let thread):
             AgentThreadView(model: model, thread: thread)
         }
+    }
+
+    private func workingCopyComposer(range: ClosedRange<Int>, fileName: String) -> some View {
+        AgentComposerView(
+            text: $model.agentDraft,
+            range: range,
+            fileName: fileName,
+            hint: "Shift-click + to extend range",
+            onCancel: { model.cancelComposer() },
+            onSend: { model.sendToAgent() }
+        )
     }
 
     /// Threads whose anchor line no longer exists (the agent's own edit
@@ -314,7 +325,7 @@ struct WorkingDiffPane: View {
             }
             if let range = model.composerRange, let file = model.composerFile,
                let anchorID = model.composerAnchorID, !model.workingDiffLineIDs.contains(anchorID) {
-                AgentComposerView(model: model, range: range, fileName: (file as NSString).lastPathComponent)
+                workingCopyComposer(range: range, fileName: (file as NSString).lastPathComponent)
             }
         }
     }
@@ -399,8 +410,8 @@ struct WorkingDiffPane: View {
         case .askRange(let startID, let endID):
             guard let diff = diff(containing: startID) else { return }
             if let start = line(withID: startID, in: diff), let end = line(withID: endID, in: diff) {
-                let first = agentLineNumber(start, in: diff)
-                let last = agentLineNumber(end, in: diff)
+                let first = diff.newFileLineNumber(of: start)
+                let last = diff.newFileLineNumber(of: end)
                 // Anchoring at the range's last line puts the composer right
                 // below the selection.
                 model.openComposer(file: diff.path, lines: min(first, last)...max(first, last), anchorID: end.id)
@@ -452,21 +463,6 @@ struct WorkingDiffPane: View {
         return nil
     }
 
-    /// New-file coordinate for a diff line. Deletions have no new number, so
-    /// they anchor to the new-file position they were removed at — mixing old
-    /// and new coordinates in one range produced prompts pointing at regions
-    /// the user never selected.
-    private func agentLineNumber(_ line: DiffLine, in diff: FileDiff) -> Int {
-        if let number = line.newNumber { return number }
-        for hunk in diff.hunks {
-            guard let index = hunk.lines.firstIndex(where: { $0.id == line.id }) else { continue }
-            for prior in hunk.lines[..<index].reversed() {
-                if let number = prior.newNumber { return number }
-            }
-            return hunk.newStart
-        }
-        return line.oldNumber ?? 0
-    }
 }
 
 /// Scroll offset in a plain observable box: the pane's body must not read it

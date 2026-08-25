@@ -22,6 +22,7 @@ enum DesignStyle {
     static let hunkHex: UInt32 = 0x388bfd
     static let hunkTextHex: UInt32 = 0x6ea8fe
     static let brandBlueHex: UInt32 = 0x2f6fed
+    static let mergedPurpleHex: UInt32 = 0x8957e5
 
     static let addition = Color(hex: additionHex)
     static let deletion = Color(hex: deletionHex)
@@ -31,7 +32,7 @@ enum DesignStyle {
     static let hunkText = Color(hex: hunkTextHex)
     static let tagAmber = Color(hex: 0xe0b25a)
     /// GitHub's merged-purple; also the agent accent.
-    static let mergedPurple = Color(hex: 0x8957e5)
+    static let mergedPurple = Color(hex: mergedPurpleHex)
     static let linkBlue = Color(hex: hunkTextHex)
     static let brandBlue = Color(hex: brandBlueHex)
 
@@ -45,6 +46,7 @@ enum DesignStyle {
         static let hunkBackground = rgba(hunkHex, 0.10)
         static let hunkText = hex(hunkTextHex)
         static let brandBlue = rgb(brandBlueHex)
+        static let mergedPurple = rgb(mergedPurpleHex)
 
         static func hex(_ value: UInt32) -> String {
             String(format: "#%06x", value)

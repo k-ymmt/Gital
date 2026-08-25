@@ -3,9 +3,15 @@ import SwiftUI
 // MARK: - Agent composer
 
 struct AgentComposerView: View {
-    @Bindable var model: RepoViewModel
+    @Binding var text: String
     let range: ClosedRange<Int>
     let fileName: String
+    /// Trailing hint in the header row; the panes teach different range
+    /// gestures (working copy: shift-click; PR review: text selection).
+    var hint: String?
+    var placeholder = "Describe the change you want for these lines…"
+    let onCancel: () -> Void
+    let onSend: () -> Void
 
     @FocusState private var focused: Bool
 
@@ -22,28 +28,26 @@ struct AgentComposerView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Text("Shift-click + to extend range")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.tertiary)
+                if let hint {
+                    Text(hint)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             PlaceholderTextEditor(
-                text: $model.agentDraft,
-                placeholder: "Describe the change you want for these lines…",
+                text: $text,
+                placeholder: placeholder,
                 height: 54
             )
             .focused($focused)
 
             HStack {
                 Spacer()
-                Button("Cancel") {
-                    model.cancelComposer()
-                }
-                Button("Send to Agent") {
-                    model.sendToAgent()
-                }
-                .buttonStyle(.glassProminent)
-                .disabled(model.agentDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button("Cancel", action: onCancel)
+                Button("Send to Agent", action: onSend)
+                    .buttonStyle(.glassProminent)
+                    .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(13)

@@ -223,6 +223,22 @@ final class RepoViewModel {
     var composerAnchorID: String?
     var agentDraft = ""
 
+    /// "Ask AI Agent" question threads opened from PR diffs; separate from
+    /// the working-copy `agentThreads` because line IDs are positional
+    /// (`path@N`) and the same ID can name different content in the two
+    /// panes. Threads carry their PR number and render only in that PR.
+    var prAgentThreads: [AgentThread] = []
+    /// The PR ask-composer's whole state as one value (see
+    /// `PRAgentComposer`); nil when closed.
+    var prAgentComposer: PRAgentComposer?
+
+    /// Non-optional passthrough for the PR composer's text so SwiftUI can
+    /// bind to it; writes while the composer is closed are dropped.
+    var prAgentDraft: String {
+        get { prAgentComposer?.text ?? "" }
+        set { prAgentComposer?.text = newValue }
+    }
+
     /// True while codex is writing a commit message into the composer; the
     /// sparkles button doubles as Cancel during this.
     var isGeneratingCommitMessage = false

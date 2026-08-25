@@ -39,27 +39,34 @@ enum DiffHTMLBuilder {
     /// (native review cards interleave between chunks, so the outer SwiftUI
     /// ScrollView scrolls), plus — when `commentable` is non-nil — a hover
     /// "+" on lines that can take a review comment, posting `commentLine`
-    /// with the line's ID, and the Working Copy's text-selection frame, whose
-    /// corner "+" posts `commentRange` for a multi-line comment. No other
-    /// Working Copy interactivity (line staging, hover-hunk frames, hunk
-    /// buttons) applies to a PR diff.
-    static func reviewUnifiedPage(items: [UnifiedItem], language: String?, commentable: ((DiffLine) -> Bool)?) -> String {
+    /// with the line's ID, and — when `askable` — a hover "✦" posting
+    /// `askLine` to question the AI agent about the line. Either affordance
+    /// also brings the Working Copy's text-selection frame, whose corner
+    /// buttons post `commentRange` / `askRange` for the whole selected
+    /// range. No other Working Copy interactivity (line staging, hover-hunk
+    /// frames, hunk buttons) applies to a PR diff.
+    static func reviewUnifiedPage(items: [UnifiedItem], language: String?, commentable: ((DiffLine) -> Bool)?, askable: Bool = false) -> String {
         var body = ""
         for item in items {
             switch item {
             case .header(let hunk):
                 body += hunkHeader(hunk.header)
             case .line(let line):
-                body += unifiedLine(line, options: nil, commentable: commentable?(line) ?? false)
+                body += unifiedLine(line, options: nil, commentable: commentable?(line) ?? false, askable: askable)
             }
         }
+        let framed = commentable != nil || askable
         return assemble(
             body: body,
             bodyClass: "",
             interactive: false,
             reportsHeight: true,
-            extraCSS: commentable != nil ? commentCSS + commentSelectionCSS : "",
-            extraScript: commentable != nil ? commentScript + commentSelectionScript : "",
+            extraCSS: (commentable != nil ? commentCSS : "")
+                + (askable ? askLineCSS : "")
+                + (framed ? reviewSelectionCSS : ""),
+            extraScript: (commentable != nil ? commentScript : "")
+                + (askable ? askLineScript : "")
+                + (framed ? reviewSelectionScript(commentable: commentable != nil, askable: askable) : ""),
             language: language
         )
     }
@@ -188,7 +195,7 @@ enum DiffHTMLBuilder {
         return out
     }
 
-    private static func unifiedLine(_ line: DiffLine, options: InteractiveOptions?, commentable: Bool = false) -> String {
+    private static func unifiedLine(_ line: DiffLine, options: InteractiveOptions?, commentable: Bool = false, askable: Bool = false) -> String {
         var classes = "line \(kindClass(line.kind))"
         var attrs = ""
         var button = ""
@@ -201,9 +208,14 @@ enum DiffHTMLBuilder {
                 attrs = " data-id=\"\(escapeAttr(line.id))\""
             }
         }
-        if commentable {
+        if commentable || askable {
             attrs = " data-id=\"\(escapeAttr(line.id))\""
-            button = "<span class=\"cmtbtn\" title=\"Add review comment\">+</span>"
+        }
+        if commentable {
+            button += "<span class=\"cmtbtn\" title=\"Add review comment\">+</span>"
+        }
+        if askable {
+            button += "<span class=\"askbtn\" title=\"Ask AI Agent about this line\">✦</span>"
         }
         return """
         <div class="\(classes)"\(attrs)>\
@@ -504,6 +516,8 @@ enum DiffHTMLBuilder {
         display: none;
     }
     .line:hover .cmtbtn { display: block; }
+    .line.tsel .cmtbtn { display: none; }
+    .cmtbtn + .askbtn { left: 22px; }
     """
 
     /// Appended after `heightScript` (same script block, so `post` is in
@@ -515,14 +529,49 @@ enum DiffHTMLBuilder {
     });
     """
 
+    /// Hover "✦" asking the AI agent about one line. Sits at the left edge;
+    /// when the comment "+" also renders, `commentCSS`'s sibling rule shifts
+    /// it right so the two sit side by side. Agent purple, matching the
+    /// thread cards' avatar, so the two hover buttons read as different
+    /// actions at a glance.
+    private static let askLineCSS = """
+    .askbtn {
+        position: absolute;
+        left: 3px;
+        top: 1px;
+        width: 17px;
+        height: 17px;
+        border-radius: 4px;
+        background: \(DesignStyle.CSS.mergedPurple);
+        color: white;
+        font: 700 11px/17px -apple-system, system-ui;
+        text-align: center;
+        cursor: pointer;
+        -webkit-user-select: none;
+        user-select: none;
+        z-index: 2;
+        display: none;
+    }
+    .line:hover .askbtn { display: block; }
+    .line.tsel .askbtn { display: none; }
+    """
+
+    private static let askLineScript = """
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.askbtn');
+        if (btn) { post({type: 'askLine', id: btn.closest('.line').dataset.id}); }
+    });
+    """
+
     /// The Working Copy's text-selection frame, review-page flavor: rows the
     /// selection spans get the accent box (`.tsel`, same look as the
-    /// interactive pages), and the frame's corner "+" (`.askr`) composes one
-    /// comment for the whole range. `.askr` copies `.cmtbtn`'s look but is a
-    /// distinct class — it must not trip the per-line `commentLine` click
-    /// handler, and the per-line hover "+" hides on framed rows so the two
-    /// buttons never stack on the frame's corner.
-    private static let commentSelectionCSS = """
+    /// interactive pages), and corner buttons (`.rbtn`) act on the whole
+    /// range — comment "+" and/or agent "✦", depending on what the page
+    /// offers. `.rbtn` copies the hover buttons' look but is a distinct
+    /// class — it must not trip the per-line click handlers, and the per-line
+    /// hover buttons hide on framed rows so the two sets never stack on the
+    /// frame's corner.
+    private static let reviewSelectionCSS = """
     .tsel { position: relative; }
     .tsel::after {
         content: "";
@@ -535,7 +584,7 @@ enum DiffHTMLBuilder {
     }
     .tsel-first::after { border-top-width: 1.5px; }
     .tsel-last::after { border-bottom-width: 1.5px; }
-    .askr {
+    .rbtn {
         position: absolute;
         left: 3px;
         top: 1px;
@@ -551,63 +600,78 @@ enum DiffHTMLBuilder {
         user-select: none;
         z-index: 3;
     }
-    .line.tsel .cmtbtn { display: none; }
+    .rbtn + .rbtn { left: 22px; }
+    .rbtn.rask { background: \(DesignStyle.CSS.mergedPurple); }
     @supports (color: AccentColor) {
         .tsel::after { border-color: AccentColor; }
-        .askr { background: AccentColor; }
+        .rbtn.rcmt { background: AccentColor; }
     }
     """
 
     /// Selection tracking for review pages — a trimmed copy of the bridge
     /// script's frame logic (unified rows only, no hover-hunk frame, no
-    /// capsule buttons). The "+" only appears when the selection is one
+    /// capsule buttons). Corner buttons only appear when the selection is one
     /// contiguous run of rows with line IDs: GitHub takes a single start/end
-    /// pair per comment and rejects ranges that cross hunks.
-    private static let commentSelectionScript = """
-    document.addEventListener('mousedown', (e) => {
-        // Clicking the frame's "+" must not collapse the text selection that
-        // defines its range.
-        if (e.target.closest('.askr')) { e.preventDefault(); }
-    });
-    document.addEventListener('click', (e) => {
-        const askr = e.target.closest('.askr');
-        if (askr) { post({type: 'commentRange', start: askr.dataset.start, end: askr.dataset.end}); }
-    });
-    const selectsTextIn = (range, el) => {
-        const bounds = document.createRange();
-        bounds.selectNodeContents(el);
-        const r = range.cloneRange();
-        if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
-        if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
-        return r.toString().length > 0;
-    };
-    document.addEventListener('selectionchange', () => {
-        document.querySelectorAll('.askr').forEach((el) => el.remove());
-        document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
-        const sel = window.getSelection();
-        if (!sel.rangeCount || sel.isCollapsed) { return; }
-        const range = sel.getRangeAt(0);
-        const hits = [...document.querySelectorAll('.line')]
-            .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
-        hits.forEach((el, i) => {
-            el.classList.add('tsel');
-            if (i === 0 || el.previousElementSibling !== hits[i - 1]) { el.classList.add('tsel-first'); }
-            if (i === hits.length - 1 || hits[i + 1].previousElementSibling !== el) { el.classList.add('tsel-last'); }
+    /// pair per comment and rejects ranges that cross hunks, and the agent
+    /// range follows the same rule so both buttons always describe the same
+    /// span.
+    private static func reviewSelectionScript(commentable: Bool, askable: Bool) -> String {
+        """
+        document.addEventListener('mousedown', (e) => {
+            // Clicking a corner button must not collapse the text selection
+            // that defines its range.
+            if (e.target.closest('.rbtn')) { e.preventDefault(); }
         });
-        if (!hits.length) { return; }
-        const first = hits[0];
-        const last = hits[hits.length - 1];
-        const contiguous = hits.every((el, i) => i === 0 || el.previousElementSibling === hits[i - 1]);
-        if (!contiguous || !first.dataset.id || !last.dataset.id) { return; }
-        const btn = document.createElement('span');
-        btn.className = 'askr';
-        btn.textContent = '+';
-        btn.title = 'Comment on the selected lines';
-        btn.dataset.start = first.dataset.id;
-        btn.dataset.end = last.dataset.id;
-        first.appendChild(btn);
-    });
-    """
+        document.addEventListener('click', (e) => {
+            \(commentable ? """
+            const cmt = e.target.closest('.rcmt');
+            if (cmt) { post({type: 'commentRange', start: cmt.dataset.start, end: cmt.dataset.end}); return; }
+            """ : "")
+            \(askable ? """
+            const ask = e.target.closest('.rask');
+            if (ask) { post({type: 'askRange', start: ask.dataset.start, end: ask.dataset.end}); }
+            """ : "")
+        });
+        const selectsTextIn = (range, el) => {
+            const bounds = document.createRange();
+            bounds.selectNodeContents(el);
+            const r = range.cloneRange();
+            if (r.compareBoundaryPoints(Range.START_TO_START, bounds) < 0) { r.setStart(bounds.startContainer, bounds.startOffset); }
+            if (r.compareBoundaryPoints(Range.END_TO_END, bounds) > 0) { r.setEnd(bounds.endContainer, bounds.endOffset); }
+            return r.toString().length > 0;
+        };
+        document.addEventListener('selectionchange', () => {
+            document.querySelectorAll('.rbtn').forEach((el) => el.remove());
+            document.querySelectorAll('.tsel').forEach((el) => el.classList.remove('tsel', 'tsel-first', 'tsel-last'));
+            const sel = window.getSelection();
+            if (!sel.rangeCount || sel.isCollapsed) { return; }
+            const range = sel.getRangeAt(0);
+            const hits = [...document.querySelectorAll('.line')]
+                .filter((el) => range.intersectsNode(el) && selectsTextIn(range, el));
+            hits.forEach((el, i) => {
+                el.classList.add('tsel');
+                if (i === 0 || el.previousElementSibling !== hits[i - 1]) { el.classList.add('tsel-first'); }
+                if (i === hits.length - 1 || hits[i + 1].previousElementSibling !== el) { el.classList.add('tsel-last'); }
+            });
+            if (!hits.length) { return; }
+            const first = hits[0];
+            const last = hits[hits.length - 1];
+            const contiguous = hits.every((el, i) => i === 0 || el.previousElementSibling === hits[i - 1]);
+            if (!contiguous || !first.dataset.id || !last.dataset.id) { return; }
+            const addButton = (cls, glyph, title) => {
+                const btn = document.createElement('span');
+                btn.className = 'rbtn ' + cls;
+                btn.textContent = glyph;
+                btn.title = title;
+                btn.dataset.start = first.dataset.id;
+                btn.dataset.end = last.dataset.id;
+                first.appendChild(btn);
+            };
+            \(commentable ? "addButton('rcmt', '+', 'Comment on the selected lines');" : "")
+            \(askable ? "addButton('rask', '✦', 'Ask AI Agent about the selected lines');" : "")
+        });
+        """
+    }
 
     /// Height reporting alone, for read-only pages hosted in a
     /// `WebDiffChunkView`. `gitalSetSelected` is a stub: the host applies its

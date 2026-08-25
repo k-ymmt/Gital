@@ -129,7 +129,7 @@ struct DiffHTMLBuilderTests {
         #expect(page.contains("tsel-first") && page.contains("tsel-last"), "run edges draw top/bottom borders")
         #expect(page.contains("type: 'commentRange'"), "the frame's + posts the selected range")
         #expect(!page.contains("hsel"), "no hover-hunk frame on review pages")
-        #expect(!page.contains("askRange"), "the range + composes a comment, not an agent ask")
+        #expect(!page.contains("askRange"), "without askable, the frame offers no agent ask")
 
         let inert = DiffHTMLBuilder.reviewUnifiedPage(
             items: DiffHTMLBuilder.unifiedItems(for: diff),
@@ -137,6 +137,34 @@ struct DiffHTMLBuilderTests {
             commentable: nil
         )
         #expect(!inert.contains("selectionchange") && !inert.contains("commentRange"), "closed PRs get no selection frame")
+    }
+
+    // The PR pane's "Ask AI Agent": a hover "✦" on every line posting
+    // `askLine`, and a second selection-frame corner button posting
+    // `askRange` — alongside the comment affordances when the PR is open,
+    // alone when it isn't (questions don't need comment permission).
+    @Test func reviewUnifiedOffersAgentAskAffordances() {
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: { _ in true },
+            askable: true
+        )
+        #expect(page.contains("askbtn") && page.contains("type: 'askLine'"), "hover ✦ posts askLine")
+        #expect(page.contains("type: 'askRange'"), "frame's agent button posts the selected range")
+        #expect(page.contains("addButton('rcmt'") && page.contains("addButton('rask'"), "frame offers both comment and ask buttons")
+        #expect(page.contains(".cmtbtn + .askbtn { left: 22px; }"), "ask sits beside the comment + when both render")
+
+        let askOnly = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: diff),
+            language: nil,
+            commentable: nil,
+            askable: true
+        )
+        #expect(askOnly.contains(#"data-id="l0""#), "every line carries its ID for the ask bridge")
+        #expect(!askOnly.contains("cmtbtn") && !askOnly.contains("commentRange"), "closed PRs still get no comment affordance")
+        #expect(askOnly.contains("selectionchange") && askOnly.contains("type: 'askRange'"), "the selection frame comes with ask alone")
+        #expect(!askOnly.contains("addButton('rcmt'"), "no comment corner button without comment permission")
     }
 
     @Test func reviewSplitRendersRowsAndHeaders() {
