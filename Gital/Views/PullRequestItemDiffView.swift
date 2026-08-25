@@ -532,6 +532,23 @@ struct PullRequestItemDiffView: View {
     }
 }
 
+/// Last measured height per native card, keyed by overlay ID. Card heights
+/// live in `@State`, which dies when `LazyVStack` recycles a file view —
+/// without this, a recycled file would push every card's spacer back at the
+/// 150pt estimate, visibly collapsing and re-expanding around tall cards on
+/// every scroll-back. The composer IDs (`card:composer` / `card:ask`) are
+/// shared across files and PRs, so their cached entry can be stale — it only
+/// mis-sizes the spacer until the live card re-measures.
+private let cardHeightCache = NSCache<NSString, NSNumber>()
+
+private func cachedCardHeight(_ id: String) -> CGFloat? {
+    cardHeightCache.object(forKey: id as NSString).map { CGFloat($0.doubleValue) }
+}
+
+private func cacheCardHeight(_ height: CGFloat, id: String) {
+    cardHeightCache.setObject(NSNumber(value: height), forKey: id as NSString)
+}
+
 /// One PR file's unified diff as a single web page, with the native review
 /// pieces — published threads, pending drafts, the review composer, agent
 /// threads, and the ask-composer — overlaid at page-reported spacer offsets
@@ -605,6 +622,7 @@ private struct PRReviewFileView: View {
                     overlayContent(overlay)
                         .onGeometryChange(for: CGFloat.self, of: \.size.height) {
                             overlayHeights[overlay.id] = $0
+                            cacheCardHeight($0, id: overlay.id)
                         }
                         .frame(maxWidth: .infinity)
                         .offset(y: top)
@@ -687,7 +705,7 @@ private struct PRReviewFileView: View {
             WebDiffSpacer(
                 id: overlay.id,
                 line: overlay.anchorLineID,
-                height: overlayHeights[overlay.id] ?? Overlay.cardEstimate
+                height: overlayHeights[overlay.id] ?? cachedCardHeight(overlay.id) ?? Overlay.cardEstimate
             )
         }
     }

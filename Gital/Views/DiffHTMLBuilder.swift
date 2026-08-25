@@ -310,9 +310,16 @@ enum DiffHTMLBuilder {
     }
 
     /// Attribute values additionally need quote escaping — line and hunk IDs
-    /// embed the file path, which can contain anything.
+    /// embed the file path, which can contain anything. A raw CR also can't
+    /// survive: the HTML input preprocessor normalizes CR to LF before
+    /// tokenization, so a path containing "\r" would round-trip as "\n" and
+    /// never match its Swift-side ID again (spacer anchor queries would miss,
+    /// and clicks would post back an ID no diff line has). The character
+    /// reference resolves to a literal CR in the DOM attribute instead.
     nonisolated static func escapeAttr(_ text: String) -> String {
-        escape(text).replacingOccurrences(of: "\"", with: "&quot;")
+        escape(text)
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "\r", with: "&#13;")
     }
 
     // MARK: - Page assembly

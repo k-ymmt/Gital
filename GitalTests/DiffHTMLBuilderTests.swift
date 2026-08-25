@@ -380,6 +380,27 @@ struct DiffHTMLBuilderTests {
         #expect(!page.contains(#"data-id="we"ird"#), "raw quote never reaches an attribute")
     }
 
+    // The HTML input preprocessor normalizes a raw CR to LF before
+    // tokenization, so a "\r" in a git path (C-quoted paths decode control
+    // bytes) would corrupt every ID round trip through the DOM: spacer
+    // anchor queries would miss their line, and clicked lines would post
+    // back an ID no Swift-side diff line has. Attribute sinks must emit the
+    // character reference instead, which resolves to a literal CR.
+    @Test func attributeSinksEscapeCarriageReturns() {
+        #expect(DiffHTMLBuilder.escapeAttr("a\rb") == "a&#13;b")
+        let lines = [DiffLine(id: "bad\rname.swift@0", kind: .addition, text: "x", oldNumber: nil, newNumber: 1)]
+        let hunk = DiffHunk(id: "bad\rname.swift@h0", header: "@@ -1 +1 @@", oldStart: 1, newStart: 1, lines: lines)
+        let hostile = FileDiff(path: "bad\rname.swift", oldPath: nil, isBinary: false, hunks: [hunk])
+        let page = DiffHTMLBuilder.reviewUnifiedPage(
+            items: DiffHTMLBuilder.unifiedItems(for: hostile),
+            language: nil,
+            commentable: nil,
+            askable: true
+        )
+        #expect(page.contains(#"data-id="bad&#13;name.swift@0""#), "CR reaches the attribute as a character reference")
+        #expect(!page.contains("data-id=\"bad\rname.swift"), "raw CR never reaches an attribute")
+    }
+
     // Hunk headers carry raw source as function context (`@@ … @@ <context>`),
     // and split renders line text through its own sink — every one of those
     // paths must escape, not just the unified line path.

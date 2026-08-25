@@ -227,9 +227,14 @@ struct InteractiveWebView: NSViewRepresentable {
 
         private func applySpacersIfNeeded() {
             guard pageReady, pendingSpacers != appliedSpacers, let webView else { return }
-            // Pages that never host overlays (PR/stash chunks) skip the call
-            // entirely instead of poking their stub on every load.
-            if appliedSpacers == nil && pendingSpacers.isEmpty { return }
+            // An EMPTY push after didFinish is deliberate: on spacer-hosting
+            // pages `gitalSetSpacers` ends in `reportLayout()`, and that call
+            // is what guarantees at least one post-didFinish height report
+            // per load — the only reports ready-gated cache writers trust.
+            // Without it a card-free PR file could go uncached forever and
+            // re-open at the rows×19 estimate on every LazyVStack recycle.
+            // On pages that never host overlays (stash/split chunks) the
+            // call hits the heightScript stub and is a no-op.
             appliedSpacers = pendingSpacers
             let specs: [[String: Any]] = pendingSpacers.map { spacer in
                 var spec: [String: Any] = ["id": spacer.id, "height": Double(spacer.height)]
