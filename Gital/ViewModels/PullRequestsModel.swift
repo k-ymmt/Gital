@@ -120,11 +120,17 @@ final class PullRequestsModel {
                 // The previous PR's fetch failure must not show under the
                 // newly selected one while its threads load.
                 threadsLoadError = nil
+                detailLoadError = nil
                 Task { await loadDetail() }
             }
         }
     }
     var detail: PullRequestDetail?
+    /// Detail-fetch failure for the selected PR, rendered by the main pane
+    /// in place of the loading spinner — `loadError` belongs to the list
+    /// and only shows when nothing is selected, so without this a failed
+    /// detail load would leave the spinner up forever.
+    var detailLoadError: String?
     var detailsCache: [Int: PullRequestDetail] = [:]
     var expanded: Set<Int> = []
     var selectedItem: ItemSelection? {
@@ -165,6 +171,10 @@ final class PullRequestsModel {
     /// Tab entry, a merge, and `refreshAll` can all trigger a list refresh
     /// concurrently; without supersession the slowest gh run would win.
     @ObservationIgnored private let listLoader = LatestLoader()
+    /// Selection changes, a merge, and `reloadAll` can all load the detail
+    /// concurrently — even for the same PR, where the `selectedNumber`
+    /// guard alone would let the slower (possibly stale) response win.
+    @ObservationIgnored private let detailLoader = LatestLoader()
 
     init(repository: GitRepository, github: GitHubService) {
         self.repository = repository
@@ -198,7 +208,7 @@ final class PullRequestsModel {
                 // Reload the detail directly — flipping selectedNumber
                 // nil→back spawned two loads that both hit gh.
                 detailsCache[number] = nil
-                diffsCache[number] = nil
+                invalidateDiff(for: number)
                 await loadDetail()
                 await refresh()
             } catch {
@@ -228,25 +238,56 @@ final class PullRequestsModel {
         guard !isReloading else { return }
         isReloading = true
         defer { isReloading = false }
-        detailsCache = [:]
+        // Drop cached details nothing is showing. The visible ones — the
+        // selected detail and the expanded sidebar rows — are refilled in
+        // place below, so a failed re-fetch keeps stale-but-real data on
+        // screen instead of swapping it for a spinner or vanishing rows.
+        let visible = Set(expanded).union(selectedNumber.map { [$0] } ?? [])
+        detailsCache = detailsCache.filter { visible.contains($0.key) }
         diffsCache = [:]
+        // Detach (and stop) in-flight diff fetches: they were started
+        // against pre-reload state and must not repopulate the cleared
+        // cache when they land.
+        for task in diffFetchTasks.values { task.cancel() }
+        diffFetchTasks = [:]
         async let listTask: () = refresh()
-        // Expanded sidebar rows read straight from detailsCache; refill them
-        // or their commit/file rows would vanish until re-expanded. Errors
-        // stay silent — the list refresh reports connectivity problems.
         let expandedNumbers = expanded.filter { $0 != selectedNumber }
-        await loadDetail()
+        await loadDetail(forceRefresh: true)
+        // A force-push can remove the selected commit from the PR. Keep the
+        // selection only while the refreshed detail still lists it —
+        // otherwise the local object store would keep diffing a commit the
+        // sidebar no longer shows.
+        if let number = selectedNumber, let refreshed = detailsCache[number] {
+            selectedItem = Self.validatedItemSelection(selectedItem, in: refreshed)
+        }
         // After loadDetail so the commit path can resolve short hashes
         // against the freshly cached detail.
         if selectedItem != nil {
             await loadItemDiffs()
         }
+        // Errors stay silent here — a kept stale entry beats an empty row,
+        // and the list refresh reports connectivity problems.
         for number in expandedNumbers {
             if let loaded = try? await github.pullRequestDetail(number: number) {
                 detailsCache[number] = loaded
             }
         }
         await listTask
+    }
+
+    /// The selection if `detail` still lists it; nil for a commit the
+    /// refreshed detail no longer contains (force-pushed away). File
+    /// selections pass through: a vanished file surfaces "no changes" from
+    /// the fresh diff fetch, while a vanished commit would still diff
+    /// silently from the local object store.
+    static func validatedItemSelection(
+        _ item: ItemSelection?, in detail: PullRequestDetail
+    ) -> ItemSelection? {
+        if case .commit(let shortHash) = item,
+            !detail.commits.contains(where: { $0.hash == shortHash }) {
+            return nil
+        }
+        return item
     }
 
     func refresh() async {
@@ -290,15 +331,27 @@ final class PullRequestsModel {
         }
         diffFetchTasks[number] = task
         let result = await task.value
-        // Guard the removal: another caller may have already replaced a
-        // failed task with a fresh retry, which must not be knocked out.
+        // Only the fetch still registered may deregister itself and cache:
+        // another caller may have replaced a failed task with a fresh retry
+        // that must not be knocked out, and an invalidation (reload, review
+        // submit) mid-flight makes this task's result pre-invalidation data
+        // that must not repopulate the refreshed cache.
         if diffFetchTasks[number] == task {
             diffFetchTasks[number] = nil
-        }
-        if case .success(let diffs) = result {
-            diffsCache[number] = diffs
+            if case .success(let diffs) = result {
+                diffsCache[number] = diffs
+            }
         }
         return try result.get()
+    }
+
+    /// Forgets a PR's cached diff AND detaches any in-flight fetch, so the
+    /// next `wholeDiff` runs gh afresh instead of attaching to (or being
+    /// repopulated by) a fetch started against pre-invalidation state.
+    private func invalidateDiff(for number: Int) {
+        diffsCache[number] = nil
+        diffFetchTasks[number]?.cancel()
+        diffFetchTasks[number] = nil
     }
 
     /// Fire-and-forget warm-up of the whole diff so the first file click of
@@ -308,9 +361,11 @@ final class PullRequestsModel {
         Task { _ = try? await wholeDiff(for: number) }
     }
 
-    func loadDetail() async {
+    func loadDetail(forceRefresh: Bool = false) async {
         guard let number = selectedNumber else {
             detail = nil
+            detailLoadError = nil
+            detailLoader.invalidate()
             return
         }
         prefetchDiff(number)
@@ -319,22 +374,32 @@ final class PullRequestsModel {
         // another PR's threads, so no supersede guard is needed.
         Task { await loadThreads(number) }
         if let cached = detailsCache[number] {
+            // On a forced refresh the cached detail stays on screen while
+            // the fetch runs behind it — clearing it would swap a visible
+            // detail for a spinner, forever if the fetch then fails.
             detail = cached
-            return
+            if !forceRefresh { return }
+        } else {
+            detail = nil
         }
-        detail = nil
-        do {
-            let loaded = try await github.pullRequestDetail(number: number)
+        let result = await detailLoader.run { [github] in
+            try await github.pullRequestDetail(number: number)
+        }
+        switch result {
+        case .success(let loaded):
             detailsCache[number] = loaded
             if selectedNumber == number {
                 detail = loaded
+                detailLoadError = nil
             }
-        } catch {
+        case .failure(let error):
             // Same guard as the success path: a stale load's failure must
             // not paint its error over whichever PR is selected now.
             if selectedNumber == number {
-                loadError = error.localizedDescription
+                detailLoadError = error.localizedDescription
             }
+        case nil:
+            break  // superseded by a newer detail load
         }
     }
 
@@ -598,7 +663,10 @@ final class PullRequestsModel {
         do {
             var resolved: [PendingReviewComment] = []
             if !drafts.isEmpty {
-                diffsCache[number] = nil
+                // Full invalidation, not just the cache: re-anchoring must
+                // run against a diff fetched now, never an in-flight
+                // pre-invalidation fetch it would otherwise attach to.
+                invalidateDiff(for: number)
                 let diffs = try await wholeDiff(for: number)
                 for draft in drafts {
                     guard let resolvedDraft = draft.resolved(in: diffs) else {

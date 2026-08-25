@@ -10,8 +10,14 @@ struct PullRequestView: View {
             } else if let detail = model.prs.detail {
                 PullRequestDetailView(model: model, detail: detail)
             } else if model.prs.selectedNumber != nil {
-                ProgressView("Loading pull request…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if let error = model.prs.detailLoadError {
+                    EmptyStateView(error, maxTextWidth: 420) {
+                        GitGlyph(kind: .pullRequest, size: 36)
+                    }
+                } else {
+                    ProgressView("Loading pull request…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 EmptyStateView(model.prs.loadError ?? "Select a pull request", maxTextWidth: 420) {
                     GitGlyph(kind: .pullRequest, size: 36)
