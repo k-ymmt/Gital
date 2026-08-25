@@ -97,12 +97,20 @@ struct PRAgentAskTests {
 
     @Test func composerOpensMovesAndKeepsDraftText() async throws {
         try await withModel { model in
-            model.openPRAgentComposer(number: 1, file: "a.swift", range: 10...11, anchorID: "a.swift@2", anchorText: "if a <= 2 {")
+            model.openPRAgentComposer(
+                number: 1, itemKey: "commit:abc", file: "a.swift", range: 10...11,
+                anchorID: "a.swift@2", anchorText: "if a <= 2 {", diffContext: "ctx-a"
+            )
             model.prAgentDraft = "half-typed question"
-            // Re-anchoring to another line carries the unsaved text along
-            // instead of silently discarding it.
-            model.openPRAgentComposer(number: 1, file: "a.swift", range: 100...100, anchorID: "a.swift@3", anchorText: "far()")
+            // Re-anchoring inside the same PR carries the unsaved text along
+            // instead of silently discarding it — and refreshes the captured
+            // context for the new location.
+            model.openPRAgentComposer(
+                number: 1, itemKey: "file:a.swift", file: "a.swift", range: 100...100,
+                anchorID: "a.swift@3", anchorText: "far()", diffContext: "ctx-b"
+            )
             #expect(model.prAgentComposer?.anchorLineID == "a.swift@3")
+            #expect(model.prAgentComposer?.diffContext == "ctx-b")
             #expect(model.prAgentDraft == "half-typed question")
             model.cancelPRAgentComposer()
             #expect(model.prAgentComposer == nil)
@@ -110,25 +118,57 @@ struct PRAgentAskTests {
         }
     }
 
-    @Test func composerAndThreadsAnchorByCoordinatesAndContent() async throws {
+    @Test func draftNeverTravelsToAnotherPullRequest() async throws {
+        try await withModel { model in
+            model.openPRAgentComposer(
+                number: 1, itemKey: "commit:abc", file: "a.swift", range: 10...10,
+                anchorID: "a.swift@0", anchorText: "let a = 1", diffContext: ""
+            )
+            model.prAgentDraft = "question written for PR 1"
+            // Opening in another PR must start clean — a draft written for
+            // one PR must not be one Send away from landing in another.
+            model.openPRAgentComposer(
+                number: 2, itemKey: "commit:def", file: "b.swift", range: 5...5,
+                anchorID: "b.swift@0", anchorText: "x", diffContext: ""
+            )
+            #expect(model.prAgentComposer?.number == 2)
+            #expect(model.prAgentDraft.isEmpty, "PR 1's draft must not prefill PR 2's composer")
+        }
+    }
+
+    @Test func composerAndThreadsAnchorByItemCoordinatesAndContent() async throws {
         try await withModel { model in
             let line = DiffLine(id: "a.swift@2", kind: .addition, text: "if a <= 2 {", oldNumber: nil, newNumber: 11)
-            model.openPRAgentComposer(number: 1, file: "a.swift", range: 11...11, anchorID: line.id, anchorText: line.text)
-            #expect(model.isPRAgentComposerOpen(at: line, in: 1))
-            #expect(!model.isPRAgentComposerOpen(at: line, in: 2), "another PR never shows this composer")
-            // Same positional ID, different content (a commit diff numbering
-            // the file differently) must not resurface the composer.
+            model.openPRAgentComposer(
+                number: 1, itemKey: "commit:abc", file: "a.swift", range: 11...11,
+                anchorID: line.id, anchorText: line.text, diffContext: ""
+            )
+            #expect(model.isPRAgentComposerOpen(at: line, in: 1, itemKey: "commit:abc"))
+            #expect(!model.isPRAgentComposerOpen(at: line, in: 2, itemKey: "commit:abc"), "another PR never shows this composer")
+            // Same PR, same ID and text, but a different item (whole-PR file
+            // view vs the commit it was asked in): positional coordinates
+            // are not comparable across items, so the composer stays put.
+            #expect(!model.isPRAgentComposerOpen(at: line, in: 1, itemKey: "file:a.swift"))
+            // Same positional ID, different content must not resurface the
+            // composer either.
             let impostor = DiffLine(id: "a.swift@2", kind: .addition, text: "other content", oldNumber: nil, newNumber: 11)
-            #expect(!model.isPRAgentComposerOpen(at: impostor, in: 1))
+            #expect(!model.isPRAgentComposerOpen(at: impostor, in: 1, itemKey: "commit:abc"))
 
             let thread = AgentThread(
                 filePath: "a.swift", lineRange: 11...11, anchorLineID: line.id,
-                prNumber: 1, anchorLineText: line.text
+                prNumber: 1, prItemKey: "commit:abc", anchorLineText: line.text
             )
             model.prAgentThreads.append(thread)
-            #expect(model.prAgentThreads(on: line, in: 1).count == 1)
-            #expect(model.prAgentThreads(on: impostor, in: 1).isEmpty, "content mismatch hides the thread")
-            #expect(model.prAgentThreads(on: line, in: 2).isEmpty, "other PRs never show the thread")
+            #expect(model.prAgentThreads(on: line, in: 1, itemKey: "commit:abc").count == 1)
+            #expect(model.prAgentThreads(on: impostor, in: 1, itemKey: "commit:abc").isEmpty, "content mismatch hides the thread")
+            #expect(model.prAgentThreads(on: line, in: 1, itemKey: "file:a.swift").isEmpty, "another item never shows the thread inline")
+            #expect(model.prAgentThreads(on: line, in: 2, itemKey: "commit:abc").isEmpty, "other PRs never show the thread")
         }
+    }
+
+    @Test func itemSelectionAnchorKeysAreDistinct() {
+        #expect(PullRequestsModel.ItemSelection.commit(hash: "abc").agentAnchorKey
+            != PullRequestsModel.ItemSelection.file(path: "abc").agentAnchorKey,
+            "a commit and a file item can never share an anchor key")
     }
 }

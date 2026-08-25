@@ -79,20 +79,30 @@ struct PullRequestItemDiffView: View {
 
     @ViewBuilder
     private var diffContent: some View {
+        // The empty/error states still append the trailing agent cards: a
+        // question's answer (or the half-typed composer) must stay reachable
+        // while an empty commit or a failed load is selected, not vanish
+        // until the user happens to pick a diff-bearing item.
         if let error = model.prs.itemLoadError {
-            EmptyStateView(error, maxTextWidth: 460, systemImage: "exclamationmark.triangle", iconSize: 30)
+            VStack(spacing: 0) {
+                EmptyStateView(error, maxTextWidth: 460, systemImage: "exclamationmark.triangle", iconSize: 30)
+                trailingAgentCards
+            }
         } else if model.prs.itemDiffs.isEmpty {
             // Details loaded with no diffs = a genuinely empty commit
             // (--allow-empty, or a merge empty against its first parent) —
             // a plain note, not the error triangle and not a stuck spinner.
-            if model.prs.itemCommitDetail != nil {
-                Text("No changes in this commit.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                if model.prs.itemCommitDetail != nil {
+                    Text("No changes in this commit.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ProgressView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                trailingAgentCards
             }
         } else {
             ScrollView {
@@ -119,11 +129,15 @@ struct PullRequestItemDiffView: View {
         }
     }
 
-    /// Agent threads of this PR whose anchor line isn't part of the
-    /// displayed diffs (asked while viewing another commit/file of the PR)
-    /// must stay reachable — the answer would otherwise vanish. Same for the
-    /// open composer. Both render below the diff, like the Working Copy's
-    /// orphaned cards.
+    /// `ItemSelection.agentAnchorKey` of the item this view shows — the
+    /// identity agent cards anchor to alongside line ID and content.
+    private var agentItemKey: String { item.agentAnchorKey }
+
+    /// Agent threads of this PR that the inline interleave doesn't render
+    /// (asked in another commit/file view, split mode, or an anchor line the
+    /// displayed diff no longer contains) must stay reachable — the answer
+    /// would otherwise vanish. Same for the open composer. Both render below
+    /// the diff, like the Working Copy's orphaned cards.
     @ViewBuilder
     private var trailingAgentCards: some View {
         if let number = model.prs.selectedNumber {
@@ -131,7 +145,7 @@ struct PullRequestItemDiffView: View {
                 AgentThreadView(model: model, thread: thread)
             }
             if let composer = model.prAgentComposer, composer.number == number,
-               !anchorIsDisplayed(id: composer.anchorLineID, text: composer.anchorLineText) {
+               !cardIsInline(itemKey: composer.itemKey, anchorID: composer.anchorLineID, anchorText: composer.anchorLineText) {
                 prAgentComposerCard(composer)
             }
         }
@@ -141,19 +155,19 @@ struct PullRequestItemDiffView: View {
         let threads = model.prAgentThreads.filter { $0.prNumber == number }
         guard !threads.isEmpty else { return [] }
         return threads.filter {
-            !anchorIsDisplayed(id: $0.anchorLineID, text: $0.anchorLineText ?? "")
+            !cardIsInline(itemKey: $0.prItemKey, anchorID: $0.anchorLineID, anchorText: $0.anchorLineText ?? "")
         }
     }
 
-    /// Whether a card's anchor (line ID AND content, like review comments)
-    /// is rendered by the inline interleave — which exists in unified mode
-    /// only, so in split mode every agent card falls through to the trailing
-    /// section instead of vanishing.
-    private func anchorIsDisplayed(id: String, text: String) -> Bool {
-        guard model.diffMode == .unified else { return false }
+    /// Whether the inline interleave renders a card here: unified mode, the
+    /// same item the question was asked in, and an anchor line (ID AND
+    /// content, like review comments) present in the displayed diffs. The
+    /// trailing section takes exactly the cards this returns false for.
+    private func cardIsInline(itemKey: String?, anchorID: String, anchorText: String) -> Bool {
+        guard model.diffMode == .unified, itemKey == agentItemKey else { return false }
         return model.prs.itemDiffs.contains { diff in
             diff.hunks.contains { hunk in
-                hunk.lines.contains { $0.id == id && $0.text == text }
+                hunk.lines.contains { $0.id == anchorID && $0.text == anchorText }
             }
         }
     }
@@ -209,11 +223,11 @@ struct PullRequestItemDiffView: View {
                     if canComment, composerIsOpen(at: line, in: diff) {
                         ReviewCommentComposerView(model: model, number: number)
                     }
-                    ForEach(model.prAgentThreads(on: line, in: number)) { thread in
+                    ForEach(model.prAgentThreads(on: line, in: number, itemKey: agentItemKey)) { thread in
                         AgentThreadView(model: model, thread: thread)
                     }
                     if let composer = model.prAgentComposer,
-                       model.isPRAgentComposerOpen(at: line, in: number) {
+                       model.isPRAgentComposerOpen(at: line, in: number, itemKey: agentItemKey) {
                         prAgentComposerCard(composer)
                     }
                 }
@@ -285,17 +299,22 @@ struct PullRequestItemDiffView: View {
 
     /// Opens the agent composer for a line span, anchored at the range's
     /// LAST line so it sits right below the selection — the same anchoring
-    /// as review comments and the Working Copy ask.
+    /// as review comments and the Working Copy ask. The prompt's diff
+    /// context is captured HERE, from the diff the click resolved against:
+    /// by send time `itemDiffs` may hold another item's diffs.
     private func openAskComposer(start: DiffLine, end: DiffLine, in diff: FileDiff) {
         guard let number = model.prs.selectedNumber else { return }
         let first = diff.newFileLineNumber(of: start)
         let last = diff.newFileLineNumber(of: end)
+        let range = min(first, last)...max(first, last)
         model.openPRAgentComposer(
             number: number,
+            itemKey: agentItemKey,
             file: diff.path,
-            range: min(first, last)...max(first, last),
+            range: range,
             anchorID: end.id,
-            anchorText: end.text
+            anchorText: end.text,
+            diffContext: RepoViewModel.diffContext(in: diff, range: range)
         )
     }
 
@@ -345,8 +364,8 @@ struct PullRequestItemDiffView: View {
                 let hasCards = !model.prs.threads(on: line, path: diff.path, in: number).isEmpty
                     || !model.prs.pendingComments(on: line, path: diff.path, in: number).isEmpty
                     || (canComment && composerIsOpen(at: line, in: diff))
-                    || !model.prAgentThreads(on: line, in: number).isEmpty
-                    || model.isPRAgentComposerOpen(at: line, in: number)
+                    || !model.prAgentThreads(on: line, in: number, itemKey: agentItemKey).isEmpty
+                    || model.isPRAgentComposerOpen(at: line, in: number, itemKey: agentItemKey)
                 if hasCards {
                     flush(after: line)
                 }

@@ -60,11 +60,15 @@ extension RepoViewModel {
 
     /// The PR ask-composer's whole state as one value: every open/close
     /// transition swaps the value atomically, mirroring the review-comment
-    /// composer. Anchored by line ID AND the line's content — commit diffs
-    /// number files differently than the whole-PR diff, so a bare positional
-    /// ID could resurface the composer under an unrelated line.
+    /// composer. Anchored by item, line ID, AND the line's content —
+    /// positional IDs (and even ID + text pairs) are not unique across the
+    /// items of a PR, so anything less could resurface the composer under
+    /// an unrelated line.
     struct PRAgentComposer: Equatable {
         var number: Int
+        /// `ItemSelection.agentAnchorKey` of the commit/file view the
+        /// question was opened in; the composer renders inline only there.
+        var itemKey: String
         var filePath: String
         /// New-file line numbers of the questioned range (see
         /// `FileDiff.newFileLineNumber`).
@@ -73,19 +77,27 @@ extension RepoViewModel {
         /// range's LAST line, like review comments.
         var anchorLineID: String
         var anchorLineText: String
+        /// Prompt context captured when the composer OPENED, from the diff
+        /// the user was looking at. Never recomputed at send time:
+        /// `prs.itemDiffs` may hold another item's diffs by then — an empty
+        /// or wrong-version context where the user selected real lines.
+        var diffContext: String
         var text = ""
     }
 
     func openPRAgentComposer(
-        number: Int, file: String, range: ClosedRange<Int>,
-        anchorID: String, anchorText: String
+        number: Int, itemKey: String, file: String, range: ClosedRange<Int>,
+        anchorID: String, anchorText: String, diffContext: String
     ) {
-        // Unsaved question text travels to the new anchor instead of being
-        // silently discarded, like the review-comment composer.
-        let carried = prAgentComposer?.text ?? ""
+        // Unsaved question text travels with re-anchoring inside the same
+        // PR instead of being silently discarded; a different PR starts
+        // clean — a draft written for one PR must not be one Send away from
+        // landing in another (the review composer applies the same rule).
+        let carried = prAgentComposer?.number == number ? prAgentComposer?.text ?? "" : ""
         prAgentComposer = PRAgentComposer(
-            number: number, filePath: file, range: range,
-            anchorLineID: anchorID, anchorLineText: anchorText, text: carried
+            number: number, itemKey: itemKey, filePath: file, range: range,
+            anchorLineID: anchorID, anchorLineText: anchorText,
+            diffContext: diffContext, text: carried
         )
     }
 
@@ -94,19 +106,21 @@ extension RepoViewModel {
     }
 
     /// Whether the PR ask-composer should render under this line of this
-    /// diff in the given PR.
-    func isPRAgentComposerOpen(at line: DiffLine, in number: Int) -> Bool {
+    /// item of this PR.
+    func isPRAgentComposerOpen(at line: DiffLine, in number: Int, itemKey: String) -> Bool {
         guard let composer = prAgentComposer else { return false }
         return composer.number == number
+            && composer.itemKey == itemKey
             && composer.anchorLineID == line.id
             && composer.anchorLineText == line.text
     }
 
-    /// Threads anchored to this line of this PR (coordinates AND content
-    /// must match, see `AgentThread.anchorLineText`).
-    func prAgentThreads(on line: DiffLine, in number: Int) -> [AgentThread] {
+    /// Threads anchored to this line of this item of this PR (item,
+    /// coordinates, AND content must match, see `AgentThread.prItemKey`).
+    func prAgentThreads(on line: DiffLine, in number: Int, itemKey: String) -> [AgentThread] {
         prAgentThreads.filter {
-            $0.prNumber == number && $0.anchorLineID == line.id && $0.anchorLineText == line.text
+            $0.prNumber == number && $0.prItemKey == itemKey
+                && $0.anchorLineID == line.id && $0.anchorLineText == line.text
         }
     }
 
@@ -120,6 +134,7 @@ extension RepoViewModel {
             lineRange: composer.range,
             anchorLineID: composer.anchorLineID,
             prNumber: composer.number,
+            prItemKey: composer.itemKey,
             anchorLineText: composer.anchorLineText
         )
         thread.messages.append(AgentMessage(role: .user, text: question))
@@ -128,15 +143,13 @@ extension RepoViewModel {
         prAgentThreads.append(thread)
         prAgentComposer = nil
 
-        let context = prs.itemDiffs.first { $0.path == composer.filePath }
-            .map { Self.diffContext(in: $0, range: composer.range) } ?? ""
         let prompt = Self.prAgentPrompt(
             question: question,
             file: composer.filePath,
             range: composer.range,
             prNumber: composer.number,
             prTitle: prs.detailsCache[composer.number]?.title,
-            diffContext: context
+            diffContext: composer.diffContext
         )
         Task {
             await runAgentTurn(thread: thread, prompt: prompt)

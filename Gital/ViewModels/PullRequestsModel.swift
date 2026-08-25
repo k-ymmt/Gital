@@ -14,6 +14,16 @@ final class PullRequestsModel {
     enum ItemSelection: Equatable, Hashable {
         case commit(hash: String)
         case file(path: String)
+
+        /// Stable string identity for agent-card anchoring: cards render
+        /// inline only in the item they were asked in, because positional
+        /// line IDs (and even ID + text pairs) are not unique across items.
+        var agentAnchorKey: String {
+            switch self {
+            case .commit(let hash): "commit:\(hash)"
+            case .file(let path): "file:\(path)"
+            }
+        }
     }
 
     enum StateFilter: String, CaseIterable, Identifiable {
