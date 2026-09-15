@@ -1,16 +1,16 @@
 ---
 name: codex-adversarial-review
 description: >-
-  Run an adversarial code review by delegating to OpenAI Codex through the codex
-  MCP server, then independently verifying every finding before reporting.
-  Use this whenever the user asks for an adversarial / hostile / skeptical review,
-  a second opinion or cross-model review of a diff, branch, commit, or PR, or asks
-  to have Codex review something (敵対的レビュー、Codexにレビューさせて、
-  セカンドオピニオン、クロスレビュー). Also use it when the user wants extra
-  assurance that changes are bug-free before merging or releasing.
+  Run an adversarial code review by delegating to OpenAI Codex through the
+  `codex exec` CLI (non-interactive), then independently verifying every
+  finding before reporting. Use this whenever the user asks for an adversarial /
+  hostile / skeptical review, a second opinion or cross-model review of a diff,
+  branch, commit, or PR, or asks to have Codex review something (敵対的レビュー、
+  Codexにレビューさせて、セカンドオピニオン、クロスレビュー). Also use it when the
+  user wants extra assurance that changes are bug-free before merging or releasing.
 ---
 
-# Adversarial review via Codex MCP
+# Adversarial review via Codex CLI
 
 Cross-model review: Codex (a GPT-based agent) hunts for bugs with fresh eyes and a
 different failure-mode bias than Claude, then Claude verifies each claim against the
@@ -20,11 +20,16 @@ only sees defects that are real.
 
 ## 1. Preflight
 
-The review runs through the `codex` MCP server tools: `mcp__codex__codex` (starts a
-session) and `mcp__codex__codex-reply` (continues one). If they are deferred, load
-them with ToolSearch (`select:mcp__codex__codex,mcp__codex__codex-reply`). If they
-are absent entirely, the server is not connected — see Troubleshooting at the bottom,
-fix the registration, and tell the user to restart the session before retrying.
+Codex runs as the `codex` CLI in non-interactive mode (`codex exec`) driven from
+Bash. There is no MCP server any more (`codex mcp-server` was removed in codex
+0.154.0), so do not look for `mcp__codex__*` tools. Check once:
+
+```bash
+codex --version && codex login status
+```
+
+If the binary is missing or not logged in, see Troubleshooting at the bottom and
+tell the user what they need to do; you cannot log in for them.
 
 ## 2. Determine the review scope
 
@@ -40,21 +45,36 @@ State the chosen scope to the user before launching. Collect the file list
 (`--name-only`) — you need it for verification later, and the prompt should name it
 so Codex doesn't wander into unrelated code.
 
-## 3. Launch Codex as a hostile reviewer
+## 3. Launch Codex as a skeptical reviewer
 
-Call `mcp__codex__codex` with exactly these session settings — the sandbox line is
-what makes it safe to hand Codex the whole repo:
+Write the prompt to a scratch file, then launch from the repo root:
 
-- `sandbox: "read-only"` — a reviewer must never mutate the repo it reviews.
-- `approval-policy: "never"` — the run is headless; there is no one to approve
-  escalations, and read-only needs none.
-- `cwd`: the repo root (absolute path).
+```bash
+codex exec -s read-only --color never \
+  -C "$(git rev-parse --show-toplevel)" \
+  -o "$SCRATCH/codex-review.md" - < "$SCRATCH/codex-review-prompt.md"
+```
 
-For the `prompt`, use this template (fill the bracketed parts; keep the demands for
+- `-s read-only` — a reviewer must never mutate the repo it reviews. Always pass it
+  explicitly: the user's `~/.codex/config.toml` defaults to `danger-full-access`.
+- `-C` — the repo root (absolute path).
+- `-o` — the reviewer's final message lands in this file; read the findings from
+  there (stdout is only a progress log).
+- `-` + stdin — pass the prompt through stdin so backticks and quotes need no shell
+  escaping.
+- The run is headless (`approval_policy = "never"` is the config default) and takes
+  several minutes on a real diff — run it in the background with a Bash timeout of
+  at least 600000 ms; do not abort early.
+- Note the `session id: <uuid>` line at the top of stdout; you need it for round 2.
+- Wording: OpenAI's safety filter has rejected prompts phrased as "attack", "steal",
+  or "make the code misbehave". Keep the skeptical stance but use neutral vocabulary.
+
+For the prompt, use this template (fill the bracketed parts; keep the demands for
 concrete failure scenarios — they are what separates findings from vibes):
 
 ```
-You are a hostile code reviewer. Your goal is to prove this change is broken.
+You are an independent, skeptical code reviewer. Your goal is to show where this
+change is incorrect, not to approve it.
 
 Review scope: [description, e.g. "the diff of commit abc123" or "git diff HEAD"].
 Files involved: [file list].
@@ -63,7 +83,8 @@ as you need — you have read-only access to the whole repository.
 
 Hunt for real defects: logic errors, broken edge cases (empty input, unicode, CRLF,
 concurrency, cancellation, error paths), state corruption, resource leaks, security
-issues, and violations of invariants the surrounding code relies on.
+issues, and violations of invariants the surrounding code relies on. Construct
+concrete inputs and states under which the new code behaves incorrectly.
 
 Report ONLY defects with observable consequences. Skip style, naming, and
 hypothetical improvements. For each finding output:
@@ -76,9 +97,6 @@ hypothetical improvements. For each finding output:
 
 If you find nothing, say "NO FINDINGS" and explain what you checked.
 ```
-
-The call streams for several minutes on a real diff — that is normal; do not abort
-early. The result's `structuredContent` carries a `threadId`; keep it for round 2.
 
 ## 4. Verify every finding yourself
 
@@ -99,11 +117,16 @@ review.
 
 ## 5. Optional round 2: completeness pass
 
-When the diff is substantial or the first round came back thin, continue the session
-with `mcp__codex__codex-reply` (same thread id): tell Codex which findings were
-refuted and why, and ask what parts of the scope it has not yet examined (error
-paths, tests, callers of changed functions). One extra round is usually the sweet
-spot; stop when a round adds nothing new.
+When the diff is substantial or the first round came back thin, continue the same
+session with the session id from step 3:
+
+```bash
+codex exec resume <uuid> -o "$SCRATCH/codex-review-2.md" - < "$SCRATCH/codex-review-2-prompt.md"
+```
+
+Tell Codex which findings were refuted and why, and ask what parts of the scope it
+has not yet examined (error paths, tests, callers of changed functions). One extra
+round is usually the sweet spot; stop when a round adds nothing new.
 
 ## 6. Report
 
@@ -118,11 +141,12 @@ the assessment.
 
 ## Troubleshooting
 
-- `mcp__codex__*` tools missing → run `claude mcp list`. If codex shows
-  `ENOENT: "codex"`, the server was registered with a bare command that Claude
-  Code's PATH cannot resolve (codex is installed via mise here). Re-register with
-  the absolute shim path:
-  `claude mcp remove codex && claude mcp add codex -- ~/.local/share/mise/shims/codex mcp-server`
-  — then restart the session.
-- Codex errors about authentication → the user needs to run `codex login` in a
-  terminal; you cannot do this for them.
+- `codex: command not found` → codex is installed via mise here; the shim is
+  `~/.local/share/mise/shims/codex`. Use that absolute path if Bash's PATH lacks it.
+- `codex login status` says not logged in, or `codex exec` errors about
+  authentication → the user needs to run `codex login` in a terminal; you cannot do
+  this for them.
+- `codex exec` rejects the prompt as a "possible cybersecurity risk" → reword the
+  brief neutrally (see the wording note in step 3) and retry once.
+- Working tree changed after the run (`git status --short` differs) → the sandbox
+  flag was missing; restore the files, report it, and rerun with `-s read-only`.
