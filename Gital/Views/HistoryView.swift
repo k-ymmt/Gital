@@ -98,6 +98,8 @@ struct HistoryView: View {
             .disabled(model.pendingOperation != nil)
         Button("Revert \(commit.shortHash)") { model.revertCommit(commit) }
             .disabled(model.pendingOperation != nil)
+        Button("Edit Commit \(commit.shortHash)…") { model.requestEditCommit(from: commit) }
+            .disabled(model.pendingOperation != nil)
         Button("Interactive Rebase from \(commit.shortHash)…") { model.requestInteractiveRebase(from: commit) }
             .disabled(model.pendingOperation != nil)
         ResetToCommitMenu(branch: model.status.branch, isBlocked: model.pendingOperation != nil) { mode in

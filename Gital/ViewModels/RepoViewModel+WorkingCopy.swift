@@ -218,6 +218,12 @@ extension RepoViewModel {
     // MARK: - Committing
 
     func commit() {
+        // During a Commit Edit Session the composer's button is "Save Commit";
+        // the ⌘↩ shortcut and menu item land here too.
+        if isEditingCommit {
+            saveCommitEdit()
+            return
+        }
         guard !isCommitting else { return }  // the button stays enabled for amend; don't double-commit
         // A codex reply landing after the commit would refill the freshly
         // cleared composer with a message for changes that no longer exist.
@@ -242,6 +248,11 @@ extension RepoViewModel {
     }
 
     var canCommit: Bool {
-        !status.staged.isEmpty && !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isCommitting
+        if isEditingCommit {
+            // An empty index is a legitimate save — the user removed every
+            // change from the commit (it is recorded with --allow-empty).
+            return !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isCommitting
+        }
+        return !status.staged.isEmpty && !commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isCommitting
     }
 }

@@ -8,7 +8,15 @@ struct ChangesView: View {
             headerBar
             Divider()
 
-            if let operation = model.pendingOperation {
+            // A Commit Edit Session is a deliberately stopped rebase — while
+            // it waits at its edit stop, the session banner replaces the
+            // generic conflict banner (the state file's phase makes the
+            // distinction; a conflicted descendant replay is .continuing and
+            // falls through to the normal banner).
+            if let session = model.editSession, session.phase == .editing {
+                EditSessionBannerView(model: model, session: session)
+                Divider()
+            } else if let operation = model.pendingOperation {
                 ConflictBannerView(model: model, operation: operation)
                 Divider()
             }
@@ -119,6 +127,38 @@ struct ConflictBannerView: View {
     }
 }
 
+// MARK: - Commit edit session banner
+
+/// Shown while a Commit Edit Session waits at its edit stop: names the
+/// commit being edited and offers to abort. Saving happens through the
+/// commit composer, whose button reads "Save Commit" for the duration.
+struct EditSessionBannerView: View {
+    var model: RepoViewModel
+    let session: GitRepository.CommitEditSession
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "pencil.circle.fill")
+                .foregroundStyle(.tint)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Editing commit \(session.shortTargetHash) — “\(session.subject)”")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text("Stage what the commit should contain, then save. Removed changes return to the working copy afterwards.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Abort Edit…") { model.requestAbortEdit() }
+                .disabled(model.isSyncing)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Color.accentColor.opacity(0.09))
+    }
+}
+
 // MARK: - Hunk stage/unstage button
 
 struct HunkActionButton: View {
@@ -154,9 +194,14 @@ struct CommitComposerView: View {
                 .disabled(model.isGeneratingCommitMessage)
 
             HStack(spacing: 12) {
-                Toggle("Amend", isOn: $model.amend)
-                    .toggleStyle(.checkbox)
-                    .font(.system(size: 12))
+                // Amend targets HEAD, which during a Commit Edit Session is
+                // the target's parent — offering it would rewrite the wrong
+                // commit, so the toggle disappears for the duration.
+                if !model.isEditingCommit {
+                    Toggle("Amend", isOn: $model.amend)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 12))
+                }
                 Spacer()
                 generateButton
                 Button {
@@ -203,6 +248,7 @@ struct CommitComposerView: View {
     }
 
     private var commitLabel: String {
+        if model.isEditingCommit { return "Save Commit" }
         let count = model.status.staged.count
         if count == 0 { return "Commit" }
         return "Commit \(count) file\(count == 1 ? "" : "s")"

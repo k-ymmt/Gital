@@ -106,6 +106,47 @@ struct ConflictFlowAlerts: ViewModifier {
     }
 }
 
+/// Alerts for the Commit Edit Session: the pushed-commit warning before a
+/// session starts, and the abort confirmation from the session banner.
+struct CommitEditAlerts: ViewModifier {
+    @Bindable var model: RepoViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                "Edit Pushed Commit?",
+                isPresented: Binding(
+                    get: { model.pendingPushedCommitEdit != nil },
+                    set: { if !$0 { model.pendingPushedCommitEdit = nil } }
+                ),
+                presenting: model.pendingPushedCommitEdit
+            ) { prep in
+                Button("Edit Anyway", role: .destructive) { model.startCommitEdit(prep) }
+                Button("Cancel", role: .cancel) {}
+            } message: { prep in
+                Text("Commit \(prep.target.shortHash) (“\(prep.target.subject)”) is already on the upstream branch. Editing it rewrites history from that commit on, and the branch will need a force push afterwards.")
+            }
+            .alert(
+                "Abort Commit Edit?",
+                isPresented: $model.pendingEditAbort,
+                presenting: model.editSession
+            ) { session in
+                Button("Abort Edit", role: .destructive) { model.abortEditSession() }
+                Button("Cancel", role: .cancel) {}
+            } message: { session in
+                Text("The edit of commit \(session.shortTargetHash) will be aborted and the branch restored to how it was before the edit started. The original commit comes back unchanged, but changes made to the working copy during the edit will be discarded.")
+            }
+            // The session can end underneath the confirmation (the rebase
+            // aborted or concluded in a terminal); confirming then would run
+            // a doomed `rebase --abort`.
+            .onChange(of: model.editSession) {
+                if model.editSession == nil {
+                    model.pendingEditAbort = false
+                }
+            }
+    }
+}
+
 /// Alerts for branch management: force push, branch delete (with an
 /// unmerged-commits warning computed up front), and rename.
 struct BranchManagementAlerts: ViewModifier {

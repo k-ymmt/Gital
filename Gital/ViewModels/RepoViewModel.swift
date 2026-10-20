@@ -177,6 +177,20 @@ final class RepoViewModel {
     /// prepared input.
     var interactiveRebasePrep: GitRepository.InteractiveRebasePrep?
 
+    // MARK: Commit Edit Session
+
+    /// Live Commit Edit Session (issue #5); mirrors the persisted
+    /// `.git/gital-edit-session.json`, reconciled on every status refresh.
+    var editSession: GitRepository.CommitEditSession?
+    /// Prep held while the "this commit is pushed" warning awaits
+    /// confirmation — editing it will require a force push afterwards.
+    var pendingPushedCommitEdit: GitRepository.CommitEditPrep?
+    /// True while the abort-edit confirmation is up.
+    var pendingEditAbort = false
+    /// Whether the persisted session file has been consulted yet; the first
+    /// status refresh after opening the repository restores it.
+    @ObservationIgnored var hasLoadedEditSession = false
+
     // MARK: Reflog
 
     /// Non-nil while the reflog sheet is up. A snapshot, not live state:

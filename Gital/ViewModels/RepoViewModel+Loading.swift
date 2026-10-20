@@ -34,6 +34,10 @@ extension RepoViewModel {
         } catch {
             report(error)
         }
+        // After the operation state, never before: a Commit Edit Session is a
+        // deliberately stopped rebase, and the reconcile distinguishes "still
+        // stopped" from "concluded" by the same markers.
+        await reconcileEditSession()
     }
 
     func refreshLog() async {

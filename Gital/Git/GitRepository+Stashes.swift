@@ -3,7 +3,9 @@ import Foundation
 // MARK: - Stashes
 
 extension GitRepository {
-    private static let stashListFormat = "%gd\u{1f}%H\u{1f}%gs"
+    /// Internal (not private): the edit-session stash pop resolves its stash
+    /// by commit hash through the same listing.
+    static let stashListFormat = "%gd\u{1f}%H\u{1f}%gs"
 
     func stashes() async throws -> [Stash] {
         let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])

@@ -116,6 +116,7 @@ struct ContentView: View {
         }
         .modifier(WorkingCopyConfirmationAlerts(model: model))
         .modifier(ConflictFlowAlerts(model: model))
+        .modifier(CommitEditAlerts(model: model))
         .modifier(BranchManagementAlerts(model: model))
         .modifier(RemoteManagementAlerts(model: model))
         .task {

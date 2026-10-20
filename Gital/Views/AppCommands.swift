@@ -43,10 +43,11 @@ struct AppCommands: Commands {
 
             Divider()
 
-            // The title mirrors the amend checkbox: ⌘↩ works from any tab,
-            // where the checkbox is out of sight — "Commit" silently running
-            // `--amend` would rewrite HEAD without warning.
-            Button(repo?.amend == true ? "Amend Last Commit" : "Commit") { repo?.commit() }
+            // The title mirrors the composer: ⌘↩ works from any tab, where
+            // the composer is out of sight — "Commit" silently running
+            // `--amend` (or saving a commit edit) would rewrite history
+            // without warning.
+            Button(commitMenuTitle) { repo?.commit() }
                 .keyboardShortcut(shortcuts.combo(for: .commit)?.keyboardShortcut)
                 .disabled({
                     guard let repo else { return true }
@@ -106,6 +107,11 @@ struct AppCommands: Commands {
             .keyboardShortcut(shortcuts.combo(for: .toggleDiffLayout)?.keyboardShortcut)
             .disabled(repo == nil)
         }
+    }
+
+    private var commitMenuTitle: String {
+        if repo?.isEditingCommit == true { return "Save Commit" }
+        return repo?.amend == true ? "Amend Last Commit" : "Commit"
     }
 
     /// The branch/stash popovers anchor to toolbar buttons in the repo
