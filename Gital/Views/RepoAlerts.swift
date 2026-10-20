@@ -9,10 +9,7 @@ struct WorkingCopyConfirmationAlerts: ViewModifier {
         content
             .alert(
                 model.pendingDiscard?.confirmationTitle ?? "",
-                isPresented: Binding(
-                    get: { model.pendingDiscard != nil },
-                    set: { if !$0 { model.pendingDiscard = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingDiscard),
                 presenting: model.pendingDiscard
             ) { target in
                 Button("Discard", role: .destructive) { model.performDiscard(target) }
@@ -22,10 +19,7 @@ struct WorkingCopyConfirmationAlerts: ViewModifier {
             }
             .alert(
                 "Hard Reset?",
-                isPresented: Binding(
-                    get: { model.pendingReset != nil },
-                    set: { if !$0 { model.pendingReset = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingReset),
                 presenting: model.pendingReset
             ) { pending in
                 Button("Reset", role: .destructive) {
@@ -37,10 +31,7 @@ struct WorkingCopyConfirmationAlerts: ViewModifier {
             }
             .alert(
                 "Drop Stash?",
-                isPresented: Binding(
-                    get: { model.pendingStashDrop != nil },
-                    set: { if !$0 { model.pendingStashDrop = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingStashDrop),
                 presenting: model.pendingStashDrop
             ) { stash in
                 Button("Drop", role: .destructive) { model.stashDrop(stash) }
@@ -60,10 +51,7 @@ struct ConflictFlowAlerts: ViewModifier {
         content
             .alert(
                 "Abort \(model.pendingAbort?.displayName ?? "Operation")?",
-                isPresented: Binding(
-                    get: { model.pendingAbort != nil },
-                    set: { if !$0 { model.pendingAbort = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingAbort),
                 presenting: model.pendingAbort
             ) { operation in
                 Button("Abort \(operation.displayName)", role: .destructive) {
@@ -75,10 +63,7 @@ struct ConflictFlowAlerts: ViewModifier {
             }
             .alert(
                 "Conflict Markers Remain",
-                isPresented: Binding(
-                    get: { model.pendingMarkResolved != nil },
-                    set: { if !$0 { model.pendingMarkResolved = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingMarkResolved),
                 presenting: model.pendingMarkResolved
             ) { change in
                 Button("Mark as Resolved Anyway") { model.stage(change) }
@@ -95,10 +80,7 @@ struct ConflictFlowAlerts: ViewModifier {
                     model.pendingAbort = nil
                 }
             }
-            .alert("Git Error", isPresented: Binding(
-                get: { model.errorMessage != nil },
-                set: { if !$0 { model.errorMessage = nil } }
-            )) {
+            .alert("Git Error", isPresented: Binding(presence: $model.errorMessage)) {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(model.errorMessage ?? "")
@@ -115,10 +97,7 @@ struct CommitEditAlerts: ViewModifier {
         content
             .alert(
                 "Edit Pushed Commit?",
-                isPresented: Binding(
-                    get: { model.pendingPushedCommitEdit != nil },
-                    set: { if !$0 { model.pendingPushedCommitEdit = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingPushedCommitEdit),
                 presenting: model.pendingPushedCommitEdit
             ) { prep in
                 Button("Edit Anyway", role: .destructive) { model.startCommitEdit(prep) }
@@ -189,10 +168,7 @@ struct BranchManagementAlerts: ViewModifier {
             }
             .alert(
                 Text(model.pendingBranchDelete?.title ?? "Delete Branch?"),
-                isPresented: Binding(
-                    get: { model.pendingBranchDelete != nil },
-                    set: { if !$0 { model.pendingBranchDelete = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingBranchDelete),
                 presenting: model.pendingBranchDelete
             ) { pending in
                 Button(pending.confirmButtonLabel, role: .destructive) {
@@ -204,10 +180,7 @@ struct BranchManagementAlerts: ViewModifier {
             }
             .alert(
                 "Checkout Commit?",
-                isPresented: Binding(
-                    get: { model.pendingDetachedCheckout != nil },
-                    set: { if !$0 { model.pendingDetachedCheckout = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingDetachedCheckout),
                 presenting: model.pendingDetachedCheckout
             ) { request in
                 Button("Checkout") { model.checkoutDetached(request) }
@@ -217,10 +190,7 @@ struct BranchManagementAlerts: ViewModifier {
             }
             .alert(
                 "Rename Branch",
-                isPresented: Binding(
-                    get: { model.renamingBranch != nil },
-                    set: { if !$0 { model.renamingBranch = nil } }
-                ),
+                isPresented: Binding(presence: $model.renamingBranch),
                 presenting: model.renamingBranch
             ) { branch in
                 TextField("Branch name", text: $renameDraft)
@@ -262,10 +232,7 @@ struct RemoteManagementAlerts: ViewModifier {
             }
             .alert(
                 "Remove Remote?",
-                isPresented: Binding(
-                    get: { model.pendingRemoteRemoval != nil },
-                    set: { if !$0 { model.pendingRemoteRemoval = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingRemoteRemoval),
                 presenting: model.pendingRemoteRemoval
             ) { remote in
                 Button("Remove", role: .destructive) { model.removeRemote(remote) }
@@ -275,10 +242,7 @@ struct RemoteManagementAlerts: ViewModifier {
             }
             .alert(
                 "Delete Remote Branch?",
-                isPresented: Binding(
-                    get: { model.pendingRemoteBranchDelete != nil },
-                    set: { if !$0 { model.pendingRemoteBranchDelete = nil } }
-                ),
+                isPresented: Binding(presence: $model.pendingRemoteBranchDelete),
                 presenting: model.pendingRemoteBranchDelete
             ) { ref in
                 Button("Delete on Remote", role: .destructive) { model.deleteRemoteBranch(ref) }

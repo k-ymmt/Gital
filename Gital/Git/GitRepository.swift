@@ -13,11 +13,16 @@ struct BranchOperationError: LocalizedError {
 /// `GitRepository+*.swift` extension files; this file holds the stored
 /// state and the few helpers shared across domains.
 ///
-/// `nonisolated`: the app module defaults to MainActor, which put every
-/// output parse (log, diffs, status, blame) on the main thread — a 50k-line
-/// diff parse stalled the UI for hundreds of milliseconds on every refresh.
-/// With the class opted out, awaited calls from the UI run parsing on the
-/// concurrent executor and only the results hop back.
+/// `nonisolated`: the app module defaults to MainActor; the class opts out
+/// so its stored state and the static parse layer are not actor-bound. That
+/// alone does NOT move work off the main thread: the module also enables
+/// ApproachableConcurrency (NonisolatedNonsendingByDefault), under which a
+/// nonisolated async method runs on its *caller's* actor — awaited from the
+/// UI, parsing would still run on main. The parse-heavy endpoints (log,
+/// diffs, status, blame, file history, stash diff) are therefore marked
+/// `@concurrent`, which pins them to the global executor — a 50k-line diff
+/// parse otherwise stalls the UI ~50ms+ on every refresh. Keep `@concurrent`
+/// on any new endpoint that does more than trim its git output.
 nonisolated final class GitRepository: @unchecked Sendable {
     let root: URL
     /// Internal (not private) so the domain extension files can reach it.

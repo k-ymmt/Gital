@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Status
 
 extension GitRepository {
-    func status() async throws -> WorkingStatus {
+    @concurrent func status() async throws -> WorkingStatus {
         // --untracked-files=all: without it git collapses an untracked
         // directory into one "dir/" entry, so the sidebar would show a folder
         // pseudo-file instead of the files inside it.

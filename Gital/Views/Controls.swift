@@ -277,3 +277,15 @@ struct PlaceholderTextEditor: View {
             }
     }
 }
+
+extension Binding where Value == Bool {
+    /// Presents an optional: true while the source is non-nil, and setting
+    /// false (an alert dismissing) clears it. The standard glue between a
+    /// `pendingX: T?` model property and `.alert(isPresented:presenting:)`.
+    init<T>(presence source: Binding<T?>) {
+        self.init(
+            get: { source.wrappedValue != nil },
+            set: { if !$0 { source.wrappedValue = nil } }
+        )
+    }
+}

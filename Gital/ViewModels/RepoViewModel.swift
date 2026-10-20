@@ -377,12 +377,14 @@ final class RepoViewModel {
 
     /// Refreshes state whenever files change on disk (editors, terminals,
     /// agents). FSEvents coalesces bursts via its latency window. Refs, log,
-    /// and stashes refresh too when git metadata changed: external commits,
-    /// branches, and `git stash` runs must be reflected, or positional
-    /// references (stash@{N}) in the UI go stale and target the wrong
-    /// object. A burst touching only worktree files (an editor save) skips
-    /// the log/refs re-fetch — with a deep history paged in, every save
-    /// otherwise re-ran a full `git log` plus the graph layout.
+    /// and stashes refresh too when ref-affecting git metadata changed:
+    /// external commits, branches, and `git stash` runs must be reflected,
+    /// or positional references (stash@{N}) in the UI go stale and target
+    /// the wrong object. A burst touching only worktree files (an editor
+    /// save) — or only non-ref git files like `.git/index`, which the app's
+    /// own staging writes ~0.5s before the coalesced event echoes back —
+    /// skips the log/refs re-fetch: with a deep history paged in, every
+    /// save/stage otherwise re-ran a full `git log` plus the graph layout.
     private func startWatching() {
         watcher = RepoWatcher(root: repository.root) { [weak self] paths in
             // Substring match, not a root-prefix compare: FSEvents reports
@@ -390,8 +392,22 @@ final class RepoViewModel {
             // defeat a prefix built from the repo root. A nested repo's
             // .git also matches — refreshing more than needed is safe.
             // An empty path list means "unknown" and refreshes everything.
-            let touchesGitMetadata = paths.isEmpty
-                || paths.contains { $0.contains("/.git/") || $0.hasSuffix("/.git") }
+            // Inside .git, only what can change refs, their decoration, or
+            // log traversal counts: refs/, packed-refs, HEAD (+ HEAD.lock),
+            // reflogs, reftable/ (the reftable backend stores refs AND
+            // reflogs there, with HEAD a static placeholder), shallow (a
+            // deepened clone exposes new history without moving refs), and
+            // config (remote add/remove reclassifies log decorations).
+            let touchesGitMetadata = paths.isEmpty || paths.contains { path in
+                guard let gitDir = path.range(of: "/.git/") else {
+                    return path.hasSuffix("/.git")
+                }
+                let inner = path[gitDir.upperBound...]
+                return inner.hasPrefix("refs/") || inner.hasPrefix("packed-refs")
+                    || inner.hasPrefix("HEAD") || inner.hasPrefix("logs/")
+                    || inner.hasPrefix("reftable/") || inner.hasPrefix("shallow")
+                    || inner.hasPrefix("config")
+            }
             Task { @MainActor in
                 guard let self else { return }
                 await self.refreshStatus()

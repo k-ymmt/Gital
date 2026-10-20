@@ -43,6 +43,13 @@ extension GitRepository {
         /// Stash commit holding the removed changes, created by the save
         /// flow; nil when nothing was removed.
         var stashCommitHash: String?
+        /// The replacement commit a save recorded (updated when a retried
+        /// save amends it). The save flow amends only when HEAD sits exactly
+        /// here — HEAD at anything other than this or `baseHash` means
+        /// something outside the session moved it (a checkout, a reset, a
+        /// terminal commit), and amending would rewrite a commit the session
+        /// doesn't own. Defaulted so state files from before the field decode.
+        var replacementCommitHash: String? = nil
 
         var shortTargetHash: String { String(targetHash.prefix(7)) }
         var subject: String { originalMessage.components(separatedBy: "\n").first ?? "" }
@@ -167,21 +174,31 @@ extension GitRepository {
                 descendantsNewestFirst: prep.descendantsNewestFirst
             )
         )
-        try await executor.run(["reset", "--soft", "HEAD^"])
-        let session = CommitEditSession(
-            targetHash: prep.target.hash,
-            originalMessage: fields[3].trimmingCharacters(in: .whitespacesAndNewlines),
-            authorName: fields[0],
-            authorEmail: fields[1],
-            authorDate: fields[2].trimmingCharacters(in: .whitespacesAndNewlines),
-            baseHash: prep.baseHash,
-            // interactiveRebase verified HEAD == expectedHead before starting.
-            headBeforeRebase: prep.expectedHead,
-            phase: .editing,
-            stashCommitHash: nil
-        )
-        try await writeEditSessionFile(session)
-        return session
+        do {
+            try await executor.run(["reset", "--soft", "HEAD^"])
+            let session = CommitEditSession(
+                targetHash: prep.target.hash,
+                originalMessage: fields[3].trimmingCharacters(in: .whitespacesAndNewlines),
+                authorName: fields[0],
+                authorEmail: fields[1],
+                authorDate: fields[2].trimmingCharacters(in: .whitespacesAndNewlines),
+                baseHash: prep.baseHash,
+                // interactiveRebase verified HEAD == expectedHead before starting.
+                headBeforeRebase: prep.expectedHead,
+                phase: .editing,
+                stashCommitHash: nil
+            )
+            try await writeEditSessionFile(session)
+            return session
+        } catch {
+            // The rebase already started: leaving its edit stop behind would
+            // present it as a generic stopped rebase with the commit's
+            // content staged and the ordinary composer armed — committing
+            // there records a duplicate mid-rebase. Nothing of the user's is
+            // lost by aborting; the worktree was clean when the rebase began.
+            try? await abortOperation(.rebase)
+            throw error
+        }
     }
 
     /// Argv for the save recommit: original author and author date, current
@@ -202,6 +219,26 @@ extension GitRepository {
 
     func commitEditedContent(message: String, session: CommitEditSession, amend: Bool) async throws {
         try await executor.run(Self.editSaveCommitArguments(message: message, session: session, amend: amend))
+    }
+
+    /// Whether HEAD looks like a commit this session's save recorded: its
+    /// first parent is the edit stop's base and it carries the session's
+    /// original author and raw author date — the exact combination
+    /// `editSaveCommitArguments` writes and an unrelated commit landing at
+    /// the stop would not. The fallback for the crash window where a save
+    /// recorded the replacement commit but died before persisting its hash:
+    /// without it, every retry would be refused as an external HEAD move.
+    func headMatchesEditReplacement(_ session: CommitEditSession) async throws -> Bool {
+        let line = try await executor.run([
+            "log", "-1", "--no-show-signature", "--date=raw",
+            "--format=%P%x00%an%x00%ae%x00%ad", "HEAD",
+        ])
+        let fields = line.components(separatedBy: "\u{0}")
+        guard fields.count == 4 else { return false }
+        return fields[0].trimmingCharacters(in: .whitespacesAndNewlines) == session.baseHash
+            && fields[1] == session.authorName
+            && fields[2] == session.authorEmail
+            && fields[3].trimmingCharacters(in: .whitespacesAndNewlines) == session.authorDate
     }
 
     /// Stashes whatever the save left in the worktree — the removed changes,
@@ -229,10 +266,7 @@ extension GitRepository {
     /// stash already gone (dropped in a terminal) is success: nothing left to
     /// restore.
     func popRemovedChanges(stashCommitHash: String) async throws {
-        let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])
-        guard let match = Self.parseStashes(output).first(where: { $0.commitHash == stashCommitHash }) else {
-            return
-        }
+        guard let match = try await findStash(commitHash: stashCommitHash) else { return }
         try await executor.run(["stash", "pop", match.reference])
     }
 
@@ -243,9 +277,7 @@ extension GitRepository {
     /// The state file lives inside the git dir, resolved via `--git-path`
     /// (worktrees, submodules) like the operation probes.
     private func editSessionFileURL() async throws -> URL {
-        let path = try await executor.run(["rev-parse", "--git-path", Self.editSessionFileName])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
+        try await gitPathURL(Self.editSessionFileName)
     }
 
     func loadEditSessionFile() async -> CommitEditSession? {
@@ -271,14 +303,59 @@ extension GitRepository {
     /// Throwing (not degrading to false): a cancelled probe must not read as
     /// "rebase gone", which would stale-delete a live session.
     func editSessionRebaseExists() async throws -> Bool {
-        let path = try await executor.run(["rev-parse", "--git-path", "rebase-merge"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let url = path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
-        return FileManager.default.fileExists(atPath: url.path)
+        try await FileManager.default.fileExists(atPath: gitPathURL("rebase-merge").path)
     }
 
-    func headHash() async throws -> String {
-        try await executor.run(["rev-parse", "HEAD"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Whether the stopped rebase (`rebase-merge` present) is the session's
+    /// own. A later, foreign `rebase -i` stopped at its own edit or conflict
+    /// must not resurrect a stale session file — saving into it would amend
+    /// a commit the session never touched. Two checks, both required:
+    /// `orig-head` must equal the session's pre-rebase head, and the rebase's
+    /// `done` todo lines must contain the session's `edit <target>` stop —
+    /// orig-head alone cannot tell two rebases started from the same tip
+    /// apart (abort ours in a terminal, start another from the restored
+    /// head, and both record the same orig-head). Unreadable files read as
+    /// foreign: a live stopped rebase always has both.
+    func editSessionOwnsRebase(_ session: CommitEditSession) async throws -> Bool {
+        let origHeadURL = try await gitPathURL("rebase-merge/orig-head")
+        guard let origHeadData = try? Data(contentsOf: origHeadURL),
+              String(decoding: origHeadData, as: UTF8.self)
+                  .trimmingCharacters(in: .whitespacesAndNewlines) == session.headBeforeRebase
+        else { return false }
+        let doneURL = try await gitPathURL("rebase-merge/done")
+        guard let doneData = try? Data(contentsOf: doneURL) else { return false }
+        return Self.doneTodoContainsEditStop(
+            String(decoding: doneData, as: UTF8.self),
+            targetHash: session.targetHash
+        )
+    }
+
+    /// Whether a rebase's executed-todo lines contain the `edit` stop for the
+    /// given commit. Prefix-matched: git may rewrite todo hashes abbreviated,
+    /// so the line's hash only needs to be a (≥7 chars, parser-guaranteed
+    /// non-empty) prefix of the full target hash.
+    static func doneTodoContainsEditStop(_ done: String, targetHash: String) -> Bool {
+        done.split(separator: "\n").contains { line in
+            let tokens = line.split(separator: " ", omittingEmptySubsequences: true)
+            guard tokens.count >= 2, tokens[0] == "edit" || tokens[0] == "e" else { return false }
+            return tokens[1].count >= 7 && targetHash.hasPrefix(tokens[1])
+        }
+    }
+
+    /// Whether the commit is reachable from HEAD. The reconcile uses it to
+    /// tell an aborted session rebase (the original target is back on the
+    /// branch) from a completed one (the target was rewritten away) —
+    /// robust against commits or checkouts made after an external abort,
+    /// which move HEAD but keep the target reachable.
+    func isReachableFromHead(_ hash: String) async throws -> Bool {
+        do {
+            try await executor.run(["merge-base", "--is-ancestor", hash, "HEAD"])
+            return true
+        } catch {
+            // A cancelled probe must not read as "unreachable" — the caller
+            // would pop the stash over an aborted edit.
+            try Task.checkCancellation()
+            return false
+        }
     }
 }

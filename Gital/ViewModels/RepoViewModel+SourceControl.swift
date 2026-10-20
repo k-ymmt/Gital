@@ -55,6 +55,20 @@ extension RepoViewModel {
         var shortHash: String { String(hash.prefix(7)) }
     }
 
+    /// Refuses actions that move HEAD while a stopped operation or a Commit
+    /// Edit Session is in progress. `git checkout`/`git reset` succeed even
+    /// at a stopped rebase's edit stop — HEAD moving out from under a
+    /// session would leave its save amending whatever commit HEAD landed on,
+    /// and a reset destroys the staged edit content outright.
+    func ensureHeadCanMove() -> Bool {
+        guard pendingOperation != nil || editSession != nil else { return true }
+        let name = editSession != nil
+            ? "commit edit"
+            : (pendingOperation?.displayName.lowercased() ?? "operation")
+        errorMessage = "A \(name) is in progress — finish or abort it before moving HEAD."
+        return false
+    }
+
     func cherryPick(_ commit: Commit) {
         runConflictAware("Cherry-picking…") { try await self.repository.cherryPick(commit.hash) }
     }
@@ -64,6 +78,7 @@ extension RepoViewModel {
     }
 
     func requestReset(toHash hash: String, mode: GitRepository.ResetMode) {
+        guard ensureHeadCanMove() else { return }
         if mode == .hard {
             pendingReset = PendingReset(hash: hash, mode: mode)
         } else {
@@ -72,6 +87,9 @@ extension RepoViewModel {
     }
 
     func performReset(toHash hash: String, mode: GitRepository.ResetMode) {
+        // Re-checked here (not only in the request): a session can start
+        // while the hard-reset confirmation sits open.
+        guard ensureHeadCanMove() else { return }
         runSync("Resetting…") { try await self.repository.reset(to: hash, mode: mode) }
     }
 
@@ -99,10 +117,12 @@ extension RepoViewModel {
     }
 
     func requestCheckoutDetached(hash: String, subject: String) {
+        guard ensureHeadCanMove() else { return }
         pendingDetachedCheckout = DetachedCheckoutRequest(hash: hash, subject: subject)
     }
 
     func checkoutDetached(_ request: DetachedCheckoutRequest) {
+        guard ensureHeadCanMove() else { return }
         runSync("Checking out…") {
             try await self.repository.checkoutDetached(request.hash)
             // Follow HEAD in the detail pane. Works even when the hash is
@@ -149,6 +169,7 @@ extension RepoViewModel {
     func createBranch(name: String, at commit: Commit, checkout: Bool) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+        guard !checkout || ensureHeadCanMove() else { return }
         perform(refresh: .all) {
             try await self.repository.createBranch(name: trimmed, at: commit.hash, checkout: checkout)
         }
@@ -191,9 +212,7 @@ extension RepoViewModel {
     /// sheet can open while the prep is queued.
     func requestInteractiveRebase(from commit: Commit) {
         guard !isPresentingSheet else { return }
-        let blockingChanges = status.staged.count
-            + status.unstaged.filter { $0.status != .untracked }.count
-        guard blockingChanges == 0 else {
+        guard !hasRewriteBlockingChanges else {
             errorMessage = "Interactive rebase needs a clean working copy — commit or stash your changes first."
             return
         }
@@ -270,22 +289,38 @@ extension RepoViewModel {
         }
     }
 
-    /// Like `runSync`, but when the failure left a stopped operation behind
-    /// (merge/rebase/cherry-pick hit conflicts), refreshes the working-copy
-    /// state and switches to the Changes tab so the conflicts and the
+    /// Changes that block a history rewrite (interactive rebase, commit
+    /// edit): anything staged or modified — untracked files don't block a
+    /// rebase. Computed on the cached status, so callers use it as a fast
+    /// path; the prepare re-checks with fresh `status` output because the
+    /// cache is stale whenever the file watcher is down.
+    var hasRewriteBlockingChanges: Bool {
+        !status.staged.isEmpty || status.unstaged.contains { $0.status != .untracked }
+    }
+
+    /// After a failed operation: refreshes the status and, when the failure
+    /// left a stopped operation behind (merge/rebase/cherry-pick hit
+    /// conflicts), switches to the Changes tab so the conflicts and the
     /// Continue/Abort banner are in front of the user. The explicit refresh
     /// matters: `runSync`'s failure path doesn't reload anything, and the
     /// FSEvents watcher — the only other trigger — may not be running.
+    func surfaceStoppedOperation() async {
+        await refreshStatus()
+        if pendingOperation != nil {
+            await loadWorkingDiffs()
+            navTab = .changes
+        }
+    }
+
+    /// Like `runSync`, but routes a failure through
+    /// `surfaceStoppedOperation()` so a conflict stop lands in front of the
+    /// user instead of only raising the error alert.
     private func runConflictAware(_ activity: String, _ operation: @escaping @MainActor () async throws -> Void) {
         runSync(activity) {
             do {
                 try await operation()
             } catch {
-                await self.refreshStatus()
-                if self.pendingOperation != nil {
-                    await self.loadWorkingDiffs()
-                    self.navTab = .changes
-                }
+                await self.surfaceStoppedOperation()
                 throw error
             }
         }
@@ -351,10 +386,12 @@ extension RepoViewModel {
 
     func checkout(branch: Branch) {
         guard !branch.isCurrent else { return }
+        guard ensureHeadCanMove() else { return }
         perform(refresh: .all) { try await self.repository.checkout(branch: branch.name) }
     }
 
     func checkoutRemote(branch: String, remote: String) {
+        guard ensureHeadCanMove() else { return }
         runSync("Checking out…") {
             try await self.repository.checkoutRemote(branch: branch, remote: remote)
         }
@@ -362,7 +399,7 @@ extension RepoViewModel {
 
     func createBranch(name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty, ensureHeadCanMove() else { return }
         perform(refresh: .all) {
             try await self.repository.createBranch(name: trimmed, checkout: true)
         }

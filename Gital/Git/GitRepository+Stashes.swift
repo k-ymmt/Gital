@@ -3,8 +3,6 @@ import Foundation
 // MARK: - Stashes
 
 extension GitRepository {
-    /// Internal (not private): the edit-session stash pop resolves its stash
-    /// by commit hash through the same listing.
     static let stashListFormat = "%gd\u{1f}%H\u{1f}%gs"
 
     func stashes() async throws -> [Stash] {
@@ -33,20 +31,26 @@ extension GitRepository {
         try await executor.run(args)
     }
 
-    /// Re-resolves a stash's positional `stash@{N}` reference by commit hash
-    /// right before use. The stored reference goes stale the moment the stash
-    /// list changes (another drop, a `git stash push` in a terminal), and a
-    /// positional drop against a stale list destroys the wrong stash.
-    private func resolveStashRef(_ stash: Stash) async throws -> String {
+    /// Finds the stash holding the given commit in a fresh listing, yielding
+    /// its current positional `stash@{N}` reference. A stored reference goes
+    /// stale the moment the stash list changes (another drop, a `git stash
+    /// push` in a terminal), and a positional operation against a stale list
+    /// hits the wrong stash — so every use re-resolves by commit hash first.
+    /// Nil when the stash is gone; callers decide whether that is an error.
+    func findStash(commitHash: String) async throws -> Stash? {
         let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])
-        if let match = Self.parseStashes(output).first(where: { $0.commitHash == stash.commitHash }) {
-            return match.reference
+        return Self.parseStashes(output).first { $0.commitHash == commitHash }
+    }
+
+    private func resolveStashRef(_ stash: Stash) async throws -> String {
+        guard let match = try await findStash(commitHash: stash.commitHash) else {
+            throw GitError(
+                command: "stash",
+                exitCode: 1,
+                stderr: "This stash no longer exists — the stash list changed."
+            )
         }
-        throw GitError(
-            command: "stash",
-            exitCode: 1,
-            stderr: "This stash no longer exists — the stash list changed."
-        )
+        return match.reference
     }
 
     func stashApply(_ stash: Stash, pop: Bool) async throws {
@@ -59,7 +63,7 @@ extension GitRepository {
         try await executor.run(["stash", "drop", reference])
     }
 
-    func stashDiff(_ stash: Stash) async throws -> [FileDiff] {
+    @concurrent func stashDiff(_ stash: Stash) async throws -> [FileDiff] {
         let reference = try await resolveStashRef(stash)
         // --include-untracked: stashes are pushed with untracked files, so the
         // detail view must show them too.

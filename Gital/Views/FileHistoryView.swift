@@ -17,10 +17,7 @@ struct FileHistorySheet: View {
         }
         .frame(minWidth: 900, idealWidth: 1080, minHeight: 540, idealHeight: 680)
         .task { await model.load() }
-        .alert("Git Error", isPresented: Binding(
-            get: { model.errorMessage != nil },
-            set: { if !$0 { model.errorMessage = nil } }
-        )) {
+        .alert("Git Error", isPresented: Binding(presence: $model.errorMessage)) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.errorMessage ?? "")

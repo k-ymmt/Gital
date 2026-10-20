@@ -20,6 +20,28 @@ extension GitRepository {
         operationProbes.first { existingMarkers.contains($0.marker) }?.operation
     }
 
+    /// Resolves one `rev-parse --git-path` answer to a URL. Relative output
+    /// is relative to the repo root (the executor's cwd). Not resolved via
+    /// URL(fileURLWithPath:relativeTo:): a base URL without the directory
+    /// hint drops its last component.
+    static func resolveGitPath(_ path: String, root: URL) -> URL {
+        path.hasPrefix("/") ? URL(fileURLWithPath: path) : root.appendingPathComponent(path)
+    }
+
+    /// URL of an entry inside the git dir, resolved via `--git-path` so
+    /// worktrees and submodules land in their real git dir instead of an
+    /// assumed `root/.git`.
+    func gitPathURL(_ name: String) async throws -> URL {
+        let path = try await executor.run(["rev-parse", "--git-path", name])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return Self.resolveGitPath(path, root: root)
+    }
+
+    func headHash() async throws -> String {
+        try await executor.run(["rev-parse", "HEAD"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// The stopped operation in progress, if any — detected by probing marker
     /// files in the git dir. `rev-parse --git-path` resolves the real git dir
     /// (worktrees, submodules) instead of assuming `root/.git`, and file
@@ -34,13 +56,7 @@ extension GitRepository {
         guard paths.count == Self.operationProbes.count else { return nil }
         var existing: Set<String> = []
         for (probe, path) in zip(Self.operationProbes, paths) {
-            // Relative --git-path output is relative to the repo root (the
-            // executor's cwd). Not resolved via URL(fileURLWithPath:relativeTo:):
-            // a base URL without the directory hint drops its last component.
-            let url = path.hasPrefix("/")
-                ? URL(fileURLWithPath: path)
-                : root.appendingPathComponent(path)
-            if FileManager.default.fileExists(atPath: url.path) {
+            if FileManager.default.fileExists(atPath: Self.resolveGitPath(path, root: root).path) {
                 existing.insert(probe.marker)
             }
         }

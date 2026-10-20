@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Log
 
 extension GitRepository {
-    func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
+    @concurrent func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
         async let remotes = remoteNames()
         // NUL field separators: none of these fields can ever contain a NUL,
         // unlike 0x1E/0x1F which a hostile subject could carry.
@@ -78,7 +78,7 @@ extension GitRepository {
         return refs
     }
 
-    func commitDetail(_ hash: String) async throws -> CommitDetail? {
+    @concurrent func commitDetail(_ hash: String) async throws -> CommitDetail? {
         async let remotes = remoteNames()
         // NUL separators as in `log`; %B goes last so the multi-line message
         // can't split the record even though it contains newlines.

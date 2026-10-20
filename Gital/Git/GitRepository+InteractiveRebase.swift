@@ -31,7 +31,9 @@ extension GitRepository {
             throw GitError(
                 command: "rebase",
                 exitCode: 1,
-                stderr: "This commit is not an ancestor of HEAD — interactive rebase can only rewrite the current branch's own history."
+                // Operation-neutral wording: this path serves both the
+                // interactive-rebase sheet and the commit-edit entry point.
+                stderr: "This commit is not an ancestor of HEAD — only the current branch's own history can be rewritten."
             )
         }
         let parentsLine = try await executor.run(["rev-list", "--max-count=1", "--parents", hash])
@@ -70,7 +72,8 @@ extension GitRepository {
             throw GitError(
                 command: "rebase",
                 exitCode: 1,
-                stderr: "The selected range contains merge commits. Interactive rebase would flatten them, so it is not offered here."
+                // Operation-neutral wording, same as the is-ancestor error.
+                stderr: "The selected range contains merge commits. Rewriting it would flatten them, so this is not offered here."
             )
         }
         return InteractiveRebasePrep(commits: commits, baseHash: baseHash)
@@ -85,7 +88,9 @@ extension GitRepository {
             throw GitError(
                 command: "rebase",
                 exitCode: 1,
-                stderr: "Interactive rebase needs a clean working copy — commit or stash your changes first."
+                // Operation-neutral wording: thrown for the interactive-rebase
+                // sheet and the commit-edit entry point alike.
+                stderr: "Rewriting history needs a clean working copy — commit or stash your changes first."
             )
         }
     }
@@ -297,9 +302,7 @@ extension GitRepository {
     /// plan sat in the sheet (a terminal commit, a pull), running it would
     /// silently drop the newcomers — refuse instead.
     func interactiveRebase(baseHash: String?, expectedHead: String, todo: String) async throws {
-        let head = try await executor.run(["rev-parse", "HEAD"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard head == expectedHead else {
+        guard try await headHash() == expectedHead else {
             throw GitError(
                 command: "rebase",
                 exitCode: 1,

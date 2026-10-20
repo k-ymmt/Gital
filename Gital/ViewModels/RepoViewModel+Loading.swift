@@ -204,30 +204,40 @@ extension RepoViewModel {
                     knownPaths.formUnion(untracked.map(\.path))
                 }
             }
-            return diffs
+            // The all-lines ID set is built off main: a 50k-line diff hashes
+            // ~100k strings, which would otherwise land on the main actor on
+            // every refresh.
+            let lineIDs = await Task.detached {
+                Set(diffs.flatMap { $0.hunks.flatMap(\.lines) }.map(\.id))
+            }.value
+            return (diffs, lineIDs)
         }
         switch result {
-        case .success(let diffs):
+        case .success(let (diffs, lineIDs)):
             // Line IDs are positional: after a re-parse the same ID can denote
             // a *different physical line* (an edit earlier in the file shifts
             // everything below). Keep a selected ID only when the line it now
             // denotes is exactly the line it denoted before — otherwise a
             // later "Discard/Stage lines" would hit lines the user never chose.
-            let previousLines = Dictionary(
-                workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let currentLines = Dictionary(
-                diffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            workingDiffs = diffs
-            workingDiffLineIDs = Set(currentLines.keys)
-            hasLoadedWorkingDiffs = true
-            selectedDiffLineIDs = selectedDiffLineIDs.filter { id in
-                guard let current = currentLines[id] else { return false }
-                return previousLines[id] == current
+            // Both dictionaries exist only for that re-validation; the common
+            // case (no selection) skips building them entirely.
+            if !selectedDiffLineIDs.isEmpty {
+                let previousLines = Dictionary(
+                    workingDiffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                let currentLines = Dictionary(
+                    diffs.flatMap { $0.hunks.flatMap(\.lines) }.map { ($0.id, $0) },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                selectedDiffLineIDs = selectedDiffLineIDs.filter { id in
+                    guard let current = currentLines[id] else { return false }
+                    return previousLines[id] == current
+                }
             }
+            workingDiffs = diffs
+            workingDiffLineIDs = lineIDs
+            hasLoadedWorkingDiffs = true
         case .failure(let error):
             report(error)
         case nil:

@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Diffs / file contents
 
 extension GitRepository {
-    func diffWorking(staged: Bool, path: String? = nil) async throws -> [FileDiff] {
+    @concurrent func diffWorking(staged: Bool, path: String? = nil) async throws -> [FileDiff] {
         var args = ["diff"]
         if staged { args.append("--cached") }
         if let path {
@@ -18,7 +18,7 @@ extension GitRepository {
     /// its bytes. This used to shell out to `git diff --no-index /dev/null`
     /// once per untracked file — a refresh of a repo with hundreds of
     /// untracked files serialized hundreds of subprocess spawns.
-    func diffUntracked(path: String) async throws -> [FileDiff] {
+    @concurrent func diffUntracked(path: String) async throws -> [FileDiff] {
         let url = root.appendingPathComponent(path)
         // Only regular files (following symlinks) are read: Data(contentsOf:)
         // on a FIFO would block forever, where git just errors.
@@ -26,12 +26,12 @@ extension GitRepository {
         let type = try FileManager.default.attributesOfItem(atPath: resolved.path)[.type] as? FileAttributeType
         guard type == .typeRegular else { return [] }
         try Task.checkCancellation()
-        let data = try await Task.detached { try Data(contentsOf: url) }.value
+        let data = try Data(contentsOf: url)
         try Task.checkCancellation()
         return [DiffParser.untrackedFile(path: path, data: data)]
     }
 
-    func diffCommit(_ hash: String, path: String? = nil, renamedFrom: String? = nil) async throws -> [FileDiff] {
+    @concurrent func diffCommit(_ hash: String, path: String? = nil, renamedFrom: String? = nil) async throws -> [FileDiff] {
         // Merge commits show nothing by default; diff against the first parent.
         var args = ["show", "--patch", "--format=", "--no-color", "--diff-merges=first-parent", hash]
         if let path {
@@ -135,7 +135,7 @@ extension GitRepository {
         }
     }
 
-    func commitFileStats(_ hash: String) async throws -> [CommitFileStat] {
+    @concurrent func commitFileStats(_ hash: String) async throws -> [CommitFileStat] {
         // -z output: rename entries carry two NUL-separated paths, which the
         // line-based form mangles into "old => new" pseudo-paths.
         async let numstatOutput = executor.runData(["show", "--numstat", "-z", "--format=", "--diff-merges=first-parent", hash])

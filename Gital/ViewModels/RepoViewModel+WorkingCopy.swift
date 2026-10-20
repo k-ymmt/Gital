@@ -225,15 +225,7 @@ extension RepoViewModel {
             return
         }
         guard !isCommitting else { return }  // the button stays enabled for amend; don't double-commit
-        // A codex reply landing after the commit would refill the freshly
-        // cleared composer with a message for changes that no longer exist.
-        let wasGenerating = isGeneratingCommitMessage
-        cancelCommitMessageGeneration()
-        // Mid-stream text never went through the completion-time cleanup, so
-        // committing during a generation would record raw fences/quotes.
-        let message = wasGenerating
-            ? CommitMessageGenerator.extractMessage(commitMessage)
-            : commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = takeComposerMessage()
         guard !message.isEmpty || amend else { return }
         isCommitting = true
         Task {
@@ -245,6 +237,20 @@ extension RepoViewModel {
                 await refreshAll()
             } catch { report(error) }
         }
+    }
+
+    /// Takes the composer's message for a commit or commit-edit save. Cancels
+    /// a running codex generation first — a reply landing after the commit
+    /// would refill the freshly cleared composer with a message for changes
+    /// that no longer exist — and runs mid-stream text through the
+    /// completion-time cleanup it never received, so committing during a
+    /// generation doesn't record raw fences/quotes.
+    func takeComposerMessage() -> String {
+        let wasGenerating = isGeneratingCommitMessage
+        cancelCommitMessageGeneration()
+        return wasGenerating
+            ? CommitMessageGenerator.extractMessage(commitMessage)
+            : commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     var canCommit: Bool {

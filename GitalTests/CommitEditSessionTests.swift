@@ -134,6 +134,25 @@ struct CommitEditSessionTests {
         #expect(Array(args.suffix(2)) == ["-m", "New message"])
     }
 
+    // MARK: - Rebase ownership
+
+    // The ownership check must find the session's edit stop in the rebase's
+    // executed todo, tolerating git's abbreviated hash rewriting — and never
+    // match a pick line, a different commit, or a too-short prefix.
+    @Test func doneTodoMatchesTheEditStopByHashPrefix() {
+        let full = String(repeating: "a", count: 40)
+        #expect(GitRepository.doneTodoContainsEditStop("edit \(full) subject\n", targetHash: full))
+        #expect(GitRepository.doneTodoContainsEditStop(
+            "pick \(String(repeating: "b", count: 40)) other\nedit aaaaaaaaaa subj\n",
+            targetHash: full
+        ))
+        #expect(GitRepository.doneTodoContainsEditStop("e aaaaaaa subj", targetHash: full))
+        #expect(!GitRepository.doneTodoContainsEditStop("pick \(full) subject", targetHash: full))
+        #expect(!GitRepository.doneTodoContainsEditStop("edit bbbbbbb subj", targetHash: full))
+        #expect(!GitRepository.doneTodoContainsEditStop("edit aaa subj", targetHash: full))
+        #expect(!GitRepository.doneTodoContainsEditStop("", targetHash: full))
+    }
+
     // MARK: - State file encode/decode
 
     @Test func sessionStateRoundTrips() throws {

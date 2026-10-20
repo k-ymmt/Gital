@@ -5,7 +5,7 @@ import Foundation
 extension GitRepository {
     /// Commits touching one file, following renames. `startHash` scopes the
     /// walk (nil = HEAD); `path` must be the file's name as of that revision.
-    func fileHistory(path: String, startHash: String?, limit: Int) async throws -> [FileHistoryEntry] {
+    @concurrent func fileHistory(path: String, startHash: String?, limit: Int) async throws -> [FileHistoryEntry] {
         // Leading NUL marks each record start, so splitting the whole output
         // on NUL yields clean 5-field groups even though the name-status
         // block trails the subject inside the last field. None of the fields
@@ -100,7 +100,7 @@ extension GitRepository {
     /// Blames the file as of `hash`, or the working tree when nil (which is
     /// what surfaces not-yet-committed lines). Blame follows whole-file
     /// renames on its own, so `path` is simply the name valid at `hash`.
-    func blame(path: String, at hash: String?) async throws -> BlameFile {
+    @concurrent func blame(path: String, at hash: String?) async throws -> BlameFile {
         var args = ["blame", "--porcelain"]
         if let hash { args.append(hash) }
         args.append(contentsOf: ["--", path])
@@ -148,35 +148,39 @@ extension GitRepository {
         }
 
         var annotations: [String: BlameAnnotation] = [:]
+        // One formatter per parse, not a shared static: blame parsing runs on
+        // the concurrent executor (`@concurrent blame`), where two concurrent
+        // parses mutating one DateFormatter's time zone would race. Per-parse
+        // keeps the construction cost at one formatter per blame, not one per
+        // unique commit.
+        let formatter = makeBlameDateFormatter()
         for (hash, info) in metadata {
             annotations[hash] = BlameAnnotation(
                 author: info["author"] ?? "",
-                date: blameDate(epoch: info["author-time"], timeZone: info["author-tz"]),
+                date: blameDate(epoch: info["author-time"], timeZone: info["author-tz"], formatter: formatter),
                 summary: info["summary"] ?? ""
             )
         }
         return BlameFile(lines: lines, annotations: annotations)
     }
 
-    // Shared instance: blameDate runs once per unique commit in a blame, and
-    // DateFormatter construction dominates the cost. Mutating the time zone
-    // per call is safe — the type is MainActor-isolated.
-    private static let blameDateFormatter: DateFormatter = {
+    private static func makeBlameDateFormatter() -> DateFormatter {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter
-    }()
+    }
 
     /// Formats porcelain's epoch + "+0900"-style offset as a short local-to-
-    /// the-author date.
-    static func blameDate(epoch: String?, timeZone: String?) -> String {
+    /// the-author date. The formatter is caller-supplied so a parse reuses
+    /// one across its commits; its time zone is overwritten here per call.
+    static func blameDate(epoch: String?, timeZone: String?, formatter: DateFormatter = makeBlameDateFormatter()) -> String {
         guard let epoch, let seconds = TimeInterval(epoch) else { return "" }
         var offsetSeconds = 0
         if let timeZone, timeZone.count == 5, let value = Int(timeZone) {
             offsetSeconds = (abs(value) / 100 * 3600 + abs(value) % 100 * 60) * (value < 0 ? -1 : 1)
         }
-        blameDateFormatter.timeZone = TimeZone(secondsFromGMT: offsetSeconds) ?? .current
-        return blameDateFormatter.string(from: Date(timeIntervalSince1970: seconds))
+        formatter.timeZone = TimeZone(secondsFromGMT: offsetSeconds) ?? .current
+        return formatter.string(from: Date(timeIntervalSince1970: seconds))
     }
 }
