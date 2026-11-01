@@ -43,18 +43,27 @@ extension GitRepository {
 
     func remotes() async throws -> [RemoteInfo] {
         async let remoteNames = executor.run(["remote"])
-        async let remoteBranches = executor.run(["branch", "-r", "--format=%(refname:short)"])
+        async let remoteBranches = executor.run(["branch", "-r", "--format=%(refname:short)\u{1f}%(objectname)"])
 
         let names = try await remoteNames.split(separator: "\n").map(String.init)
-        let branches = try await remoteBranches.split(separator: "\n").map(String.init)
+        return Self.parseRemotes(names: names, branchOutput: try await remoteBranches)
+    }
 
+    /// Groups `git branch -r` output (short name, tip hash per line) under
+    /// the remotes that own each branch.
+    static func parseRemotes(names: [String], branchOutput: String) -> [RemoteInfo] {
+        let branches: [(name: String, tipHash: String)] = branchOutput.split(separator: "\n").compactMap { line in
+            let fields = line.components(separatedBy: "\u{1f}")
+            guard fields.count >= 2, !fields[0].isEmpty else { return nil }
+            return (fields[0], fields[1])
+        }
         return names.map { name in
             let prefix = name + "/"
             // Only the remote's own symref ("origin/HEAD") is synthetic; a
             // genuine branch can legally be named ".../HEAD" (e.g. foo/HEAD).
             let owned = branches
-                .filter { $0.hasPrefix(prefix) && $0 != name + "/HEAD" }
-                .map { String($0.dropFirst(prefix.count)) }
+                .filter { $0.name.hasPrefix(prefix) && $0.name != name + "/HEAD" }
+                .map { RemoteBranch(name: String($0.name.dropFirst(prefix.count)), tipHash: $0.tipHash) }
             return RemoteInfo(name: name, branches: owned)
         }
     }

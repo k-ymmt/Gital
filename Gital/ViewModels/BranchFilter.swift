@@ -33,7 +33,7 @@ nonisolated enum BranchFilter {
     static func remotes(_ remotes: [RemoteInfo], query: String) -> [RemoteInfo] {
         guard isActive(query) else { return remotes }
         return remotes.compactMap { remote in
-            let kept = remote.branches.filter { matches("\(remote.name)/\($0)", query: query) }
+            let kept = remote.branches.filter { matches("\(remote.name)/\($0.name)", query: query) }
             return kept.isEmpty ? nil : RemoteInfo(name: remote.name, branches: kept)
         }
     }

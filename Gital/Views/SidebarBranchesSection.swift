@@ -8,7 +8,7 @@ struct SidebarBranchesSection: View {
     @Binding var collapsedBranchFolders: Set<String>
 
     @State private var branchRowsCache = BranchTreeRowsCache<Branch>()
-    @State private var remoteRowsCache = BranchTreeRowsCache<String>()
+    @State private var remoteRowsCache = BranchTreeRowsCache<RemoteBranch>()
 
     private static let allSectionKeys: Set<String> = ["branches", "remotes", "tags"]
 
@@ -88,7 +88,7 @@ struct SidebarBranchesSection: View {
 
                     if remoteExpanded {
                         let rows = remoteRowsCache.rows(
-                            remote.branches.map { ($0, $0) },
+                            remote.branches.map { ($0.name, $0) },
                             keyPrefix: remoteKey,
                             collapsed: collapsedFolders
                         )
@@ -185,7 +185,7 @@ struct SidebarBranchesSection: View {
             .disabled(branch.isCurrent)
     }
 
-    private func remoteBranchRow(_ branch: String, displayName: String, depth: Int, remote: String) -> some View {
+    private func remoteBranchRow(_ branch: RemoteBranch, displayName: String, depth: Int, remote: String) -> some View {
         Text(displayName)
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
@@ -195,17 +195,22 @@ struct SidebarBranchesSection: View {
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
+            .background(sidebarRowBackground(model.isRemoteBranchRowHighlighted(remote: remote, branch: branch.name)))
+            .onTapGesture {
+                model.selectRemoteBranch(branch, remote: remote)
+            }
             .contextMenu {
                 Button("Checkout Tracking Branch") {
-                    model.checkoutRemote(branch: branch, remote: remote)
+                    model.checkoutRemote(branch: branch.name, remote: remote)
                 }
                 Divider()
-                mergeRebaseMenuItems(target: "\(remote)/\(branch)", disabled: false)
+                mergeRebaseMenuItems(target: "\(remote)/\(branch.name)", disabled: false)
                 Divider()
                 Button("Delete on Remote…", role: .destructive) {
-                    model.requestDeleteRemoteBranch(remote: remote, branch: branch)
+                    model.requestDeleteRemoteBranch(remote: remote, branch: branch.name)
                 }
             }
+            .help("Click to show latest commit")
     }
 
     /// Merge/rebase entries shared by local and remote branch rows. Disabled

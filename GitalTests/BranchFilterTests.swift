@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import Gital
 
+private func remoteBranch(_ name: String) -> RemoteBranch {
+    RemoteBranch(name: name, tipHash: "abc1234")
+}
+
 /// `BranchFilter` — the pure logic behind the Branches-tab search field.
 @MainActor
 @Suite(.timeLimit(.minutes(1)))
@@ -17,8 +21,8 @@ struct BranchFilterTests {
         Branch(name: "fix/typo", isCurrent: false, upstream: nil, tipHash: "4", upstreamRemote: nil),
     ]
     private let remotes = [
-        RemoteInfo(name: "origin", branches: ["main", "feature/login-page"]),
-        RemoteInfo(name: "upstream", branches: ["main", "release/2.0"]),
+        RemoteInfo(name: "origin", branches: [remoteBranch("main"), remoteBranch("feature/login-page")]),
+        RemoteInfo(name: "upstream", branches: [remoteBranch("main"), remoteBranch("release/2.0")]),
     ]
     private let tags = [Tag(name: "v1.0.0", tipHash: "1"), Tag(name: "v2.0.0-rc1", tipHash: "2")]
 
@@ -49,14 +53,14 @@ struct BranchFilterTests {
     @Test func remotesMatchOnJoinedNameAndDropEmptyRemotes() {
         let byRemoteName = BranchFilter.remotes(remotes, query: "origin")
         #expect(byRemoteName.map(\.name) == ["origin"])
-        #expect(byRemoteName.first?.branches == ["main", "feature/login-page"], "remote name alone keeps all of its branches")
+        #expect(byRemoteName.first?.branches.map(\.name) == ["main", "feature/login-page"], "remote name alone keeps all of its branches")
 
         let joined = BranchFilter.remotes(remotes, query: "origin/main")
-        #expect(joined.count == 1 && joined.first?.branches == ["main"])
+        #expect(joined.count == 1 && joined.first?.branches.map(\.name) == ["main"])
 
         let byBranch = BranchFilter.remotes(remotes, query: "main")
         #expect(byBranch.map(\.name) == ["origin", "upstream"])
-        #expect(byBranch.map(\.branches) == [["main"], ["main"]])
+        #expect(byBranch.map { $0.branches.map(\.name) } == [["main"], ["main"]])
 
         let release = BranchFilter.remotes(remotes, query: "release")
         #expect(release.map(\.name) == ["upstream"], "origin has no match and is dropped")

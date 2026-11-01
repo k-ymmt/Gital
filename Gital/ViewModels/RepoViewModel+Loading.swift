@@ -102,6 +102,46 @@ extension RepoViewModel {
         }
     }
 
+    /// Pages history in until `hash` is part of `commits` (or the log runs
+    /// out). Page sizes double per round so a tag deep in a long history
+    /// costs O(log n) git runs, not one per 400 commits; the graph is laid
+    /// out once at the end instead of after every page.
+    func ensureCommitLoaded(_ hash: String) async {
+        guard hasMoreCommits, !commits.contains(where: { $0.hash == hash }) else { return }
+        let known = commits
+        // Shares logLoader with refreshLog/loadMoreCommits for the same
+        // reason they share it: a refresh landing mid-way owns `commits`.
+        switch await logLoader.run({ [repository] in
+            var loaded = known
+            var knownHashes = Set(loaded.map(\.hash))
+            var skip = loaded.count
+            var exhausted = false
+            while !knownHashes.contains(hash), !exhausted {
+                let limit = max(Self.logPageSize, loaded.count)
+                let page = try await repository.log(limit: limit, skip: skip)
+                exhausted = page.count < limit
+                // Always advance by what git returned, not by what was new:
+                // a history rewritten between pages can yield an
+                // all-duplicate page, which must not re-fetch forever.
+                skip += page.count
+                for commit in page where knownHashes.insert(commit.hash).inserted {
+                    loaded.append(commit)
+                }
+            }
+            let graph = await Task.detached { CommitGraph(commits: loaded) }.value
+            return (loaded, graph, exhausted)
+        }) {
+        case .success(let (loaded, graph, exhausted)):
+            commits = loaded
+            self.graph = graph
+            hasMoreCommits = !exhausted
+        case .failure(let error):
+            report(error)
+        case nil:
+            break
+        }
+    }
+
     func refreshRefs() async {
         do {
             async let branchesTask = repository.branches()

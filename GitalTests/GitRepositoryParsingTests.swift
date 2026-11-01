@@ -144,6 +144,23 @@ struct GitRepositoryParsingTests {
         #expect(parsedTags[1].tipHash == "commit000", "lightweight tag uses object hash directly")
     }
 
+    @Test func remoteBranchListParsing() {
+        let output = [
+            ["origin/HEAD", "aaa111"].joined(separator: "\u{1f}"),           // symref, synthetic
+            ["origin/main", "aaa111"].joined(separator: "\u{1f}"),
+            ["origin/feature/x", "bbb222"].joined(separator: "\u{1f}"),
+            ["fork/main", "ccc333"].joined(separator: "\u{1f}"),             // remote not in `git remote`: dropped
+            ["upstream/main", "ddd444"].joined(separator: "\u{1f}"),
+        ].joined(separator: "\n")
+        let remotes = GitRepository.parseRemotes(names: ["origin", "upstream"], branchOutput: output)
+        #expect(remotes.map(\.name) == ["origin", "upstream"], "one entry per configured remote, in `git remote` order")
+        #expect(remotes[0].branches == [
+            RemoteBranch(name: "main", tipHash: "aaa111"),
+            RemoteBranch(name: "feature/x", tipHash: "bbb222"),
+        ], "branch names are relative to the remote and carry their tip; origin/HEAD is dropped")
+        #expect(remotes[1].branches == [RemoteBranch(name: "main", tipHash: "ddd444")])
+    }
+
     @Test func stashListParsing() {
         let stashOutput = [
             ["stash@{0}", "aaa111", "WIP on main: something"].joined(separator: "\u{1f}"),

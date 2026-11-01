@@ -57,6 +57,10 @@ final class RepoViewModel {
                    tags.first(where: { $0.name == name })?.tipHash != selectedCommitHash {
                     selectedTagName = nil
                 }
+                if let ref = selectedRemoteBranch,
+                   remoteBranch(ref)?.tipHash != selectedCommitHash {
+                    selectedRemoteBranch = nil
+                }
                 Task { await loadCommitDetail() }
             }
         }
@@ -72,11 +76,27 @@ final class RepoViewModel {
     /// sidebar, so the range itself is computed there.
     @ObservationIgnored var branchSelectionAnchor: String?
     var selectedTagName: String?
+    /// Remote-tracking branch row selected in the sidebar. Like the branch
+    /// and tag selections, it is dropped as soon as the history selection
+    /// moves off its tip.
+    var selectedRemoteBranch: RemoteBranchRef?
 
     /// Branch row to highlight in the sidebar: the explicitly clicked branch,
     /// falling back to the current branch when nothing else is selected.
     var highlightedBranchName: String? {
-        selectedBranchName ?? (selectedTagName == nil ? branches.first(where: \.isCurrent)?.name : nil)
+        if let selectedBranchName { return selectedBranchName }
+        guard selectedTagName == nil, selectedRemoteBranch == nil else { return nil }
+        return branches.first(where: \.isCurrent)?.name
+    }
+
+    /// The selected remote branch resolved against the live remote list, or
+    /// nil once a fetch/prune has removed it.
+    func remoteBranch(_ ref: RemoteBranchRef) -> RemoteBranch? {
+        remotes.first(where: { $0.name == ref.remote })?.branches.first(where: { $0.name == ref.branch })
+    }
+
+    func isRemoteBranchRowHighlighted(remote: String, branch: String) -> Bool {
+        selectedRemoteBranch == RemoteBranchRef(remote: remote, branch: branch)
     }
 
     /// The multi-selection resolved against the live branch list, in sidebar

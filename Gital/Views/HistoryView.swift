@@ -36,6 +36,21 @@ struct HistoryView: View {
 
     // MARK: - Commit list
 
+    /// Selected hash still waiting for its row to be paged in (see
+    /// `RepoViewModel.ensureCommitLoaded`); nil once scrolled to.
+    @State private var pendingScrollHash: String?
+
+    private func scrollToSelection(_ hash: String, proxy: ScrollViewProxy) {
+        guard model.filteredCommits.contains(where: { $0.hash == hash }) else {
+            pendingScrollHash = hash
+            return
+        }
+        pendingScrollHash = nil
+        withAnimation {
+            proxy.scrollTo(hash)
+        }
+    }
+
     private var commitList: some View {
         VStack(spacing: 0) {
             columnHeader
@@ -66,10 +81,18 @@ struct HistoryView: View {
                     }
                 }
                 .onChange(of: model.selectedCommitHash) { _, hash in
-                    guard let hash else { return }
-                    withAnimation {
-                        proxy.scrollTo(hash)
+                    guard let hash else {
+                        pendingScrollHash = nil
+                        return
                     }
+                    scrollToSelection(hash, proxy: proxy)
+                }
+                // A sidebar ref whose tip lies beyond the loaded page selects
+                // a row that doesn't exist yet; `ensureCommitLoaded` pages it
+                // in, and the scroll happens once the list actually has it.
+                .onChange(of: model.commits.count) { _, _ in
+                    guard let hash = pendingScrollHash else { return }
+                    scrollToSelection(hash, proxy: proxy)
                 }
                 // Tab switches rebuild this list at the top; jump straight
                 // back to the selection instead of losing the position.

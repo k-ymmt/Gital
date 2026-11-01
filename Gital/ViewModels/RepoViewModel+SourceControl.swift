@@ -330,10 +330,11 @@ extension RepoViewModel {
 
     func selectBranch(_ branch: Branch) {
         selectedTagName = nil
+        selectedRemoteBranch = nil
         selectedBranchName = branch.name
         selectedBranchNames = [branch.name]
         branchSelectionAnchor = branch.name
-        selectedCommitHash = branch.tipHash
+        revealCommit(branch.tipHash)
     }
 
     /// ⌘-click: toggle the row in the multi-selection. Toggling a row on also
@@ -347,17 +348,19 @@ extension RepoViewModel {
             if selectedBranchName == branch.name {
                 if let next = branches.first(where: { selectedBranchNames.contains($0.name) }) {
                     selectedTagName = nil
+                    selectedRemoteBranch = nil
                     selectedBranchName = next.name
-                    selectedCommitHash = next.tipHash
+                    revealCommit(next.tipHash)
                 } else {
                     selectedBranchName = nil
                 }
             }
         } else {
             selectedTagName = nil
+            selectedRemoteBranch = nil
             selectedBranchNames.insert(branch.name)
             selectedBranchName = branch.name
-            selectedCommitHash = branch.tipHash
+            revealCommit(branch.tipHash)
         }
     }
 
@@ -372,16 +375,34 @@ extension RepoViewModel {
             return
         }
         selectedTagName = nil
+        selectedRemoteBranch = nil
         selectedBranchNames = Set(orderedNames[min(anchorIndex, clickedIndex)...max(anchorIndex, clickedIndex)])
         selectedBranchName = branch.name
-        selectedCommitHash = branch.tipHash
+        revealCommit(branch.tipHash)
     }
 
     func selectTag(_ tag: Tag) {
         selectedBranchName = nil
         selectedBranchNames = []
+        selectedRemoteBranch = nil
         selectedTagName = tag.name
-        selectedCommitHash = tag.tipHash
+        revealCommit(tag.tipHash)
+    }
+
+    func selectRemoteBranch(_ branch: RemoteBranch, remote: String) {
+        selectedBranchName = nil
+        selectedBranchNames = []
+        selectedTagName = nil
+        selectedRemoteBranch = RemoteBranchRef(remote: remote, branch: branch.name)
+        revealCommit(branch.tipHash)
+    }
+
+    /// Selects `hash` in the History pane and, when it lies beyond the
+    /// commits paged in so far, loads history up to it so the list can
+    /// actually scroll there. Every sidebar ref click routes through here.
+    func revealCommit(_ hash: String) {
+        selectedCommitHash = hash
+        Task { await ensureCommitLoaded(hash) }
     }
 
     func checkout(branch: Branch) {
@@ -460,7 +481,7 @@ extension RepoViewModel {
         }
     }
 
-    struct RemoteBranchRef {
+    struct RemoteBranchRef: Hashable {
         let remote: String
         let branch: String
     }

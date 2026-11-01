@@ -198,9 +198,19 @@ nonisolated struct Branch: Hashable, Identifiable {
     var tracksLocalBranch: Bool { upstreamRemote == "." }
 }
 
+/// One remote-tracking branch (`origin/main`), named relative to its remote.
+/// Carries the tip so the sidebar can select it like a local branch — a
+/// bare name would have to be resolved before the History pane could move.
+nonisolated struct RemoteBranch: Hashable, Identifiable {
+    let name: String
+    let tipHash: String
+
+    var id: String { name }
+}
+
 nonisolated struct RemoteInfo: Hashable, Identifiable {
     let name: String
-    let branches: [String]
+    let branches: [RemoteBranch]
 
     var id: String { name }
 }
