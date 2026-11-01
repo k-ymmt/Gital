@@ -81,3 +81,37 @@ func sidebarRowBackground(_ selected: Bool) -> some View {
         .fill(selected ? Color.accentColor.opacity(0.25) : .clear)
         .padding(.horizontal, 8)
 }
+
+/// Inline search field at the top of a sidebar tab (Pull Requests, Branches):
+/// magnifier, plain text field, and a clear button once there is text.
+struct SidebarFilterField: View {
+    let placeholder: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+            TextField(placeholder, text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Clear filter")
+            }
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 4)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 6)
+    }
+}

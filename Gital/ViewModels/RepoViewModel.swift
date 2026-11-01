@@ -18,6 +18,8 @@ final class RepoViewModel {
     var navTab: NavTab = .changes
     var diffMode: DiffMode = .unified
     var searchText = ""
+    /// Branches-tab filter (see `BranchFilter`); per repo, survives tab switches.
+    var branchFilterText = ""
     /// Toolbar popovers, held here (not view-local) so menu shortcuts can
     /// open them too.
     var isCreatingBranch = false
@@ -527,4 +529,13 @@ final class RepoViewModel {
         if error is CancellationError { return }
         errorMessage = error.localizedDescription
     }
+}
+
+// MARK: - Branches-tab filter
+
+extension RepoViewModel {
+    var isBranchFilterActive: Bool { BranchFilter.isActive(branchFilterText) }
+    var filteredBranches: [Branch] { BranchFilter.branches(branches, query: branchFilterText) }
+    var filteredRemotes: [RemoteInfo] { BranchFilter.remotes(remotes, query: branchFilterText) }
+    var filteredTags: [Tag] { BranchFilter.tags(tags, query: branchFilterText) }
 }

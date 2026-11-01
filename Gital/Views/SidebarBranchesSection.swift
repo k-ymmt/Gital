@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Sidebar content for the Branches tab: local branches, remotes, and tags.
+/// Sidebar content for the Branches tab: a filter field, then local
+/// branches, remotes, and tags narrowed by it.
 struct SidebarBranchesSection: View {
     var model: RepoViewModel
     @Binding var expandedSections: Set<String>
@@ -9,73 +10,107 @@ struct SidebarBranchesSection: View {
     @State private var branchRowsCache = BranchTreeRowsCache<Branch>()
     @State private var remoteRowsCache = BranchTreeRowsCache<String>()
 
+    private static let allSectionKeys: Set<String> = ["branches", "remotes", "tags"]
+
     var body: some View {
-        SidebarCollapsibleHeader(title: "Branches", key: "branches", expandedSections: $expandedSections)
-        if expandedSections.contains("branches") {
-            let rows = branchRowsCache.rows(
-                model.branches.map { ($0.name, $0) },
-                keyPrefix: "branches",
-                collapsed: collapsedBranchFolders
-            )
-            // Visible display order, for ⇧-click ranges — leaves hidden in a
-            // collapsed folder are not part of what the user sees selected.
-            let visibleNames = rows.compactMap { row -> String? in
-                if case .leaf(let branch, _, _, _) = row { return branch.name }
-                return nil
-            }
-            ForEach(rows) { row in
-                switch row {
-                case .folder(let path, let name, let depth):
-                    SidebarFolderRow(path: path, name: name, depth: depth, collapsed: $collapsedBranchFolders)
-                case .leaf(let branch, let name, _, let depth):
-                    localBranchRow(branch, displayName: name, depth: depth, visibleNames: visibleNames)
+        @Bindable var model = model
+        let filtering = model.isBranchFilterActive
+        let branches = model.filteredBranches
+        let remotes = model.filteredRemotes
+        let tags = model.filteredTags
+        // While filtering, every section, remote, and folder is shown
+        // expanded so matches are never hidden behind a collapsed row. The
+        // stored collapse state is left untouched (header toggles go to a
+        // constant binding) and takes effect again once the field is cleared.
+        let sectionKeys = filtering ? Binding.constant(Self.allSectionKeys) : $expandedSections
+        let collapsedFolders: Set<String> = filtering ? [] : collapsedBranchFolders
+
+        SidebarFilterField(placeholder: "Filter branches", text: $model.branchFilterText)
+
+        if filtering, branches.isEmpty, remotes.isEmpty, tags.isEmpty {
+            Text("No matching branches")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 4)
+        }
+
+        if !filtering || !branches.isEmpty {
+            SidebarCollapsibleHeader(title: "Branches", key: "branches", expandedSections: sectionKeys)
+            if sectionKeys.wrappedValue.contains("branches") {
+                let rows = branchRowsCache.rows(
+                    branches.map { ($0.name, $0) },
+                    keyPrefix: "branches",
+                    collapsed: collapsedFolders
+                )
+                // Visible display order, for ⇧-click ranges — leaves hidden in a
+                // collapsed folder (or filtered out) are not part of what the
+                // user sees selected.
+                let visibleNames = rows.compactMap { row -> String? in
+                    if case .leaf(let branch, _, _, _) = row { return branch.name }
+                    return nil
+                }
+                ForEach(rows) { row in
+                    switch row {
+                    case .folder(let path, let name, let depth):
+                        SidebarFolderRow(path: path, name: name, depth: depth, collapsed: $collapsedBranchFolders)
+                    case .leaf(let branch, let name, _, let depth):
+                        localBranchRow(branch, displayName: name, depth: depth, visibleNames: visibleNames)
+                    }
                 }
             }
         }
 
-        SidebarCollapsibleHeader(title: "Remotes", key: "remotes", expandedSections: $expandedSections)
-            .contextMenu {
-                Button("Add Remote…") { model.isAddingRemote = true }
-            }
-        if expandedSections.contains("remotes") {
-            ForEach(model.remotes) { remote in
-                let remoteKey = "remote:\(remote.name)"
-                DisclosureRow(isExpanded: !collapsedBranchFolders.contains(remoteKey)) {
-                    collapsedBranchFolders.toggleMembership(remoteKey)
-                } label: {
-                    Image(systemName: "globe")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                    Text(remote.name)
-                        .font(.system(size: 12.5))
-                }
+        if !filtering || !remotes.isEmpty {
+            SidebarCollapsibleHeader(title: "Remotes", key: "remotes", expandedSections: sectionKeys)
                 .contextMenu {
                     Button("Add Remote…") { model.isAddingRemote = true }
-                    Button("Remove Remote…", role: .destructive) {
-                        model.requestRemoveRemote(remote)
-                    }
                 }
+            if sectionKeys.wrappedValue.contains("remotes") {
+                ForEach(remotes) { remote in
+                    let remoteKey = "remote:\(remote.name)"
+                    let remoteExpanded = filtering || !collapsedBranchFolders.contains(remoteKey)
+                    DisclosureRow(isExpanded: remoteExpanded) {
+                        if !filtering { collapsedBranchFolders.toggleMembership(remoteKey) }
+                    } label: {
+                        Image(systemName: "globe")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                        Text(remote.name)
+                            .font(.system(size: 12.5))
+                    }
+                    .contextMenu {
+                        Button("Add Remote…") { model.isAddingRemote = true }
+                        Button("Remove Remote…", role: .destructive) {
+                            model.requestRemoveRemote(remote)
+                        }
+                    }
 
-                if !collapsedBranchFolders.contains(remoteKey) {
-                    let rows = remoteRowsCache.rows(
-                        remote.branches.map { ($0, $0) },
-                        keyPrefix: remoteKey,
-                        collapsed: collapsedBranchFolders
-                    )
-                    ForEach(rows) { row in
-                        switch row {
-                        case .folder(let path, let name, let depth):
-                            SidebarFolderRow(path: path, name: name, depth: depth, baseIndent: 37, collapsed: $collapsedBranchFolders)
-                        case .leaf(let branch, let name, _, let depth):
-                            remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
+                    if remoteExpanded {
+                        let rows = remoteRowsCache.rows(
+                            remote.branches.map { ($0, $0) },
+                            keyPrefix: remoteKey,
+                            collapsed: collapsedFolders
+                        )
+                        ForEach(rows) { row in
+                            switch row {
+                            case .folder(let path, let name, let depth):
+                                SidebarFolderRow(path: path, name: name, depth: depth, baseIndent: 37, collapsed: $collapsedBranchFolders)
+                            case .leaf(let branch, let name, _, let depth):
+                                remoteBranchRow(branch, displayName: name, depth: depth, remote: remote.name)
+                            }
                         }
                     }
                 }
             }
         }
 
-        SidebarCollapsibleHeader(title: "Tags", key: "tags", expandedSections: $expandedSections)
-        tagsSection
+        if !filtering || !tags.isEmpty {
+            SidebarCollapsibleHeader(title: "Tags", key: "tags", expandedSections: sectionKeys)
+            if sectionKeys.wrappedValue.contains("tags") {
+                tagsSection(tags)
+            }
+        }
     }
 
     private func localBranchRow(_ branch: Branch, displayName: String, depth: Int, visibleNames: [String]) -> some View {
@@ -190,28 +225,25 @@ struct SidebarBranchesSection: View {
         .disabled(blocked)
     }
 
-    @ViewBuilder
-    private var tagsSection: some View {
-        if expandedSections.contains("tags") {
-            ForEach(model.tags) { tag in
-                HStack(spacing: 9) {
-                    Image(systemName: "tag")
-                        .font(.system(size: 12))
-                        .foregroundStyle(DesignStyle.tagAmber)
-                    Text(tag.name)
-                        .font(.system(size: 12.5))
-                        .lineLimit(1)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 5)
-                .contentShape(Rectangle())
-                .background(sidebarRowBackground(model.selectedTagName == tag.name))
-                .onTapGesture {
-                    model.selectTag(tag)
-                }
-                .help("Click to show tagged commit")
+    private func tagsSection(_ tags: [Tag]) -> some View {
+        ForEach(tags) { tag in
+            HStack(spacing: 9) {
+                Image(systemName: "tag")
+                    .font(.system(size: 12))
+                    .foregroundStyle(DesignStyle.tagAmber)
+                Text(tag.name)
+                    .font(.system(size: 12.5))
+                    .lineLimit(1)
+                Spacer()
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(sidebarRowBackground(model.selectedTagName == tag.name))
+            .onTapGesture {
+                model.selectTag(tag)
+            }
+            .help("Click to show tagged commit")
         }
     }
 }

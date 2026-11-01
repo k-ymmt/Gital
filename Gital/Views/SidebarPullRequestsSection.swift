@@ -99,30 +99,7 @@ struct SidebarPullRequestsSection: View {
 
     private var searchField: some View {
         @Bindable var prs = model.prs
-        return HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 10.5))
-                .foregroundStyle(.secondary)
-            TextField("Filter pull requests", text: $prs.searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-            if !model.prs.searchText.isEmpty {
-                Button {
-                    model.prs.searchText = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Clear filter")
-            }
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 4)
-        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
+        return SidebarFilterField(placeholder: "Filter pull requests", text: $prs.searchText)
     }
 
     private func summaryRow(_ pr: PullRequestSummary) -> some View {
