@@ -1,6 +1,12 @@
 import Foundation
 
 /// Lane layout for the commit graph, computed once per log load.
+///
+/// Lanes are compacted row by row: when a lane ends (its branch merges into
+/// the commit on this row, or the commit has no parent), every lane to its
+/// right shifts left at the bottom of that same row, so a merged branch never
+/// leaves a gap between the remaining lines. Colors belong to the branch line,
+/// not to the lane position, so a line keeps its color while it shifts.
 nonisolated struct CommitGraph {
     struct Edge: Hashable {
         enum Shape: Hashable {
@@ -29,91 +35,108 @@ nonisolated struct CommitGraph {
         let laneCount: Int
     }
 
+    /// A branch line occupying a lane: the hash it is waiting to reach and the
+    /// color it was born with.
+    private struct Lane: Equatable {
+        let hash: String
+        let color: Int
+    }
+
     private(set) var rows: [String: Row] = [:]
     private(set) var maxLanes = 1
 
     init(commits: [Commit]) {
-        var lanes: [String?] = []
+        // Compacted at the end of every row, so `lanes` never holds a hole
+        // when the next row starts.
+        var lanes: [Lane] = []
+        var nextColor = 0
 
         for commit in commits {
             let top = lanes
 
-            var dot = top.firstIndex(of: commit.hash) ?? -1
-            if dot == -1 {
-                dot = Self.firstEmpty(top)
+            // The leftmost lane waiting for this commit is where its dot goes;
+            // an unseen commit (branch tip, or a parent outside the window of
+            // the rows above) opens a new lane at the right edge.
+            let dot: Int
+            let dotColor: Int
+            if let existing = top.firstIndex(where: { $0.hash == commit.hash }) {
+                dot = existing
+                dotColor = top[existing].color
+            } else {
+                dot = top.count
+                dotColor = nextColor
+                nextColor += 1
             }
 
-            var after = top
+            var after: [Lane?] = top
             while after.count <= dot { after.append(nil) }
 
+            // Other lanes waiting for the same commit merge into the dot and end.
             var mergeFrom: [Int] = []
-            for (i, id) in after.enumerated() where id == commit.hash && i != dot {
+            for (i, lane) in after.enumerated() where lane?.hash == commit.hash && i != dot {
                 mergeFrom.append(i)
                 after[i] = nil
             }
 
-            var branchOut: [Int] = []
             if let firstParent = commit.parents.first {
-                after[dot] = firstParent
-                for parent in commit.parents.dropFirst() {
-                    if let existing = after.firstIndex(of: parent) {
-                        // Parent already tracked in another lane; merge into it below.
-                        branchOut.append(existing)
-                        continue
-                    }
-                    let idx = Self.firstEmpty(after)
-                    while after.count <= idx { after.append(nil) }
-                    after[idx] = parent
-                    branchOut.append(idx)
-                }
+                after[dot] = Lane(hash: firstParent, color: dotColor)
             } else {
                 after[dot] = nil
             }
-            while let last = after.last, last == nil { after.removeLast() }
 
-            var edges: [Edge] = []
-            for (i, id) in top.enumerated() {
-                guard id != nil, i != dot else { continue }
-                if mergeFrom.contains(i) {
-                    edges.append(Edge(shape: .mergeIn(fromLane: i), colorIndex: i))
+            // Compact: every surviving lane moves left past the holes on its
+            // left, in this same row. `newIndex[i]` is where top lane i ends up.
+            var newIndex: [Int?] = Array(repeating: nil, count: after.count)
+            var compacted: [Lane] = []
+            for (i, lane) in after.enumerated() {
+                guard let lane else { continue }
+                newIndex[i] = compacted.count
+                compacted.append(lane)
+            }
+
+            // Extra parents branch out after compaction: into the lane already
+            // waiting for that parent, or a fresh lane at the right edge.
+            var branchOut: [(lane: Int, color: Int)] = []
+            for parent in commit.parents.dropFirst() {
+                if let existing = compacted.firstIndex(where: { $0.hash == parent }) {
+                    branchOut.append((existing, compacted[existing].color))
                     continue
                 }
-                // Prefer staying in the same lane: two commits sharing a first
-                // parent put the same hash in two lanes, and firstIndex would
-                // pull this lane's line into the other lane's copy, drawing a
-                // disconnected zigzag at every branch point.
-                var j: Int
-                if i < after.count, after[i] == id {
-                    j = i
-                } else {
-                    j = after.firstIndex(of: id) ?? i
+                let color = nextColor
+                nextColor += 1
+                compacted.append(Lane(hash: parent, color: color))
+                branchOut.append((compacted.count - 1, color))
+            }
+
+            var edges: [Edge] = []
+            for (i, lane) in top.enumerated() where i != dot {
+                if mergeFrom.contains(i) {
+                    edges.append(Edge(shape: .mergeIn(fromLane: i), colorIndex: lane.color))
+                    continue
                 }
+                let j = newIndex[i] ?? i
                 if j == i {
-                    edges.append(Edge(shape: .passThrough(lane: i), colorIndex: i))
+                    edges.append(Edge(shape: .passThrough(lane: i), colorIndex: lane.color))
                 } else {
-                    j = min(j, max(after.count - 1, 0))
-                    edges.append(Edge(shape: .laneShift(fromLane: i, toLane: j), colorIndex: i))
+                    edges.append(Edge(shape: .laneShift(fromLane: i, toLane: j), colorIndex: lane.color))
                 }
             }
-            if dot < top.count, top[dot] == commit.hash {
-                edges.append(Edge(shape: .intoDot, colorIndex: dot))
+            if dot < top.count {
+                edges.append(Edge(shape: .intoDot, colorIndex: dotColor))
             }
-            if dot < after.count, after[dot] != nil {
-                edges.append(Edge(shape: .outOfDot, colorIndex: dot))
+            if let j = newIndex[dot] {
+                // The dot lane only shifts when a hole opened to its left; the
+                // dot stays put at the center, so leave it like a branch-out.
+                edges.append(Edge(shape: j == dot ? .outOfDot : .branchOut(toLane: j), colorIndex: dotColor))
             }
-            for idx in branchOut {
-                edges.append(Edge(shape: .branchOut(toLane: idx), colorIndex: idx))
+            for target in branchOut {
+                edges.append(Edge(shape: .branchOut(toLane: target.lane), colorIndex: target.color))
             }
 
-            let laneCount = max(top.count, after.count, dot + 1)
-            rows[commit.hash] = Row(dotLane: dot, dotColorIndex: dot, edges: edges, laneCount: laneCount)
+            let laneCount = max(top.count, compacted.count, dot + 1)
+            rows[commit.hash] = Row(dotLane: dot, dotColorIndex: dotColor, edges: edges, laneCount: laneCount)
             maxLanes = max(maxLanes, laneCount)
-            lanes = after
+            lanes = compacted
         }
-    }
-
-    private static func firstEmpty(_ lanes: [String?]) -> Int {
-        for (i, id) in lanes.enumerated() where id == nil { return i }
-        return lanes.count
     }
 }
