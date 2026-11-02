@@ -5,11 +5,12 @@ struct HistoryView: View {
     @Bindable var model: RepoViewModel
 
     var body: some View {
-        VSplitView {
+        // ResizableSplit, not VSplitView/HSplitView — see its doc comment
+        // for why NSSplitView-backed splits misbehave in this column.
+        ResizableSplit(axis: .vertical, firstPane: .init(min: 220), secondPane: .init(min: 240, ideal: 360)) {
             commitList
-                .frame(minHeight: 220)
+        } second: {
             CommitDetailView(model: model)
-                .frame(minHeight: 240, idealHeight: 360)
         }
         // Anchors live on the model, not local @State: `isPresentingSheet`
         // must know these sheets are up so a shortcut-raised sheet (reflog)
@@ -394,11 +395,14 @@ struct CommitDetailView: View {
                         // the diff still hold the previous commit's data —
                         // rendering them would pair them with this header.
                         if model.commitDiffsHash == commit.hash {
-                            HSplitView {
+                            ResizableSplit(
+                                axis: .horizontal,
+                                firstPane: .init(min: 220, ideal: 300, max: 420),
+                                secondPane: .init(min: 320)
+                            ) {
                                 filesList
-                                    .frame(minWidth: 220, idealWidth: 300, maxWidth: 420)
+                            } second: {
                                 diffPane
-                                    .frame(minWidth: 320, maxWidth: .infinity)
                             }
                         } else {
                             ProgressView()
