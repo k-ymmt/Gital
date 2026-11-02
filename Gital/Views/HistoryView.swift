@@ -233,28 +233,42 @@ struct CommitRowView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            GraphRowCanvas(row: row, laneSpacing: Self.laneSpacing)
-                .frame(width: rowGraphWidth, height: 32)
+            HStack(spacing: 0) {
+                GraphRowCanvas(row: row, laneSpacing: Self.laneSpacing)
+                    .frame(width: rowGraphWidth, height: 32)
 
-            HStack(spacing: 6) {
-                // Badge padding is incompressible, so an unbounded run of refs
-                // (e.g. dozens of tags on HEAD) would force the row — and the
-                // whole split view — wider than the window. Cap and summarize.
-                ForEach(commit.refs.prefix(Self.maxVisibleRefs)) { gitRef in
-                    RefBadge(gitRef: gitRef)
+                HStack(spacing: 6) {
+                    // Badge padding is incompressible, so an unbounded run of refs
+                    // (e.g. dozens of tags on HEAD) would force the row — and the
+                    // whole split view — wider than the window. Cap and summarize.
+                    ForEach(commit.refs.prefix(Self.maxVisibleRefs)) { gitRef in
+                        RefBadge(gitRef: gitRef)
+                    }
+                    if commit.refs.count > Self.maxVisibleRefs {
+                        RefOverflowBadge(count: commit.refs.count - Self.maxVisibleRefs)
+                            .help(commit.refs.dropFirst(Self.maxVisibleRefs).map(\.name).joined(separator: ", "))
+                    }
+                    Text(commit.subject)
+                        .font(.system(size: 12.5))
+                        .lineLimit(1)
+                        // Lowest priority in the row: when the graph or ref badges
+                        // need room, the message is what gets truncated.
+                        .layoutPriority(-1)
                 }
-                if commit.refs.count > Self.maxVisibleRefs {
-                    RefOverflowBadge(count: commit.refs.count - Self.maxVisibleRefs)
-                        .help(commit.refs.dropFirst(Self.maxVisibleRefs).map(\.name).joined(separator: ", "))
-                }
-                Text(commit.subject)
-                    .font(.system(size: 12.5))
-                    .lineLimit(1)
-                    // Lowest priority in the row: when the graph or ref badges
-                    // need room, the message is what gets truncated.
-                    .layoutPriority(-1)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // The graph canvas and ref badges are incompressible, so on a
+            // lane-heavy history (20+ parallel branches) the widest rows need
+            // more width than the list offers. Left to its own devices the
+            // row then overflows and SwiftUI centers it, shifting those rows
+            // — and only those rows — left by half the overflow: the lanes no
+            // longer line up with the rows above and below and the lines look
+            // disconnected. Pin this column's minimum width at zero and anchor
+            // it leading so overflow spills to the right under the clip; the
+            // lane x positions stay identical in every row, and the trailing
+            // columns keep their place.
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .clipped()
 
             HStack(spacing: 6) {
                 AvatarView(name: commit.author, size: Self.avatarSize, url: avatarURL)
