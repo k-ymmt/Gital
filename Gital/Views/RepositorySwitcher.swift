@@ -100,7 +100,7 @@ struct RepositorySwitcher: View {
         middleEllipsized(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), maxLength: maxLength)
     }
 
-    private static func middleEllipsized(_ string: String, maxLength: Int) -> String {
+    static func middleEllipsized(_ string: String, maxLength: Int) -> String {
         guard string.count > maxLength else { return string }
         let head = string.prefix((maxLength - 1) / 2)
         let tail = string.suffix(maxLength / 2)
