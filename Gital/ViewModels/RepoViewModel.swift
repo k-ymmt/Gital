@@ -408,28 +408,22 @@ final class RepoViewModel {
     /// skips the log/refs re-fetch: with a deep history paged in, every
     /// save/stage otherwise re-ran a full `git log` plus the graph layout.
     private func startWatching() {
-        watcher = RepoWatcher(root: repository.root) { [weak self] paths in
-            // Substring match, not a root-prefix compare: FSEvents reports
-            // symlink-resolved paths (/private/tmp vs /tmp), which would
-            // defeat a prefix built from the repo root. A nested repo's
-            // .git also matches — refreshing more than needed is safe.
-            // An empty path list means "unknown" and refreshes everything.
-            // Inside .git, only what can change refs, their decoration, or
-            // log traversal counts: refs/, packed-refs, HEAD (+ HEAD.lock),
-            // reflogs, reftable/ (the reftable backend stores refs AND
-            // reflogs there, with HEAD a static placeholder), shallow (a
-            // deepened clone exposes new history without moving refs), and
-            // config (remote add/remove reclassifies log decorations).
-            let touchesGitMetadata = paths.isEmpty || paths.contains { path in
-                guard let gitDir = path.range(of: "/.git/") else {
-                    return path.hasSuffix("/.git")
-                }
-                let inner = path[gitDir.upperBound...]
-                return inner.hasPrefix("refs/") || inner.hasPrefix("packed-refs")
-                    || inner.hasPrefix("HEAD") || inner.hasPrefix("logs/")
-                    || inner.hasPrefix("reftable/") || inner.hasPrefix("shallow")
-                    || inner.hasPrefix("config")
-            }
+        startWatcher(gitDirs: [])
+        // A linked worktree / submodule / --separate-git-dir keeps its git
+        // dirs outside the root: once they are known, watch them too.
+        Task { [weak self, repository] in
+            guard let dirs = try? await repository.metadataDirectories() else { return }
+            let root = RepoWatcher.realPath(repository.root.standardizedFileURL.path)
+            let outside = dirs.filter { !($0 == root || $0.hasPrefix(root + "/")) }
+            // A nil watcher means close() already ran.
+            guard let self, self.watcher != nil, !outside.isEmpty else { return }
+            self.startWatcher(gitDirs: dirs, extraPaths: outside)
+        }
+    }
+
+    private func startWatcher(gitDirs: [String], extraPaths: [String] = []) {
+        watcher = RepoWatcher(root: repository.root, extraPaths: extraPaths) { [weak self] paths in
+            let touchesGitMetadata = RepoWatcher.touchesGitMetadata(paths, gitDirs: gitDirs)
             Task { @MainActor in
                 guard let self else { return }
                 await self.refreshStatus()

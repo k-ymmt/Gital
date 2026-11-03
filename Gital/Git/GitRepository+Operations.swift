@@ -37,6 +37,20 @@ extension GitRepository {
         return Self.resolveGitPath(path, root: root)
     }
 
+    /// The git dir and the common dir, absolute and symlink-resolved (the
+    /// form FSEvents reports). In a linked worktree they differ, and for
+    /// linked worktrees, submodules and --separate-git-dir checkouts both
+    /// live outside the worktree root — a watcher on the root alone never
+    /// sees their commits, checkouts or stashes.
+    func metadataDirectories() async throws -> [String] {
+        let output = try await executor.run(["rev-parse", "--absolute-git-dir", "--git-common-dir"])
+        return output.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { Self.resolveGitPath($0, root: root).standardizedFileURL.path }
+            .map(RepoWatcher.realPath)
+    }
+
     func headHash() async throws -> String {
         try await executor.run(["rev-parse", "HEAD"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
