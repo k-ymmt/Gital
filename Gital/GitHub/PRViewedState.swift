@@ -21,6 +21,24 @@ nonisolated struct PRViewedState: Equatable {
         files.isEmpty && commits.isEmpty && commitFiles.isEmpty
     }
 
+    /// This state with the flag-level change from `old` to `new` applied:
+    /// flags `old` had and `new` lacks are removed, flags `new` added are
+    /// inserted, everything else is kept. The same row delta the store
+    /// writes for that change, so memory and disk stay in step.
+    func applyingDelta(from old: PRViewedState, to new: PRViewedState) -> PRViewedState {
+        func apply(_ base: Set<String>, _ old: Set<String>, _ new: Set<String>) -> Set<String> {
+            base.subtracting(old.subtracting(new)).union(new.subtracting(old))
+        }
+        var result = self
+        result.files = apply(files, old.files, new.files)
+        result.commits = apply(commits, old.commits, new.commits)
+        for hash in Set(commitFiles.keys).union(old.commitFiles.keys).union(new.commitFiles.keys) {
+            let paths = apply(commitFiles[hash] ?? [], old.commitFiles[hash] ?? [], new.commitFiles[hash] ?? [])
+            result.commitFiles[hash] = paths.isEmpty ? nil : paths
+        }
+        return result
+    }
+
     func isCommitViewed(_ hash: String) -> Bool {
         commits.contains(hash)
     }

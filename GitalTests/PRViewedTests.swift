@@ -4,6 +4,25 @@ import Testing
 
 @MainActor
 struct PRViewedStateTests {
+    // A toggle made before the saved flags load is computed against an empty
+    // state; letting that state win for the whole PR hid every saved flag of
+    // it (the disk kept them — only the toggle's row delta was written).
+    @Test func earlyToggleDeltaMergesIntoSavedState() {
+        let saved = PRViewedState(files: ["a", "b"], commits: ["c1"], commitFiles: ["c2": ["x"]])
+        var toggled = PRViewedState()
+        toggled.toggleFile("c")
+        toggled.toggleCommitFile(commit: "c2", path: "y", allPaths: ["x", "y", "z"])
+        let merged = saved.applyingDelta(from: PRViewedState(), to: toggled)
+        #expect(merged.files == ["a", "b", "c"])
+        #expect(merged.commits == ["c1"])
+        #expect(merged.commitFiles == ["c2": ["x", "y"]])
+
+        // Removals in the delta remove; untouched rows survive.
+        var unviewed = merged
+        unviewed.toggleFile("a")
+        #expect(saved.applyingDelta(from: merged, to: unviewed).files == ["b"])
+    }
+
     @Test func commitAndFileFlags() {
         var state = PRViewedState()
         let files = ["a.swift", "b.swift", "c.swift"]
