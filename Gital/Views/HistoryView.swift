@@ -60,10 +60,10 @@ struct HistoryView: View {
                 ScrollView {
                     LazyVStack(spacing: 0) {
                         ForEach(model.filteredCommits) { commit in
-                            CommitRowView(
+                            SelectableCommitRow(
+                                model: model,
                                 commit: commit,
                                 row: model.graph.rows[commit.hash],
-                                isSelected: model.selectedCommitHash == commit.hash,
                                 avatarURL: model.avatarURL(
                                     email: commit.authorEmail,
                                     size: CommitRowView.avatarSize
@@ -81,12 +81,17 @@ struct HistoryView: View {
                         }
                     }
                 }
-                .onChange(of: model.selectedCommitHash) { _, hash in
-                    guard let hash else {
-                        pendingScrollHash = nil
-                        return
+                // Observed in a child, not here: reading the selection in
+                // this body re-ran the whole list (a ForEach diff over every
+                // loaded commit) on each click or arrow-key step.
+                .background {
+                    SelectionChangeObserver(model: model) { hash in
+                        guard let hash else {
+                            pendingScrollHash = nil
+                            return
+                        }
+                        scrollToSelection(hash, proxy: proxy)
                     }
-                    scrollToSelection(hash, proxy: proxy)
                 }
                 // A sidebar ref whose tip lies beyond the loaded page selects
                 // a row that doesn't exist yet; `ensureCommitLoaded` pages it
@@ -212,6 +217,36 @@ struct RefCreationSheet: View {
 }
 
 // MARK: - Commit row
+
+/// A history row that reads the selection itself, so a selection change
+/// re-renders only the on-screen rows instead of the list's whole body.
+private struct SelectableCommitRow: View {
+    let model: RepoViewModel
+    let commit: Commit
+    let row: CommitGraph.Row?
+    let avatarURL: URL?
+
+    var body: some View {
+        CommitRowView(
+            commit: commit,
+            row: row,
+            isSelected: model.selectedCommitHash == commit.hash,
+            avatarURL: avatarURL
+        )
+    }
+}
+
+/// Reports history selection changes without making its parent depend on
+/// the selection.
+private struct SelectionChangeObserver: View {
+    let model: RepoViewModel
+    let onChange: (String?) -> Void
+
+    var body: some View {
+        Color.clear
+            .onChange(of: model.selectedCommitHash) { _, hash in onChange(hash) }
+    }
+}
 
 struct CommitRowView: View {
     let commit: Commit
