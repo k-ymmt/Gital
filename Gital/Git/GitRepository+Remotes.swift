@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Remote operations
 
-extension GitRepository {
+nonisolated extension GitRepository {
     func fetch() async throws {
         // --no-write-fetch-head (git 2.29+): nothing in the app reads
         // FETCH_HEAD, and writing it turns even a no-change fetch into an

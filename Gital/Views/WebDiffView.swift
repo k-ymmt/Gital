@@ -16,6 +16,8 @@ struct WebDiffView: NSViewRepresentable {
         /// Kept to recover from a web-content-process crash: SwiftUI won't
         /// call `updateNSView` for it, so the delegate reloads directly.
         var renderedHTML: String?
+        /// In-flight off-main page build for a large diff (see updateNSView).
+        var buildTask: Task<Void, Never>?
 
         func webView(
             _ webView: WKWebView,
@@ -55,18 +57,49 @@ struct WebDiffView: NSViewRepresentable {
         return webView
     }
 
+    /// Diffs above this many lines build their page off the main thread.
+    /// The build is O(lines) string assembly — ~3ms per 1k lines in a debug
+    /// build, so a 50k-line commit file stalled the UI for a good part of a
+    /// second on selection. Smaller diffs stay synchronous: they load in the
+    /// same update, with no frame showing the previous file's page.
+    static let asyncBuildLineThreshold = 3_000
+
     func updateNSView(_ webView: DiffWebView, context: Context) {
         // SwiftUI calls update on every unrelated state change; reloading the
         // page each time would reset scroll and selection, so skip unless the
         // content actually differs.
-        guard context.coordinator.renderedDiff != diff
-            || context.coordinator.renderedMode != mode else { return }
-        let html = DiffHTMLBuilder.page(for: diff, mode: mode)
-        context.coordinator.renderedDiff = diff
-        context.coordinator.renderedMode = mode
-        context.coordinator.renderedHTML = html
+        let coordinator = context.coordinator
+        guard coordinator.renderedDiff != diff
+            || coordinator.renderedMode != mode else { return }
+        coordinator.renderedDiff = diff
+        coordinator.renderedMode = mode
+        coordinator.buildTask?.cancel()
+        coordinator.buildTask = nil
+        let diff = diff
+        let mode = mode
+        let lineCount = diff.hunks.reduce(0) { $0 + $1.lines.count }
+        guard lineCount > Self.asyncBuildLineThreshold else {
+            Self.load(DiffHTMLBuilder.page(for: diff, mode: mode), into: webView, coordinator: coordinator)
+            return
+        }
+        coordinator.buildTask = Task { [weak webView] in
+            let html = await Task.detached { DiffHTMLBuilder.page(for: diff, mode: mode) }.value
+            // A newer update (another file, a mode switch) superseded this
+            // build while it ran; its own load owns the view now.
+            guard !Task.isCancelled, let webView,
+                  coordinator.renderedDiff == diff, coordinator.renderedMode == mode else { return }
+            Self.load(html, into: webView, coordinator: coordinator)
+        }
+    }
+
+    private static func load(_ html: String, into webView: DiffWebView, coordinator: Coordinator) {
+        coordinator.renderedHTML = html
         webView.momentumFilter.pageWillLoad()
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    static func dismantleNSView(_ webView: DiffWebView, coordinator: Coordinator) {
+        coordinator.buildTask?.cancel()
     }
 }
 

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - File history / blame
 
-extension GitRepository {
+nonisolated extension GitRepository {
     /// Commits touching one file, following renames. `startHash` scopes the
     /// walk (nil = HEAD); `path` must be the file's name as of that revision.
     @concurrent func fileHistory(path: String, startHash: String?, limit: Int) async throws -> [FileHistoryEntry] {

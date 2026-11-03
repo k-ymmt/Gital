@@ -202,25 +202,7 @@ struct PullRequestItemDiffView: View {
         case .split:
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
-            ForEach(ReviewSplitSegment.segments(
-                for: diff,
-                threads: model.prs.threads(for: number),
-                comments: model.prs.pendingComments(for: number)
-            )) { segment in
-                WebDiffChunkView(
-                    html: DiffHTMLBuilder.reviewSplitPage(
-                        rows: segment.rows,
-                        language: DiffSyntaxHighlighting.language(for: diff)
-                    ),
-                    estimatedHeight: CGFloat(segment.rows.count) * DiffHTMLBuilder.rowHeight,
-                    onAction: { _ in }
-                )
-                ForEach(segment.threads) { thread in
-                    ReviewThreadCard(model: model, thread: thread, number: number)
-                }
-                ForEach(segment.comments) { comment in
-                    PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
-                }
+            PRSplitFileView(model: model, diff: diff, number: number)
             }
         }
     }
@@ -354,6 +336,42 @@ struct PullRequestItemDiffView: View {
 
 // MARK: - Web chunk segmentation (split mode)
 
+/// One PR file's split-mode review content: web chunks cut after every row
+/// carrying published threads or drafts, with those cards in between.
+///
+/// Its own view, not a builder inside `PullRequestItemDiffView`, so that
+/// parent re-evaluations which leave this file's inputs equal — the commit
+/// pane's divider drag (every frame), Viewed toggles, agent-card changes —
+/// skip the row scan and the per-segment page builds (O(file) string
+/// assembly each). Thread and draft reads happen in this body, so changes
+/// to those still re-render it.
+private struct PRSplitFileView: View {
+    let model: RepoViewModel
+    let diff: FileDiff
+    let number: Int
+
+    var body: some View {
+        let language = DiffSyntaxHighlighting.language(for: diff)
+        ForEach(ReviewSplitSegment.segments(
+            for: diff,
+            threads: model.prs.threads(for: number),
+            comments: model.prs.pendingComments(for: number)
+        )) { segment in
+            WebDiffChunkView(
+                html: DiffHTMLBuilder.reviewSplitPage(rows: segment.rows, language: language),
+                estimatedHeight: CGFloat(segment.rows.count) * DiffHTMLBuilder.rowHeight,
+                onAction: { _ in }
+            )
+            ForEach(segment.threads) { thread in
+                ReviewThreadCard(model: model, thread: thread, number: number)
+            }
+            ForEach(segment.comments) { comment in
+                PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
+            }
+        }
+    }
+}
+
 /// One split-mode web chunk of a PR file: consecutive rows up to and
 /// including the next row that carries review cards, which render right
 /// after the chunk. Pure, so the segmentation and its chunk IDs are
@@ -372,6 +390,11 @@ struct ReviewSplitSegment: Identifiable {
         var rows: [SplitDiffRow] = []
         var firstID = ""
 
+        // Narrowed to this file once, not per row: `isAnchored` requires the
+        // path to match anyway, and the per-row scan over every thread and
+        // draft of the whole PR was O(rows × PR-wide cards).
+        let threads = threads.filter { $0.path == diff.path }
+        let comments = comments.filter { $0.anchor.path == diff.path }
         for row in SplitDiffRow.rows(for: diff.hunks) {
             if rows.isEmpty { firstID = row.id }
             rows.append(row)

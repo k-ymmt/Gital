@@ -131,7 +131,7 @@ struct SidebarBranchesSection: View {
         .padding(.trailing, 16)
         .padding(.vertical, 5)
         .contentShape(Rectangle())
-        .background(sidebarRowBackground(model.isBranchRowHighlighted(branch.name)))
+        .background(SidebarRowHighlight { model.isBranchRowHighlighted(branch.name) })
         .onTapGesture(count: 2) {
             model.checkout(branch: branch)
         }
@@ -195,7 +195,7 @@ struct SidebarBranchesSection: View {
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
-            .background(sidebarRowBackground(model.isRemoteBranchRowHighlighted(remote: remote, branch: branch.name)))
+            .background(SidebarRowHighlight { model.isRemoteBranchRowHighlighted(remote: remote, branch: branch.name) })
             .onTapGesture {
                 model.selectRemoteBranch(branch, remote: remote)
             }
@@ -244,7 +244,7 @@ struct SidebarBranchesSection: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
-            .background(sidebarRowBackground(model.selectedTagName == tag.name))
+            .background(SidebarRowHighlight { model.selectedTagName == tag.name })
             .onTapGesture {
                 model.selectTag(tag)
             }

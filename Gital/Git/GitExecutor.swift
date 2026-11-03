@@ -105,15 +105,28 @@ actor GitExecutor {
         environment["GIT_SEQUENCE_EDITOR"] = nil
         environment["GIT_EDITOR"] = nil
 
-        let result = try await Subprocess.run(
-            executable: URL(fileURLWithPath: "/usr/bin/env"),
-            // quotepath=false keeps non-ASCII paths raw in diff/log output
-            // instead of C-quoted octal escapes.
-            arguments: ["git", "--no-optional-locks", "-c", "color.ui=false", "-c", "core.quotepath=false"] + arguments,
-            currentDirectory: workingDirectory,
-            environment: environment,
-            stdin: stdin
-        )
+        // quotepath=false keeps non-ASCII paths raw in diff/log output
+        // instead of C-quoted octal escapes.
+        let gitArguments = ["--no-optional-locks", "-c", "color.ui=false", "-c", "core.quotepath=false"] + arguments
+        let result: Subprocess.Output
+        if let git = await GitBinary.resolved() {
+            do {
+                result = try await Subprocess.run(
+                    executable: git,
+                    arguments: gitArguments,
+                    currentDirectory: workingDirectory,
+                    environment: environment,
+                    stdin: stdin
+                )
+            } catch {
+                // The resolved binary vanished between validation and spawn:
+                // re-resolve next time and run this one through env.
+                GitBinary.invalidate()
+                result = try await runThroughEnv(gitArguments, workingDirectory: workingDirectory, environment: environment, stdin: stdin)
+            }
+        } else {
+            result = try await runThroughEnv(gitArguments, workingDirectory: workingDirectory, environment: environment, stdin: stdin)
+        }
 
         guard successCodes.contains(result.status) else {
             // Death by cancellation-triggered terminate() is not a git
@@ -127,5 +140,21 @@ actor GitExecutor {
             )
         }
         return result.stdout
+    }
+
+    /// The unresolved path: `/usr/bin/env git`, PATH lookup per spawn.
+    private static func runThroughEnv(
+        _ gitArguments: [String],
+        workingDirectory: URL,
+        environment: [String: String],
+        stdin: Data?
+    ) async throws -> Subprocess.Output {
+        try await Subprocess.run(
+            executable: URL(fileURLWithPath: "/usr/bin/env"),
+            arguments: ["git"] + gitArguments,
+            currentDirectory: workingDirectory,
+            environment: environment,
+            stdin: stdin
+        )
     }
 }

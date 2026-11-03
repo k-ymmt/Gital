@@ -108,7 +108,15 @@ final class RepoViewModel {
     func isBranchRowHighlighted(_ name: String) -> Bool {
         selectedBranchNames.contains(name) || highlightedBranchName == name
     }
-    var commitDetailTab: CommitDetailTab = .commit
+    var commitDetailTab: CommitDetailTab = .commit {
+        didSet {
+            // The whole-commit patch is fetched on first Files-tab entry, not
+            // on every history selection (see loadCommitDetail).
+            if commitDetailTab == .files, oldValue != .files {
+                Task { await loadCommitDiffsIfNeeded() }
+            }
+        }
+    }
     var commitDetail: CommitDetail?
     var commitFiles: [CommitFileStat] = []
     var commitDiffs: [FileDiff] = []
@@ -362,7 +370,12 @@ final class RepoViewModel {
     @ObservationIgnored var hasLoadedWorkingDiffs = false
     @ObservationIgnored let workingDiffsLoader = LatestLoader()
     @ObservationIgnored let commitDetailLoader = LatestLoader()
+    @ObservationIgnored let commitDiffsLoader = LatestLoader()
     @ObservationIgnored let logLoader = LatestLoader()
+    /// Refs/HEAD fingerprint `commits` was last loaded against, and when.
+    /// `refreshLog` skips the full `git log` + graph rebuild while the
+    /// fingerprint is unchanged and the load is recent (see refreshLog).
+    @ObservationIgnored var logRefsFingerprint: (value: String, loadedAt: ContinuousClock.Instant)?
     @ObservationIgnored let stashDiffLoader = LatestLoader()
     @ObservationIgnored private var syncCount = 0
     /// In-flight capture of the diff the discard confirmation is about. A

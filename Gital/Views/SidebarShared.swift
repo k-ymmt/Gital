@@ -82,6 +82,19 @@ func sidebarRowBackground(_ selected: Bool) -> some View {
         .padding(.horizontal, 8)
 }
 
+/// `sidebarRowBackground` whose selection test runs in its own body, so the
+/// model reads it makes (the selection) are tracked here instead of by the
+/// section that lays out the rows. With the test inline, every click
+/// re-ran the whole section — rebuilding the row list and diffing a ForEach
+/// over every file or branch — instead of repainting the on-screen rows.
+struct SidebarRowHighlight: View {
+    let isSelected: () -> Bool
+
+    var body: some View {
+        sidebarRowBackground(isSelected())
+    }
+}
+
 /// Inline search field at the top of a sidebar tab (Pull Requests, Branches):
 /// magnifier, plain text field, and a clear button once there is text.
 struct SidebarFilterField: View {

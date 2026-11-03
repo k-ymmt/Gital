@@ -38,7 +38,12 @@ private nonisolated final class OutputBuffer: @unchecked Sendable {
 /// The single subprocess spawn/drain implementation shared by every CLI the
 /// app shells out to (git, gh, osascript, …). Callers map the returned exit
 /// status and stderr to their own error types.
-enum Subprocess {
+///
+/// `nonisolated`, with `run` pinned to the concurrent executor: under the
+/// module's MainActor default isolation the enum was main-actor isolated, so
+/// every spawn (Process/Pipe setup and posix_spawn, ~1ms+) of every git, gh
+/// and codex command hopped onto the main thread.
+nonisolated enum Subprocess {
     struct Output: Sendable {
         let status: Int32
         let stdout: Data
@@ -89,7 +94,7 @@ enum Subprocess {
     /// current thread's run loop, and on a GCD/concurrency worker thread the
     /// termination notification can be missed entirely, hanging forever after
     /// the process has already exited.
-    static func run(
+    @concurrent static func run(
         executable: URL,
         arguments: [String],
         currentDirectory: URL? = nil,
