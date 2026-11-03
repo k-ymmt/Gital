@@ -90,7 +90,14 @@ extension RepoViewModel {
         // Re-checked here (not only in the request): a session can start
         // while the hard-reset confirmation sits open.
         guard ensureHeadCanMove() else { return }
-        runSync("Resetting…") { try await self.repository.reset(to: hash, mode: mode) }
+        // A selection on the old HEAD would stay pinned to a commit the
+        // reset may leave unreachable; cleared, refreshAll re-seeds it with
+        // the new HEAD.
+        let selectionIsHead = selectedCommitHash != nil && selectedCommitHash == status.headOID
+        runSync("Resetting…") {
+            try await self.repository.reset(to: hash, mode: mode)
+            if selectionIsHead { self.selectedCommitHash = nil }
+        }
     }
 
     // MARK: - Detached checkout / reflog
