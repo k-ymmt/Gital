@@ -84,17 +84,13 @@ struct ConflictBannerView: View {
     let operation: RepoOperation
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(operation.displayName) in progress")
-                    .font(.system(size: 12.5, weight: .semibold))
-                Text(statusText)
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+        StatusBanner(
+            systemImage: "exclamationmark.triangle.fill",
+            iconStyle: AnyShapeStyle(.orange),
+            background: .orange,
+            title: "\(operation.displayName) in progress",
+            subtitle: statusText
+        ) {
             Button("Abort…") { model.requestAbort() }
                 .disabled(model.isSyncing)
             if operation != .merge {
@@ -109,9 +105,6 @@ struct ConflictBannerView: View {
                 .buttonStyle(.glassProminent)
                 .disabled(!conflictsResolved || model.isSyncing)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .background(.orange.opacity(0.09))
     }
 
     private var conflictsResolved: Bool {
@@ -123,7 +116,7 @@ struct ConflictBannerView: View {
         if count == 0 {
             return "All conflicts resolved — ready to continue"
         }
-        return "\(count) conflicted file\(count == 1 ? "" : "s") — resolve them, then continue"
+        return "\(pluralized(count, "conflicted file")) — resolve them, then continue"
     }
 }
 
@@ -137,25 +130,16 @@ struct EditSessionBannerView: View {
     let session: GitRepository.CommitEditSession
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "pencil.circle.fill")
-                .foregroundStyle(.tint)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("Editing commit \(session.shortTargetHash) — “\(session.subject)”")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text("Stage what the commit should contain, then save. Removed changes return to the working copy afterwards.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+        StatusBanner(
+            systemImage: "pencil.circle.fill",
+            iconStyle: AnyShapeStyle(.tint),
+            background: .accentColor,
+            title: "Editing commit \(session.shortTargetHash) — “\(session.subject)”",
+            subtitle: "Stage what the commit should contain, then save. Removed changes return to the working copy afterwards."
+        ) {
             Button("Abort Edit…") { model.requestAbortEdit() }
                 .disabled(model.isSyncing)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .background(Color.accentColor.opacity(0.09))
     }
 }
 
@@ -251,6 +235,6 @@ struct CommitComposerView: View {
         if model.isEditingCommit { return "Save Commit" }
         let count = model.status.staged.count
         if count == 0 { return "Commit" }
-        return "Commit \(count) file\(count == 1 ? "" : "s")"
+        return "Commit \(pluralized(count, "file"))"
     }
 }

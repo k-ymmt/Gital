@@ -59,7 +59,7 @@ struct FileHistorySheet: View {
     private var scopeDescription: String {
         let commits = "\(model.entries.count)\(model.hasMore ? "+" : "") commit\(model.entries.count == 1 ? "" : "s")"
         if let start = model.startHash {
-            return "\(commits) · from \(start.prefix(7))"
+            return "\(commits) · from \(start.gitShortHash)"
         }
         return commits
     }
@@ -275,9 +275,9 @@ private struct FileBlameView: View {
         // A deleting commit has no content of its own; what's shown is the
         // last version, blamed at the parent.
         if model.selectedEntry?.status == .deleted {
-            return "Blame before \(key.prefix(7)) (file deleted)"
+            return "Blame before \(key.gitShortHash) (file deleted)"
         }
-        return "Blame at \(key.prefix(7))"
+        return "Blame at \(key.gitShortHash)"
     }
 }
 
@@ -323,7 +323,7 @@ private struct BlameLineRow: View {
             } else {
                 Button(action: onSelectCommit) {
                     HStack(spacing: 7) {
-                        Text(String(line.hash.prefix(7)))
+                        Text(line.hash.gitShortHash)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(DesignStyle.linkBlue)
                         Text(annotation?.author ?? "")

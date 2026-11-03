@@ -324,7 +324,7 @@ nonisolated enum DiffParser {
         hasher.update(data: Data("blob \(data.count)\u{0}".utf8))
         hasher.update(data: data)
         let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return String(hex.prefix(7))
+        return hex.gitShortHash
     }
 
     private static func stripHeaderTab(_ raw: String) -> String {

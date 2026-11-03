@@ -6,16 +6,13 @@ struct PullRequestItemDiffView: View {
     let item: PullRequestsModel.ItemSelection
 
     /// Collapses the lower commit-details pane down to its header row.
+    /// Owned here, not by the pane, so it survives the pane leaving the
+    /// hierarchy while the next commit's details load.
     @State private var commitInfoCollapsed = false
     /// Height of the expanded message area, adjusted by dragging the pane's
     /// top divider. Display and drag both clamp it to the window (see
-    /// `commitInfoPane`), so a tall setting can't starve the diff.
+    /// `PRCommitInfoPane`), so a tall setting can't starve the diff.
     @State private var commitInfoHeight: CGFloat = 150
-    /// Height when the current resize drag started; nil outside a drag.
-    @State private var commitInfoDragBase: CGFloat?
-    /// Whether the resize cursor is currently pushed — onHover alone can't
-    /// guarantee the pop when the handle leaves the hierarchy mid-hover.
-    @State private var resizeCursorPushed = false
 
     /// Vertical space reserved for everything that isn't the pane's message
     /// area: a usable diff (matching the old VSplitView minimum) plus the
@@ -67,7 +64,13 @@ struct PullRequestItemDiffView: View {
                 GeometryReader { geo in
                     VStack(spacing: 0) {
                         diffContent
-                        commitInfoPane(commit, maxBodyHeight: max(60, geo.size.height - Self.commitInfoReservedHeight))
+                        PRCommitInfoPane(
+                            commit: commit,
+                            avatarURL: model.avatarURL(email: commit.authorEmail, size: 30),
+                            maxBodyHeight: max(60, geo.size.height - Self.commitInfoReservedHeight),
+                            isCollapsed: $commitInfoCollapsed,
+                            height: $commitInfoHeight
+                        )
                     }
                 }
             } else {
@@ -199,7 +202,11 @@ struct PullRequestItemDiffView: View {
         case .split:
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
-            ForEach(splitSegments(for: diff, number: number)) { segment in
+            ForEach(ReviewSplitSegment.segments(
+                for: diff,
+                threads: model.prs.threads(for: number),
+                comments: model.prs.pendingComments(for: number)
+            )) { segment in
                 WebDiffChunkView(
                     html: DiffHTMLBuilder.reviewSplitPage(
                         rows: segment.rows,
@@ -228,17 +235,17 @@ struct PullRequestItemDiffView: View {
     private func handleReview(_ action: WebDiffAction, in diff: FileDiff) {
         switch action {
         case .hunk(let act, let id) where act == "commentLine":
-            guard let line = line(id, in: diff),
+            guard let line = diff.line(withID: id),
                   let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line) else { return }
             model.prs.openReviewComposer(at: anchor, lineText: line.text)
         case .lines(let act, let startID, let endID) where act == "commentRange":
-            guard let end = line(endID, in: diff),
+            guard let end = diff.line(withID: endID),
                   let endAnchor = ReviewCommentAnchor(path: diff.path, diffLine: end) else { return }
             guard startID != endID else {
                 model.prs.openReviewComposer(at: endAnchor, lineText: end.text)
                 return
             }
-            guard let start = line(startID, in: diff),
+            guard let start = diff.line(withID: startID),
                   let startAnchor = ReviewCommentAnchor(path: diff.path, diffLine: start) else { return }
             model.prs.openReviewComposer(
                 at: endAnchor,
@@ -247,10 +254,10 @@ struct PullRequestItemDiffView: View {
                 startLineText: start.text
             )
         case .hunk(let act, let id) where act == "askLine":
-            guard let line = line(id, in: diff) else { return }
+            guard let line = diff.line(withID: id) else { return }
             openAskComposer(start: line, end: line, in: diff)
         case .askRange(let startID, let endID):
-            guard let start = line(startID, in: diff), let end = line(endID, in: diff) else { return }
+            guard let start = diff.line(withID: startID), let end = diff.line(withID: endID) else { return }
             openAskComposer(start: start, end: end, in: diff)
         default:
             break
@@ -276,65 +283,6 @@ struct PullRequestItemDiffView: View {
             anchorText: end.text,
             diffContext: RepoViewModel.diffContext(in: diff, range: range)
         )
-    }
-
-    private func line(_ id: String, in diff: FileDiff) -> DiffLine? {
-        diff.hunks.lazy.flatMap(\.lines).first { $0.id == id }
-    }
-
-    // MARK: - Web chunk segmentation (split mode)
-
-    private struct ReviewSplitSegment: Identifiable {
-        let id: String
-        let rows: [SplitDiffRow]
-        /// Cards anchored to this chunk's last row, rendered right after it.
-        let threads: [ReviewThread]
-        let comments: [PendingReviewComment]
-    }
-
-    private func splitSegments(for diff: FileDiff, number: Int) -> [ReviewSplitSegment] {
-        var segments: [ReviewSplitSegment] = []
-        var rows: [SplitDiffRow] = []
-        var firstID = ""
-
-        for row in SplitDiffRow.rows(for: diff.hunks) {
-            if rows.isEmpty { firstID = row.id }
-            rows.append(row)
-            let threads = splitRowThreads(row, in: diff, number: number)
-            let comments = splitRowComments(row, in: diff, number: number)
-            if !threads.isEmpty || !comments.isEmpty {
-                segments.append(ReviewSplitSegment(id: "\(firstID)→\(row.id)", rows: rows, threads: threads, comments: comments))
-                rows = []
-                firstID = ""
-            }
-        }
-        if !rows.isEmpty {
-            segments.append(ReviewSplitSegment(id: "\(firstID)→end", rows: rows, threads: [], comments: []))
-        }
-        return segments
-    }
-
-    // Both matchers delegate to the same coordinates-AND-content rule the
-    // unified pane uses (`isAnchored`), via the row's sides expressed as
-    // `DiffLine`s — the display-safety rule must have exactly one
-    // implementation.
-
-    private func splitRowThreads(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [ReviewThread] {
-        guard !row.isHunkHeader else { return [] }
-        let lines = row.anchorableLines
-        guard !lines.isEmpty else { return [] }
-        return model.prs.threads(for: number).filter { thread in
-            lines.contains { thread.isAnchored(to: $0, path: diff.path) }
-        }
-    }
-
-    private func splitRowComments(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [PendingReviewComment] {
-        guard !row.isHunkHeader else { return [] }
-        let lines = row.anchorableLines
-        guard !lines.isEmpty else { return [] }
-        return model.prs.pendingComments(for: number).filter { comment in
-            lines.contains { comment.isAnchored(to: $0, path: diff.path) }
-        }
     }
 
     @ViewBuilder
@@ -402,393 +350,56 @@ struct PullRequestItemDiffView: View {
             }
         }
     }
-
-    /// Lower pane with just the commit's details, History-style: avatar,
-    /// author line, hash, and the FULL commit message (subject and body) —
-    /// the one-line toolbar title can't show either. Sourced from local git,
-    /// since gh's PR detail only carries each commit's headline.
-    private func commitInfoPane(_ commit: CommitDetail, maxBodyHeight: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            resizeHandle(cap: maxBodyHeight)
-            commitInfoHeader(commit)
-            // Collapsing squeezes the message area to zero height instead of
-            // removing it, which is what makes the toggle animatable. The
-            // divider lives inside so it disappears along with the area.
-            VStack(spacing: 0) {
-                Divider()
-                ScrollView {
-                    Text(commit.message)
-                        .font(.system(size: 12.5))
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                }
-            }
-            .frame(height: commitInfoCollapsed ? 0 : min(commitInfoHeight, maxBodyHeight))
-            .clipped()
-        }
-    }
-
-    /// The pane's top divider, doubling as its resize handle — a slim drag
-    /// band replacing the VSplitView divider. Inert while collapsed, so the
-    /// hidden message area can't be dragged open.
-    private func resizeHandle(cap: CGFloat) -> some View {
-        ZStack {
-            Divider()
-            Color.clear
-                .contentShape(Rectangle())
-                .gesture(
-                    // Global space: the handle itself moves with every height
-                    // change, so a local-space translation would be measured
-                    // against a moving origin and lag the cursor.
-                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            let base = commitInfoDragBase ?? min(commitInfoHeight, cap)
-                            commitInfoDragBase = base
-                            commitInfoHeight = min(max(base - value.translation.height, 60), cap)
-                        }
-                        .onEnded { _ in commitInfoDragBase = nil }
-                )
-                .onHover { setResizeCursor($0) }
-        }
-        .frame(height: 7)
-        .allowsHitTesting(!commitInfoCollapsed)
-        // onHover's exit callback isn't delivered when the handle leaves the
-        // hierarchy (or stops hit-testing) mid-hover, which would leave the
-        // resize cursor pushed over the whole app.
-        .onDisappear {
-            setResizeCursor(false)
-            commitInfoDragBase = nil
-        }
-        .onChange(of: commitInfoCollapsed) { _, collapsed in
-            if collapsed { setResizeCursor(false) }
-        }
-    }
-
-    /// Push/pop tracked through one flag so the two can never run unpaired.
-    private func setResizeCursor(_ pushed: Bool) {
-        guard pushed != resizeCursorPushed else { return }
-        resizeCursorPushed = pushed
-        if pushed {
-            NSCursor.resizeUpDown.push()
-        } else {
-            NSCursor.pop()
-        }
-    }
-
-    /// The pane's header row — avatar, author line, hash, and the collapse
-    /// toggle. This is what remains on screen while the pane is collapsed.
-    private func commitInfoHeader(_ commit: CommitDetail) -> some View {
-        HStack(spacing: 11) {
-            AvatarView(name: commit.author, url: model.avatarURL(email: commit.authorEmail, size: 30))
-            VStack(alignment: .leading, spacing: 3) {
-                Text("\(commit.author) <\(commit.authorEmail)>")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-                Text(commit.authorDate)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text(commit.hash)
-                .font(.system(size: 11.5, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 3)
-                .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            Button {
-                withAnimation(.easeInOut(duration: 0.22)) {
-                    commitInfoCollapsed.toggle()
-                }
-            } label: {
-                // The Xcode/Fork bottom-panel toggle: one fixed glyph whose
-                // tint carries the state, not a direction-flipping chevron.
-                Image(systemName: "inset.filled.bottomthird.square")
-                    .font(.system(size: 13))
-                    .foregroundStyle(commitInfoCollapsed ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
-                    .frame(width: 20, height: 20)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(commitInfoCollapsed ? "Expand commit details" : "Collapse commit details")
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.quaternary.opacity(0.25))
-    }
 }
 
-/// Last measured height per native card, keyed by overlay ID. Card heights
-/// live in `@State`, which dies when `LazyVStack` recycles a file view —
-/// without this, a recycled file would push every card's spacer back at the
-/// 150pt estimate, visibly collapsing and re-expanding around tall cards on
-/// every scroll-back. The composer IDs (`card:composer` / `card:ask`) are
-/// shared across files and PRs, so their cached entry can be stale — it only
-/// mis-sizes the spacer until the live card re-measures.
-private let cardHeightCache = NSCache<NSString, NSNumber>()
+// MARK: - Web chunk segmentation (split mode)
 
-private func cachedCardHeight(_ id: String) -> CGFloat? {
-    cardHeightCache.object(forKey: id as NSString).map { CGFloat($0.doubleValue) }
-}
+/// One split-mode web chunk of a PR file: consecutive rows up to and
+/// including the next row that carries review cards, which render right
+/// after the chunk. Pure, so the segmentation and its chunk IDs are
+/// unit-testable.
+struct ReviewSplitSegment: Identifiable {
+    let id: String
+    let rows: [SplitDiffRow]
+    /// Cards anchored to this chunk's last row, rendered right after it.
+    let threads: [ReviewThread]
+    let comments: [PendingReviewComment]
 
-private func cacheCardHeight(_ height: CGFloat, id: String) {
-    cardHeightCache.setObject(NSNumber(value: height), forKey: id as NSString)
-}
+    static func segments(
+        for diff: FileDiff, threads: [ReviewThread], comments: [PendingReviewComment]
+    ) -> [ReviewSplitSegment] {
+        var segments: [ReviewSplitSegment] = []
+        var rows: [SplitDiffRow] = []
+        var firstID = ""
 
-/// The PR ask-composer card — one spelling for the inline overlay and the
-/// trailing section, so the two can't drift.
-private struct PRAgentComposerCard: View {
-    @Bindable var model: RepoViewModel
-    let composer: RepoViewModel.PRAgentComposer
-
-    var body: some View {
-        AgentComposerView(
-            text: $model.prAgentDraft,
-            range: composer.range,
-            fileName: (composer.filePath as NSString).lastPathComponent,
-            hint: "Select lines to ask about a range",
-            placeholder: "Ask a question about these lines…",
-            onCancel: { model.cancelPRAgentComposer() },
-            onSend: { model.sendPRAgentQuestion() }
-        )
-    }
-}
-
-/// One PR file's unified diff as a single web page, with the native review
-/// pieces — published threads, pending drafts, the review composer, agent
-/// threads, and the ask-composer — overlaid at page-reported spacer offsets
-/// (the Working Copy scheme, see `WorkingDiffPane`).
-///
-/// One page per file instead of card-split chunks because the chunk
-/// boundaries moved every time a card opened or closed, and every moved
-/// boundary changed a chunk's identity — tearing down its `WKWebView` and
-/// reloading from scratch, which flashed the whole pane on each composer
-/// toggle. Here the page HTML depends only on the diff, so a card opening
-/// pushes a spacer via JS and the page just reflows.
-private struct PRReviewFileView: View {
-    @Bindable var model: RepoViewModel
-    let diff: FileDiff
-    let number: Int
-    let canComment: Bool
-    /// `ItemSelection.agentAnchorKey` of the item being shown — the identity
-    /// agent cards anchor to alongside line ID and content.
-    let itemKey: String
-    let onAction: (WebDiffAction) -> Void
-
-    /// Page height, reported after layout; the rows×19 estimate (or a cached
-    /// height from a previous life — LazyVStack recycles this view) holds the
-    /// scroll extent until the first report.
-    @State private var reportedHeight: CGFloat?
-    /// Document offset of every spacer, reported alongside the height.
-    @State private var anchors: [String: CGFloat] = [:]
-    /// Measured native card heights, pushed back as spacer heights.
-    @State private var overlayHeights: [String: CGFloat] = [:]
-    @State private var page = Page(html: "", estimatedHeight: 0)
-
-    private nonisolated struct Page {
-        let html: String
-        let estimatedHeight: CGFloat
-        /// Height-cache key, hashed once — heights are reported on every
-        /// layout change.
-        let heightCacheKey: String
-
-        init(html: String, estimatedHeight: CGFloat) {
-            self.html = html
-            self.estimatedHeight = estimatedHeight
-            self.heightCacheKey = Gital.heightCacheKey(for: html)
-        }
-    }
-
-    private struct PageInputs: Equatable {
-        let diff: FileDiff
-        let canComment: Bool
-    }
-
-    var body: some View {
-        // Computed once and shared between the spacer specs and the card
-        // views — each body evaluation used to run the full overlay scan
-        // twice (spacers + ForEach).
-        let overlays = computeOverlays()
-        ZStack(alignment: .topLeading) {
-            InteractiveWebView(
-                html: page.html,
-                spacers: spacers(for: overlays),
-                onAction: onAction,
-                onHeight: { height, ready in
-                    reportedHeight = height
-                    // Loading-phase reports can still describe the outgoing
-                    // page; only a post-didFinish report certainly measures
-                    // this one.
-                    if ready {
-                        cacheHeight(height, forKey: page.heightCacheKey)
-                    }
-                },
-                onAnchors: { anchors = $0 }
-            )
-            .frame(height: reportedHeight ?? page.estimatedHeight)
-            ForEach(overlays) { overlay in
-                if let top = anchors[overlay.id] {
-                    overlayContent(overlay)
-                        .onGeometryChange(for: CGFloat.self, of: \.size.height) {
-                            overlayHeights[overlay.id] = $0
-                            cacheCardHeight($0, id: overlay.id)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .offset(y: top)
-                }
+        for row in SplitDiffRow.rows(for: diff.hunks) {
+            if rows.isEmpty { firstID = row.id }
+            rows.append(row)
+            let rowThreads = anchored(threads, to: row, path: diff.path) { $0.isAnchored(to: $1, path: $2) }
+            let rowComments = anchored(comments, to: row, path: diff.path) { $0.isAnchored(to: $1, path: $2) }
+            if !rowThreads.isEmpty || !rowComments.isEmpty {
+                segments.append(ReviewSplitSegment(id: "\(firstID)→\(row.id)", rows: rows, threads: rowThreads, comments: rowComments))
+                rows = []
+                firstID = ""
             }
         }
-        .onChange(of: PageInputs(diff: diff, canComment: canComment), initial: true) {
-            rebuildPage()
+        if !rows.isEmpty {
+            segments.append(ReviewSplitSegment(id: "\(firstID)→end", rows: rows, threads: [], comments: []))
         }
+        return segments
     }
 
-    /// Builds the page HTML off the main thread — a big PR file's string
-    /// assembly is O(file size), and LazyVStack materializes several of
-    /// these views in one frame while scrolling.
-    private func rebuildPage() {
-        let diff = diff
-        let canComment = canComment
-        Task {
-            let built = await Task.detached { () -> Page in
-                let html = DiffHTMLBuilder.reviewUnifiedPage(
-                    items: DiffHTMLBuilder.unifiedItems(for: diff),
-                    language: DiffSyntaxHighlighting.language(for: diff),
-                    commentable: canComment
-                        ? { ReviewCommentAnchor(path: diff.path, diffLine: $0) != nil }
-                        : nil,
-                    askable: true
-                )
-                let rows = diff.hunks.reduce(diff.hunks.count) { $0 + $1.lines.count }
-                return Page(html: html, estimatedHeight: CGFloat(rows) * DiffHTMLBuilder.rowHeight)
-            }.value
-            // Inputs superseded mid-build (file switch, permissions change).
-            guard PageInputs(diff: self.diff, canComment: self.canComment) == PageInputs(diff: diff, canComment: canComment) else { return }
-            page = built
-            reportedHeight = cachedHeight(forKey: built.heightCacheKey)
-        }
-    }
-
-    // MARK: - Overlays
-
-    /// One native card positioned over a page spacer. Cards on the same line
-    /// keep this order — published conversations first, then local drafts
-    /// (history above what is still pending, like GitHub), then the agent's
-    /// question threads and composer — because `gitalSetSpacers` inserts
-    /// same-line spacers in spec order.
-    private struct Overlay: Identifiable {
-        enum Kind {
-            case thread(ReviewThread)
-            case pending(PendingReviewComment)
-            case reviewComposer
-            case agentThread(AgentThread)
-            case agentComposer(RepoViewModel.PRAgentComposer)
-        }
-
-        let id: String
-        /// Line the card's dynamic spacer inserts after.
-        let anchorLineID: String
-        let kind: Kind
-
-        /// Space reserved before the native card reports its real height.
-        static let cardEstimate: CGFloat = 150
-    }
-
-    /// The card anchors, pre-bucketed so the exact (and unchanged) per-line
-    /// matching predicates only run on lines that can possibly hold a card.
-    /// Without the gate, every body evaluation ran every predicate on every
-    /// line — O(rows × cards) twice over on a big file.
-    private func computeOverlays() -> [Overlay] {
-        let threads = model.prs.threads(for: number)
-        let drafts = model.prs.pendingComments(for: number)
-        let reviewComposer = canComment ? model.prs.composer : nil
-        let askComposer = model.prAgentComposer
-
-        // Old/new line numbers that may anchor a thread, draft, or the
-        // review composer on this file, and the line IDs agent cards hang
-        // on. Supersets are fine — matched lines still run the predicates.
-        var leftNumbers = Set<Int>()
-        var rightNumbers = Set<Int>()
-        func note(side: ReviewCommentAnchor.Side, line: Int) {
-            if side == .left { leftNumbers.insert(line) } else { rightNumbers.insert(line) }
-        }
-        for thread in threads where thread.path == diff.path {
-            if let line = thread.line { note(side: thread.side, line: line) }
-        }
-        for draft in drafts where draft.anchor.path == diff.path {
-            note(side: draft.anchor.side, line: draft.anchor.line)
-        }
-        if let anchor = reviewComposer?.anchor, anchor.path == diff.path {
-            note(side: anchor.side, line: anchor.line)
-        }
-        var agentLineIDs = Set<String>()
-        for thread in model.agentThreads where thread.prNumber == number {
-            agentLineIDs.insert(thread.anchorLineID)
-        }
-        if let askComposer, askComposer.number == number {
-            agentLineIDs.insert(askComposer.anchorLineID)
-        }
-        guard !leftNumbers.isEmpty || !rightNumbers.isEmpty || !agentLineIDs.isEmpty else { return [] }
-
-        var out: [Overlay] = []
-        for hunk in diff.hunks {
-            for line in hunk.lines {
-                let mayAnchor = line.oldNumber.map(leftNumbers.contains) == true
-                    || line.newNumber.map(rightNumbers.contains) == true
-                    || agentLineIDs.contains(line.id)
-                guard mayAnchor else { continue }
-                for thread in model.prs.threads(on: line, path: diff.path, in: number) {
-                    out.append(Overlay(id: "thread:\(thread.id)", anchorLineID: line.id, kind: .thread(thread)))
-                }
-                for comment in model.prs.pendingComments(on: line, path: diff.path, in: number) {
-                    out.append(Overlay(id: "draft:\(comment.id)", anchorLineID: line.id, kind: .pending(comment)))
-                }
-                // The review composer only renders while the PR accepts
-                // comments — the "+" affordances are gated the same way.
-                if canComment, model.prs.isComposerOpen(at: line, in: diff) {
-                    out.append(Overlay(id: "card:composer", anchorLineID: line.id, kind: .reviewComposer))
-                }
-                for thread in model.prAgentThreads(on: line, in: number, itemKey: itemKey) {
-                    out.append(Overlay(id: "agent:\(thread.id)", anchorLineID: line.id, kind: .agentThread(thread)))
-                }
-                if let askComposer, model.isPRAgentComposerOpen(at: line, in: number, itemKey: itemKey) {
-                    out.append(Overlay(id: "card:ask", anchorLineID: line.id, kind: .agentComposer(askComposer)))
-                }
-            }
-        }
-        return out
-    }
-
-    private func spacers(for overlays: [Overlay]) -> [WebDiffSpacer] {
-        overlays.map { overlay in
-            WebDiffSpacer(
-                id: overlay.id,
-                line: overlay.anchorLineID,
-                height: overlayHeights[overlay.id] ?? cachedCardHeight(overlay.id) ?? Overlay.cardEstimate
-            )
-        }
-    }
-
-    @ViewBuilder
-    private func overlayContent(_ overlay: Overlay) -> some View {
-        switch overlay.kind {
-        case .thread(let thread):
-            ReviewThreadCard(model: model, thread: thread, number: number)
-        case .pending(let comment):
-            PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
-        case .reviewComposer:
-            ReviewCommentComposerView(model: model, number: number)
-        case .agentThread(let thread):
-            AgentThreadView(model: model, thread: thread)
-        case .agentComposer(let composer):
-            PRAgentComposerCard(model: model, composer: composer)
-        }
+    // Threads and drafts both go through the same coordinates-AND-content
+    // rule the unified pane uses (`isAnchored`), via the row's sides
+    // expressed as `DiffLine`s — the display-safety rule must have exactly
+    // one implementation.
+    private static func anchored<Card>(
+        _ cards: [Card], to row: SplitDiffRow, path: String,
+        _ isAnchored: (Card, DiffLine, String) -> Bool
+    ) -> [Card] {
+        guard !row.isHunkHeader, !cards.isEmpty else { return [] }
+        let lines = row.anchorableLines
+        guard !lines.isEmpty else { return [] }
+        return cards.filter { card in lines.contains { isAnchored(card, $0, path) } }
     }
 }

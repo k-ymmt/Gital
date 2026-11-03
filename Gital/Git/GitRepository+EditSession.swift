@@ -51,7 +51,7 @@ extension GitRepository {
         /// doesn't own. Defaulted so state files from before the field decode.
         var replacementCommitHash: String? = nil
 
-        var shortTargetHash: String { String(targetHash.prefix(7)) }
+        var shortTargetHash: String { targetHash.gitShortHash }
         var subject: String { originalMessage.components(separatedBy: "\n").first ?? "" }
     }
 

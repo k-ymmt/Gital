@@ -91,7 +91,7 @@ struct RepositorySwitcher: View {
     /// gives no way to tell which commit the working copy reflects.
     private var subtitle: String {
         if let branch = model.status.branch { return branch }
-        if let oid = model.status.headOID { return "Detached HEAD at \(String(oid.prefix(7)))" }
+        if let oid = model.status.headOID { return "Detached HEAD at \(oid.gitShortHash)" }
         return "Detached HEAD"
     }
 
@@ -100,7 +100,7 @@ struct RepositorySwitcher: View {
         middleEllipsized(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"), maxLength: maxLength)
     }
 
-    private static func middleEllipsized(_ string: String, maxLength: Int) -> String {
+    static func middleEllipsized(_ string: String, maxLength: Int) -> String {
         guard string.count > maxLength else { return string }
         let head = string.prefix((maxLength - 1) / 2)
         let tail = string.suffix(maxLength / 2)

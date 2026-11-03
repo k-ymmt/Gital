@@ -59,7 +59,7 @@ extension RepoViewModel {
 
     func toggleLineSelection(_ line: DiffLine, in diff: FileDiff, extend: Bool) {
         guard canSelectLines(in: diff), line.kind != .context else { return }
-        let selectable = diff.hunks.flatMap(\.lines).filter { $0.kind != .context }
+        let selectable = diff.changedLines
         if extend, let anchor = lineSelectionAnchor, anchor.path == diff.path,
            let from = selectable.firstIndex(where: { $0.id == anchor.id }),
            let to = selectable.firstIndex(where: { $0.id == line.id }) {
@@ -83,7 +83,7 @@ extension RepoViewModel {
         let prefix = diff.path + "@"
         let candidates = selectedDiffLineIDs.filter { $0.hasPrefix(prefix) }
         guard !candidates.isEmpty else { return [] }
-        let changed = Set(diff.hunks.flatMap(\.lines).filter { $0.kind != .context }.map(\.id))
+        let changed = Set(diff.changedLines.map(\.id))
         return candidates.intersection(changed)
     }
 
@@ -145,7 +145,7 @@ extension RepoViewModel {
             case .hunk(_, let diff):
                 "This hunk in “\(diff.fileName)” will be reverted. This cannot be undone."
             case .lines(let diff, let ids):
-                "\(ids.count) line\(ids.count == 1 ? "" : "s") in “\(diff.fileName)” will be reverted. This cannot be undone."
+                "\(pluralized(ids.count, "line")) in “\(diff.fileName)” will be reverted. This cannot be undone."
             }
         }
     }

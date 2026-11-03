@@ -396,7 +396,7 @@ struct WorkingDiffPane: View {
         let selectedCount = selected.count
         if selectedCount > 0 {
             if diff.scope == .unstaged {
-                HunkActionButton(title: "Discard \(selectedCount) Line\(selectedCount == 1 ? "" : "s")", tint: DesignStyle.deletion) {
+                HunkActionButton(title: "Discard \(pluralized(selectedCount, "Line"))", tint: DesignStyle.deletion) {
                     model.requestDiscard(.lines(diff, ids: selected))
                 }
             }
@@ -416,7 +416,7 @@ struct WorkingDiffPane: View {
 
     private func lineActionTitle(_ diff: FileDiff, count: Int) -> String {
         let verb = diff.scope == .staged ? "Unstage" : "Stage"
-        return "\(verb) \(count) Line\(count == 1 ? "" : "s")"
+        return "\(verb) \(pluralized(count, "Line"))"
     }
 
     // MARK: - Bridge actions
@@ -434,12 +434,12 @@ struct WorkingDiffPane: View {
     private func handle(_ action: WebDiffAction) {
         switch action {
         case .toggleLine(let id, let extend):
-            if let diff = diff(containing: id), let line = line(withID: id, in: diff) {
+            if let diff = diff(containing: id), let line = diff.line(withID: id) {
                 model.toggleLineSelection(line, in: diff, extend: extend)
             }
         case .askRange(let startID, let endID):
             guard let diff = diff(containing: startID) else { return }
-            if let start = line(withID: startID, in: diff), let end = line(withID: endID, in: diff) {
+            if let start = diff.line(withID: startID), let end = diff.line(withID: endID) {
                 let first = diff.newFileLineNumber(of: start)
                 let last = diff.newFileLineNumber(of: end)
                 // Anchoring at the range's last line puts the composer right
@@ -451,7 +451,7 @@ struct WorkingDiffPane: View {
             // The framed range goes to the model as explicit IDs — never
             // through the click-based line selection, which the user may be
             // curating separately.
-            let ids = changedLineIDs(from: startID, to: endID, in: diff)
+            let ids = diff.changedLineIDs(from: startID, to: endID)
             guard !ids.isEmpty else { return }
             switch act {
             case "stageLines", "unstageLines":
@@ -473,24 +473,6 @@ struct WorkingDiffPane: View {
             default: break
             }
         }
-    }
-
-    /// The changed (stageable) lines between two line IDs in document order,
-    /// bounds included — context lines in the span don't stage.
-    private func changedLineIDs(from startID: String, to endID: String, in diff: FileDiff) -> Set<String> {
-        let all = diff.hunks.flatMap(\.lines)
-        guard let from = all.firstIndex(where: { $0.id == startID }),
-              let to = all.firstIndex(where: { $0.id == endID }) else { return [] }
-        return Set(all[min(from, to)...max(from, to)].filter { $0.kind != .context }.map(\.id))
-    }
-
-    private func line(withID id: String, in diff: FileDiff) -> DiffLine? {
-        for hunk in diff.hunks {
-            if let line = hunk.lines.first(where: { $0.id == id }) {
-                return line
-            }
-        }
-        return nil
     }
 
 }
@@ -516,31 +498,44 @@ private struct PinnedFileHeader<Content: View>: View {
 
     var body: some View {
         let y = scroll.y
-        if y > 0, let index = currentIndex(at: y) {
+        let top = { (index: Int) in anchors[DiffHTMLBuilder.headerSpacerID(for: files[index])] }
+        if y > 0, let index = PinnedHeaderLayout.currentIndex(count: files.count, scrollY: y, headerTop: top) {
             let diff = files[index]
             let height = headerHeights[DiffHTMLBuilder.headerSpacerID(for: diff)]
                 ?? CGFloat(DiffHTMLBuilder.headerSpacerEstimate)
-            let pushOut = nextHeaderTop(after: index).map { min(0, $0 - y - height) } ?? 0
             header(diff)
-                .offset(y: pushOut)
+                .offset(y: PinnedHeaderLayout.pushOut(
+                    after: index, count: files.count, scrollY: y, headerHeight: height, headerTop: top
+                ))
         }
     }
+}
 
+/// Which file header `PinnedFileHeader` pins, and how far the next header
+/// has pushed it out. Pure, so the test harness can reach it. Header tops
+/// come through a closure (nil while a header is unmeasured) so the scan
+/// can stop early — it runs on every scroll frame.
+nonisolated enum PinnedHeaderLayout {
     /// The file whose content is under the pane's top edge: the last file
     /// whose header offset is at or above the scroll position.
-    private func currentIndex(at y: CGFloat) -> Int? {
+    static func currentIndex(count: Int, scrollY y: CGFloat, headerTop: (Int) -> CGFloat?) -> Int? {
         var current: Int?
-        for (index, diff) in files.enumerated() {
-            guard let top = anchors[DiffHTMLBuilder.headerSpacerID(for: diff)] else { continue }
+        for index in 0..<count {
+            guard let top = headerTop(index) else { continue }
             if top <= y { current = index } else { break }
         }
         return current
     }
 
-    private func nextHeaderTop(after index: Int) -> CGFloat? {
-        for diff in files[(index + 1)...] {
-            if let top = anchors[DiffHTMLBuilder.headerSpacerID(for: diff)] { return top }
+    /// Non-positive offset for the pinned header: once the next measured
+    /// header reaches the pinned one's bottom edge, it pushes it up.
+    static func pushOut(
+        after index: Int, count: Int, scrollY y: CGFloat, headerHeight: CGFloat,
+        headerTop: (Int) -> CGFloat?
+    ) -> CGFloat {
+        for next in (index + 1)..<max(count, index + 1) {
+            if let top = headerTop(next) { return min(0, top - y - headerHeight) }
         }
-        return nil
+        return 0
     }
 }
