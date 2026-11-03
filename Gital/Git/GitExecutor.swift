@@ -62,11 +62,21 @@ actor GitExecutor {
 
     func runData(_ arguments: [String], lane: Lane = .local, successCodes: Set<Int32> = [0], stdin: Data? = nil) async throws -> Data {
         let workingDirectory = self.workingDirectory
-        let previousLocal = lane == .network ? nil : localTail
+        // An exclusive command joins the local lane only once the network
+        // lane has drained: queued behind a fetch hanging on a dead remote,
+        // it would otherwise hold every local command hostage to that fetch.
+        // It still claims the local lane before it runs, so local commands
+        // queued after the claim wait for it.
+        let previousLocal = lane == .local ? localTail : nil
         let previousNetwork = lane == .local ? nil : networkTail
+        let (localRelease, releaseLocal) = AsyncStream<Never>.makeStream()
         let task = Task<Data, Error> {
+            defer { releaseLocal.finish() }
             await previousLocal?.value
             await previousNetwork?.value
+            if lane == .exclusive {
+                await self.claimLocalLane(until: localRelease)?.value
+            }
             // The command task is unstructured, so the caller's cancellation
             // is forwarded explicitly below. Cancelled while queued: skip the
             // spawn entirely. Cancelled while running: Subprocess terminates
@@ -80,13 +90,21 @@ actor GitExecutor {
             )
         }
         let settled = Task { _ = try? await task.value }
-        if lane != .network { localTail = settled }
+        if lane == .local { localTail = settled }
         if lane != .local { networkTail = settled }
         return try await withTaskCancellationHandler {
             try await task.value
         } onCancel: {
             task.cancel()
         }
+    }
+
+    /// Makes the local lane wait until `release` finishes; returns the
+    /// previous tail for the claimer to wait on.
+    private func claimLocalLane(until release: AsyncStream<Never>) -> Task<Void, Never>? {
+        let previous = localTail
+        localTail = Task { for await _ in release {} }
+        return previous
     }
 
     private static func execute(

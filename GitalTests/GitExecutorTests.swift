@@ -183,6 +183,35 @@ struct GitExecutorTests {
         }
     }
 
+    // A pull queued behind a hanging fetch is not running yet — it must not
+    // hold the local lane while it waits, or every status/diff/log stalls
+    // behind the fetch again (the wedge the network lane exists to prevent).
+    @Test func exclusiveQueuedBehindNetworkDoesNotBlockLocalLane() async throws {
+        try await withTempRepo { executor in
+            let slowFetch = Task {
+                try await executor.run(
+                    ["-c", "alias.slownet=!sleep 5 && touch net.done", "slownet"], lane: .network
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let pull = Task {
+                try await executor.run(
+                    ["-c", "alias.excl=!test -f net.done && echo present || echo missing", "excl"],
+                    lane: .exclusive
+                )
+            }
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            let seen = (try? await executor.run(
+                ["-c", "alias.probe=!test -f net.done && echo present || echo missing", "probe"]
+            )) ?? ""
+            #expect(seen.contains("missing"), "local command ran while the pull waited on the hanging fetch")
+            slowFetch.cancel()
+            _ = try? await slowFetch.value
+            let pulled = (try? await pull.value) ?? ""
+            #expect(!pulled.isEmpty, "the queued pull still ran after the fetch")
+        }
+    }
+
     // Hammer the chain with concurrent mixed success/failure commands; every
     // call must complete with the expected outcome.
     @Test func concurrentMixedCommands() async throws {

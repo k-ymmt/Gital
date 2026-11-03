@@ -26,6 +26,7 @@ extension RepoViewModel {
         // shows conflicted rows with a stale (or missing) banner.
         do {
             status = try await repository.status()
+            reconcileSelectedChange()
         } catch {
             report(error)
         }
@@ -45,6 +46,19 @@ extension RepoViewModel {
     /// minutes ago") and of anything the fingerprint can't see (a deepened
     /// shallow clone).
     static let logReuseWindow: Duration = .seconds(60)
+
+    /// Keeps the Changes selection on a side that still lists its path:
+    /// staging/unstaging moves a file across, a commit or discard removes it.
+    /// Left alone, the selection names a side the path is gone from and its
+    /// diff loads empty — the pane says the working copy is clean.
+    private func reconcileSelectedChange() {
+        guard let selection = selectedChange else { return }
+        func lists(_ changes: [FileChange]) -> Bool { changes.contains { $0.path == selection.path } }
+        guard !lists(selection.staged ? status.staged : status.unstaged) else { return }
+        selectedChange = lists(selection.staged ? status.unstaged : status.staged)
+            ? ChangeSelection(path: selection.path, staged: !selection.staged)
+            : nil
+    }
 
     func refreshLog() async {
         // Re-fetch at least as many commits as are already loaded so a
@@ -276,7 +290,12 @@ extension RepoViewModel {
                 if change?.status == .untracked {
                     diffs = (try? await repository.diffUntracked(path: selection.path)) ?? []
                 } else {
-                    diffs = try await repository.diffWorking(staged: selection.staged, path: selection.path)
+                    // A staged rename needs its old path in the pathspec too,
+                    // or git diffs the new path alone as an added file.
+                    diffs = try await repository.diffWorking(
+                        staged: selection.staged, path: selection.path,
+                        originalPath: selection.staged ? change?.originalPath : nil
+                    )
                 }
             } else {
                 diffs = try await repository.diffWorking(staged: false)

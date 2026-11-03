@@ -33,6 +33,10 @@ actor CodexAppServer {
         let readOnly: Bool
         let continuation: AsyncThrowingStream<CodexTurnEvent, Error>.Continuation
         var completed = false
+        /// codex's id for the running turn, from the turn/start response —
+        /// turn/interrupt requires it next to the thread ID. Nil until that
+        /// response lands.
+        var codexTurnID: String?
         var handle: ((CodexNotification) -> Void)?
 
         init(
@@ -221,14 +225,21 @@ actor CodexAppServer {
                 break
             }
         }
+        let started: [String: Any]
         do {
-            _ = try await sendRequest(method: "turn/start", params: [
+            started = try await sendRequest(method: "turn/start", params: [
                 "threadId": threadID,
                 "input": [["type": "text", "text": prompt]],
             ])
         } catch {
             cleanUpTurn(turnID)
             throw error
+        }
+        record.codexTurnID = (started["turn"] as? [String: Any])?["id"] as? String
+        if activeTurns[turnID] == nil && !record.completed {
+            // The consumer went away while turn/start was in flight;
+            // turnTerminated had no turn id to interrupt with yet.
+            sendInterrupt(record)
         }
     }
 
@@ -249,8 +260,18 @@ actor CodexAppServer {
         guard !threadID.isEmpty else { return }
         endOneShot(record)
         guard !record.completed else { return }
+        // Without codex's turn id (turn/start still in flight) performTurn
+        // sends the interrupt once the response lands.
+        sendInterrupt(record)
+    }
+
+    private func sendInterrupt(_ record: TurnRecord) {
+        guard let codexTurnID = record.codexTurnID else { return }
+        let threadID = record.threadID
         Task {
-            _ = try? await self.sendRequest(method: "turn/interrupt", params: ["threadId": threadID])
+            _ = try? await self.sendRequest(
+                method: "turn/interrupt", params: ["threadId": threadID, "turnId": codexTurnID]
+            )
         }
     }
 
@@ -572,7 +593,11 @@ actor CodexAppServer {
     private func respond(toServerRequest method: String, params: [String: Any], id: CodexRequestID) {
         let response: [String: Any]
         if method.localizedCaseInsensitiveContains("approval") {
-            response = ["jsonrpc": "2.0", "id": id.jsonValue, "result": ["decision": approvalDecision(params: params)]]
+            let approve = approvalDecision(params: params) == "approved"
+            response = [
+                "jsonrpc": "2.0", "id": id.jsonValue,
+                "result": Self.approvalResult(method: method, params: params, approve: approve),
+            ]
         } else {
             response = [
                 "jsonrpc": "2.0", "id": id.jsonValue,
@@ -622,6 +647,23 @@ actor CodexAppServer {
             textOnly = running.isEmpty || running.contains { $0.textOnly }
         }
         return textOnly ? "denied" : "approved"
+    }
+
+    /// The answer body for an approval request, in the vocabulary of its
+    /// method: v2 item approvals (what thread/start threads receive) take
+    /// accept/decline, a v2 permissions request answers with the granted
+    /// profile (the requested one, or nothing), and only the legacy v1
+    /// methods take approved/denied — codex cannot decode the v1 words on a
+    /// v2 request, so an agent turn's approval never landed.
+    static func approvalResult(method: String, params: [String: Any], approve: Bool) -> [String: Any] {
+        if method.hasSuffix("/permissions/requestApproval") {
+            let requested = params["permissions"] as? [String: Any] ?? [:]
+            return ["permissions": approve ? requested : [String: Any]()]
+        }
+        if method.hasPrefix("item/") {
+            return ["decision": approve ? "accept" : "decline"]
+        }
+        return ["decision": approve ? "approved" : "denied"]
     }
 
     // MARK: - Wire

@@ -191,7 +191,17 @@ nonisolated enum CodexServerMessage {
                 return .agentMessageCompleted(threadID: threadID, text: text)
             }
         case "turn/completed":
-            return .turnCompleted(threadID: threadID)
+            // v2 reports failed and interrupted turns through turn/completed
+            // too: the outcome is turn.status, the reason turn.error.
+            let turn = params["turn"] as? [String: Any]
+            switch turn?["status"] as? String {
+            case "failed", "interrupted":
+                let status = turn?["status"] as? String ?? ""
+                let reason = ((turn?["error"] as? [String: Any])?["message"] as? String) ?? "turn \(status)"
+                return .turnFailed(threadID: threadID, message: reason)
+            default:
+                return .turnCompleted(threadID: threadID)
+            }
         case "turn/failed":
             let reason = ((params["error"] as? [String: Any])?["message"] as? String) ?? "unknown error"
             return .turnFailed(threadID: threadID, message: reason)

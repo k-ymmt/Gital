@@ -228,12 +228,16 @@ extension RepoViewModel {
         let message = takeComposerMessage()
         guard !message.isEmpty || amend else { return }
         isCommitting = true
+        // Amending replaces HEAD: a selection on it would stay pinned to the
+        // vanished commit. Cleared, refreshAll re-seeds it with the new HEAD.
+        let selectionIsAmendedHead = amend && selectedCommitHash != nil && selectedCommitHash == status.headOID
         Task {
             defer { isCommitting = false }
             do {
                 try await repository.commit(message: message, amend: amend)
                 commitMessage = ""
                 amend = false
+                if selectionIsAmendedHead { selectedCommitHash = nil }
                 await refreshAll()
             } catch { report(error) }
         }

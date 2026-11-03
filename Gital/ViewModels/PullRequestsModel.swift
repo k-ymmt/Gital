@@ -181,10 +181,15 @@ final class PullRequestsModel {
             do {
                 try await github.merge(number: number)
                 // Reload the detail directly — flipping selectedNumber
-                // nil→back spawned two loads that both hit gh.
-                detailsCache[number] = nil
+                // nil→back spawned two loads that both hit gh. Forced, not
+                // cache-dropped: the merged PR's detail stays on screen
+                // while the reload runs instead of blanking to a spinner.
                 invalidateDiff(for: number)
-                await loadDetail()
+                if selectedNumber == number {
+                    await loadDetail(forceRefresh: true)
+                } else {
+                    detailsCache[number] = nil
+                }
                 await refresh()
             } catch {
                 mergeError = error.localizedDescription
@@ -313,6 +318,12 @@ final class PullRequestsModel {
         }
         diffFetchTasks[number] = task
         let result = await task.value
+        // An invalidation cancelled the fetch this caller attached to; gh
+        // reports the kill as a plain non-zero exit, which must not surface
+        // as this (still wanted) caller's error. Retry against a fresh fetch.
+        if task.isCancelled, diffFetchTasks[number] != task, !Task.isCancelled {
+            return try await wholeDiff(for: number)
+        }
         // Only the fetch still registered may deregister itself and cache:
         // another caller may have replaced a failed task with a fresh retry
         // that must not be knocked out, and an invalidation (reload, review
@@ -639,10 +650,12 @@ final class PullRequestsModel {
             try await github.submitReview(number: number, event: event, body: body, comments: resolved)
             let sentIDs = Set(drafts.map(\.id))
             setPendingComments(pendingComments(for: number).filter { !sentIDs.contains($0.id) }, for: number)
-            detailsCache[number] = nil
             if selectedNumber == number {
-                await loadDetail()
+                // Forced: the detail stays on screen during the reload (and
+                // the submit form keeps reading its review events from it).
+                await loadDetail(forceRefresh: true)
             } else {
+                detailsCache[number] = nil
                 // loadDetail refreshes threads itself; off-selection the
                 // submitted drafts still just became published threads.
                 await loadThreads(number)
@@ -834,13 +847,18 @@ final class PullRequestsModel {
             }.value
             guard let self else { return }
             self.viewedStore = store
+            // A toggle that raced the load was computed against an empty
+            // state: replay only its flag delta onto the saved state — it
+            // must neither be rolled back nor hide the PR's other saved
+            // flags. That delta is exactly what the store writes.
+            var merged = states
             for entry in self.pendingViewedApplies {
                 store.apply(from: entry.old, to: entry.new, for: entry.number)
+                let state = (merged[entry.number] ?? PRViewedState()).applyingDelta(from: entry.old, to: entry.new)
+                merged[entry.number] = state.isEmpty ? nil : state
             }
             self.pendingViewedApplies = []
-            // A toggle that raced the load already updated the in-memory
-            // state — the disk snapshot must not roll it back.
-            self.viewedStates = states.merging(self.viewedStates) { _, local in local }
+            self.viewedStates = merged
         }
     }
 }
