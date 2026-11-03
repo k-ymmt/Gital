@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Log
 
-extension GitRepository {
+nonisolated extension GitRepository {
     @concurrent func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
         async let remotes = remoteNames()
         // NUL field separators: none of these fields can ever contain a NUL,

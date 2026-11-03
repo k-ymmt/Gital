@@ -2,10 +2,10 @@ import Foundation
 
 // MARK: - Stashes
 
-extension GitRepository {
+nonisolated extension GitRepository {
     static let stashListFormat = "%gd\u{1f}%H\u{1f}%gs"
 
-    func stashes() async throws -> [Stash] {
+    @concurrent func stashes() async throws -> [Stash] {
         let output = try await executor.run(["stash", "list", "--format=\(Self.stashListFormat)"])
         return Self.parseStashes(output)
     }

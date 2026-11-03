@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Commit Edit Session
 
-extension GitRepository {
+nonisolated extension GitRepository {
     /// Persistent state of a Commit Edit Session (docs/adr/0001): an
     /// app-driven `rebase -i` stopped at the target commit's `edit` line with
     /// the commit's content soft-reset into the index. Written to

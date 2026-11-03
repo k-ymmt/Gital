@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Staging / committing
 
-extension GitRepository {
+nonisolated extension GitRepository {
     func stage(_ paths: [String]) async throws {
         guard !paths.isEmpty else { return }
         try await executor.run(["add", "--"] + paths.map(GitPathQuoting.literalPathspec))

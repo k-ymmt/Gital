@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Diffs / file contents
 
-extension GitRepository {
+nonisolated extension GitRepository {
     @concurrent func diffWorking(staged: Bool, path: String? = nil) async throws -> [FileDiff] {
         var args = ["diff"]
         if staged { args.append("--cached") }

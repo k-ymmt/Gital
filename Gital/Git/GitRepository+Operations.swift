@@ -1,8 +1,9 @@
 import Foundation
+import Synchronization
 
 // MARK: - Merge / rebase / conflicts / history operations
 
-extension GitRepository {
+nonisolated extension GitRepository {
     /// Marker files (or directories) inside the git dir that identify a
     /// stopped multi-step operation, in classification priority order: the
     /// rebase directories win over the sequencer heads defensively — older
@@ -32,9 +33,30 @@ extension GitRepository {
     /// worktrees and submodules land in their real git dir instead of an
     /// assumed `root/.git`.
     func gitPathURL(_ name: String) async throws -> URL {
-        let path = try await executor.run(["rev-parse", "--git-path", name])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return Self.resolveGitPath(path, root: root)
+        try await gitPathURLs([name])[0]
+    }
+
+    /// Batch form of `gitPathURL`: resolves every uncached name in one
+    /// `rev-parse` run, then serves all of them from `gitPathCache`.
+    func gitPathURLs(_ names: [String]) async throws -> [URL] {
+        let missing = gitPathCache.withLock { cache in names.filter { cache[$0] == nil } }
+        if !missing.isEmpty {
+            var args = ["rev-parse"]
+            for name in missing {
+                args += ["--git-path", name]
+            }
+            let paths = try await executor.run(args).split(separator: "\n").map {
+                $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            guard paths.count == missing.count else {
+                throw GitError(command: args.joined(separator: " "), exitCode: 0, stderr: "unexpected rev-parse --git-path output")
+            }
+            let resolved = zip(missing, paths.map { Self.resolveGitPath($0, root: root) })
+            gitPathCache.withLock { cache in
+                for (name, url) in resolved { cache[name] = url }
+            }
+        }
+        return gitPathCache.withLock { cache in names.map { cache[$0]! } }
     }
 
     func headHash() async throws -> String {
@@ -47,16 +69,10 @@ extension GitRepository {
     /// (worktrees, submodules) instead of assuming `root/.git`, and file
     /// existence probes don't depend on localized `git status` wording.
     func pendingOperation() async throws -> RepoOperation? {
-        var args = ["rev-parse"]
-        for probe in Self.operationProbes {
-            args += ["--git-path", probe.marker]
-        }
-        let output = try await executor.run(args)
-        let paths = output.split(separator: "\n").map(String.init)
-        guard paths.count == Self.operationProbes.count else { return nil }
+        let urls = try await gitPathURLs(Self.operationProbes.map(\.marker))
         var existing: Set<String> = []
-        for (probe, path) in zip(Self.operationProbes, paths) {
-            if FileManager.default.fileExists(atPath: Self.resolveGitPath(path, root: root).path) {
+        for (probe, url) in zip(Self.operationProbes, urls) {
+            if FileManager.default.fileExists(atPath: url.path) {
                 existing.insert(probe.marker)
             }
         }

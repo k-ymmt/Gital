@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Interactive rebase
 
-extension GitRepository {
+nonisolated extension GitRepository {
     /// The prepared span for an interactive rebase: the commits it would
     /// rewrite (newest first) and the base to replay them onto.
     struct InteractiveRebasePrep: Identifiable {

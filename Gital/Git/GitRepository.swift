@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Branch/remote operation refused before reaching git — the configuration
 /// is ambiguous and guessing would do the wrong thing silently.
@@ -27,6 +28,11 @@ nonisolated final class GitRepository: @unchecked Sendable {
     let root: URL
     /// Internal (not private) so the domain extension files can reach it.
     let executor: GitExecutor
+    /// `rev-parse --git-path` resolutions by name. A git dir's layout is
+    /// fixed for the repository's lifetime, and these probes ran on every
+    /// refresh (the operation markers) and on every edit-session state
+    /// access — one subprocess each on the serialized local lane.
+    let gitPathCache = Mutex<[String: URL]>([:])
 
     var name: String { root.lastPathComponent }
     var displayPath: String {

@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - Branches / tags / reflog
 
-extension GitRepository {
-    func branches() async throws -> [Branch] {
+nonisolated extension GitRepository {
+    @concurrent func branches() async throws -> [Branch] {
         let output = try await executor.run([
             "branch", "--format=%(refname:short)\u{1f}%(HEAD)\u{1f}%(upstream:short)\u{1f}%(objectname)\u{1f}%(upstream:remotename)",
         ])
@@ -41,7 +41,7 @@ extension GitRepository {
         return url.isEmpty ? nil : url
     }
 
-    func remotes() async throws -> [RemoteInfo] {
+    @concurrent func remotes() async throws -> [RemoteInfo] {
         async let remoteNames = executor.run(["remote"])
         async let remoteBranches = executor.run(["branch", "-r", "--format=%(refname:short)\u{1f}%(objectname)"])
 
@@ -68,7 +68,7 @@ extension GitRepository {
         }
     }
 
-    func tags() async throws -> [Tag] {
+    @concurrent func tags() async throws -> [Tag] {
         let output = try await executor.run([
             "tag", "--sort=-creatordate",
             "--format=%(refname:short)\u{1f}%(objectname)\u{1f}%(*objectname)"
