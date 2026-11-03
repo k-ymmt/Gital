@@ -40,22 +40,45 @@ extension RepoViewModel {
         await reconcileEditSession()
     }
 
+    /// How long a loaded log stays reusable while its refs fingerprint is
+    /// unchanged. Bounds the staleness of `--date=relative` labels ("5
+    /// minutes ago") and of anything the fingerprint can't see (a deepened
+    /// shallow clone).
+    static let logReuseWindow: Duration = .seconds(60)
+
     func refreshLog() async {
         // Re-fetch at least as many commits as are already loaded so a
         // refresh (fetch/pull/commit) doesn't collapse the paged-in history.
         let limit = max(Self.logPageSize, commits.count)
+        let previous = logRefsFingerprint
         // Graph layout is O(commits × lanes) — computed inside the
         // supersedable load, off the main thread, so a 10k-commit refresh
         // doesn't stall the UI (and a superseded layout is just dropped).
-        switch await logLoader.run({ [repository] in
-            let loaded = try await repository.log(limit: limit)
+        // An unchanged refs fingerprint skips both: an operation's own
+        // refreshAll and the FSEvents echo of the same ref write used to run
+        // the full log + layout twice, which with deep history paged in is
+        // the most expensive thing a refresh does.
+        switch await logLoader.run({ [repository] () -> (String?, ([Commit], CommitGraph)?) in
+            // Listed once for both the fingerprint and the log's
+            // decoration classification.
+            let remotes = await repository.remoteNames()
+            let fingerprint = await repository.historyFingerprint(remotes: remotes)
+            if let fingerprint, let previous, previous.value == fingerprint,
+               ContinuousClock.now - previous.loadedAt < Self.logReuseWindow {
+                return (fingerprint, nil)
+            }
+            let loaded = try await repository.log(limit: limit, remotes: remotes)
             let graph = await Task.detached { CommitGraph(commits: loaded) }.value
-            return (loaded, graph)
+            return (fingerprint, (loaded, graph))
         }) {
-        case .success(let (loaded, graph)):
+        case .success(let (fingerprint, fresh)):
+            guard let (loaded, graph) = fresh else { return }
             commits = loaded
             hasMoreCommits = loaded.count >= limit
             self.graph = graph
+            // Taken before the log ran: a ref moving in between makes the
+            // stored value stale, which only costs one extra reload later.
+            logRefsFingerprint = fingerprint.map { ($0, ContinuousClock.now) }
         case .failure(let error):
             report(error)
         case nil:
@@ -148,12 +171,13 @@ extension RepoViewModel {
             async let remotesTask = repository.remotes()
             async let tagsTask = repository.tags()
             async let stashesTask = repository.stashes()
-            async let remoteURLTask = repository.defaultRemoteURL()
             branches = try await branchesTask
             remotes = try await remotesTask
             tags = try await tagsTask
             stashes = try await stashesTask
-            isGitHubRemote = ((try? await remoteURLTask) ?? nil)
+            // Reuses the names `remotes()` just listed: one `git remote`
+            // spawn fewer per refresh.
+            isGitHubRemote = ((try? await repository.defaultRemoteURL(remoteNames: remotes.map(\.name))) ?? nil)
                 .map(GitHubAvatars.isGitHub(remoteURL:)) ?? false
         } catch {
             report(error)
@@ -162,26 +186,33 @@ extension RepoViewModel {
 
     func loadCommitDetail() async {
         commitDetailError = nil
+        // The previous commit's patch is never shown under a new selection
+        // (the Files tab gates on commitDiffsHash), so drop it now instead of
+        // holding a possibly multi-MB parse until the next Files-tab visit.
+        commitDiffs = []
+        commitDiffsHash = nil
+        commitDiffsLoader.invalidate()
         guard let hash = selectedCommitHash else {
             commitDetail = nil
             commitFiles = []
-            commitDiffs = []
-            commitDiffsHash = nil
             commitDetailLoader.invalidate()
             return
+        }
+        // The whole-commit patch (`git show` + diff parse, multi-MB for a
+        // 2k-file commit) is only needed by the Files tab; browsing history
+        // on the Commit tab fetches just the metadata and file stats.
+        if commitDetailTab == .files {
+            Task { await loadCommitDiffsIfNeeded() }
         }
         let result = await commitDetailLoader.run { [repository] in
             async let detailTask = repository.commitDetail(hash)
             async let filesTask = repository.commitFileStats(hash)
-            async let diffsTask = repository.diffCommit(hash)
-            return (try await detailTask, try await filesTask, try await diffsTask)
+            return (try await detailTask, try await filesTask)
         }
         switch result {
-        case .success(let (detail, files, diffs)):
+        case .success(let (detail, files)):
             commitDetail = detail
             commitFiles = files
-            commitDiffs = diffs
-            commitDiffsHash = hash
             if let selected = selectedCommitFilePath,
                commitFiles.contains(where: { $0.path == selected }) == false {
                 selectedCommitFilePath = commitFiles.first?.path
@@ -195,8 +226,27 @@ extension RepoViewModel {
             // eternal spinner with no retry short of re-selecting.
             commitDetail = nil
             commitFiles = []
+            commitDiffsLoader.invalidate()
             commitDiffs = []
             commitDiffsHash = nil
+            commitDetailError = error.localizedDescription
+        case nil:
+            break
+        }
+    }
+
+    /// Fetches the selected commit's whole patch for the Files tab unless it
+    /// is already loaded. One fetch per commit: file switches inside the tab
+    /// reuse it.
+    func loadCommitDiffsIfNeeded() async {
+        guard let hash = selectedCommitHash, commitDiffsHash != hash, commitDetailError == nil else { return }
+        switch await commitDiffsLoader.run({ [repository] in try await repository.diffCommit(hash) }) {
+        case .success(let diffs):
+            guard selectedCommitHash == hash else { return }
+            commitDiffs = diffs
+            commitDiffsHash = hash
+        case .failure(let error):
+            guard selectedCommitHash == hash else { return }
             commitDetailError = error.localizedDescription
         case nil:
             break

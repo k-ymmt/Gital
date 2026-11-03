@@ -3,8 +3,10 @@ import Foundation
 // MARK: - Log
 
 nonisolated extension GitRepository {
-    @concurrent func log(limit: Int = 400, skip: Int = 0) async throws -> [Commit] {
-        async let remotes = remoteNames()
+    /// `knownRemotes` lets a caller that already listed the remotes (the
+    /// refresh path's fingerprint) spare the extra `git remote` spawn.
+    @concurrent func log(limit: Int = 400, skip: Int = 0, remotes knownRemotes: Set<String>? = nil) async throws -> [Commit] {
+        async let fetchedRemotes: Set<String> = knownRemotes == nil ? await remoteNames() : []
         // NUL field separators: none of these fields can ever contain a NUL,
         // unlike 0x1E/0x1F which a hostile subject could carry.
         // Decorations use 0x1F between refs instead of %D's ", " — ref names
@@ -32,7 +34,37 @@ nonisolated extension GitRepository {
             retryArgs.removeAll { $0 == "HEAD" }
             output = try await executor.run(retryArgs)
         }
-        return Self.parseLog(output, remotes: await remotes)
+        let remotes: Set<String>
+        if let knownRemotes {
+            remotes = knownRemotes
+        } else {
+            remotes = await fetchedRemotes
+        }
+        return Self.parseLog(output, remotes: remotes)
+    }
+
+    /// Everything `log`'s output is a function of, besides the clock (for
+    /// `--date=relative`): every ref with its target, where HEAD points
+    /// (branch or detached commit — the "HEAD -> x" decoration), and the
+    /// remote names that classify decorations. Equal fingerprints mean an
+    /// identical commit list, so a refresh can skip the full `git log` and
+    /// graph layout. Nil when it can't be determined — callers then reload.
+    func historyFingerprint(remotes: Set<String>) async -> String? {
+        guard let head = await headTarget(),
+              let refs = try? await executor.run(["for-each-ref", "--format=%(objectname) %(refname)"])
+        else { return nil }
+        return head + "\u{0}" + remotes.sorted().joined(separator: "\n") + "\u{0}" + refs
+    }
+
+    /// HEAD's raw target ("ref: refs/heads/x" or a detached hash), read from
+    /// the HEAD file instead of spawning git. The reftable backend keeps
+    /// HEAD a static placeholder, so there it asks git.
+    private func headTarget() async -> String? {
+        if let url = try? await gitPathURL("HEAD"), let data = try? Data(contentsOf: url) {
+            let target = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !target.isEmpty, target != "ref: refs/heads/.invalid" { return target }
+        }
+        return try? await executor.run(["rev-parse", "HEAD", "--symbolic-full-name", "HEAD"])
     }
 
     static func parseLog(_ output: String, remotes: Set<String> = []) -> [Commit] {

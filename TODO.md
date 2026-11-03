@@ -4,9 +4,7 @@ Deferred from the 2026-10-20 audit session (bug hunt / performance / refactoring
 
 ## Performance
 
-- [ ] `refreshLog` re-fetches and re-parses the entire paged-in history on every refresh (`RepoViewModel+Loading.swift`, `limit = max(logPageSize, commits.count)`). With 10k+ commits paged in, every refresh re-runs the full `git log` plus a graph rebuild. Deferred: needs a splice design — refresh only the first page and reattach the unchanged tail by boundary hash, falling back to a full reload on history rewrites. Watch out: decorations on old commits can change (a fetched tag deep in history), which a naive splice would miss.
-- [ ] `loadCommitDetail` always fetches the whole-commit patch (`diffCommit(hash)`) on every history selection, even when the Files tab is never opened — a 2k-file commit is a multi-MB `git show`. Defer the patch fetch to the first Files-tab entry while keeping the current one-fetch-per-commit reuse (`RepoViewModel+Loading.swift`).
-- [ ] Commit Edit Session re-resolves `rev-parse --git-path` (one subprocess) on every state-file access and on the per-refresh `rebase-merge` probe while a session is active (`GitRepository+EditSession.swift`). Cache the resolved git-dir URL per `GitRepository` instance.
+- [ ] `refreshLog` re-fetches and re-parses the entire paged-in history whenever refs actually changed (`RepoViewModel+Loading.swift`, `limit = max(logPageSize, commits.count)`). Refreshes with an unchanged refs/HEAD fingerprint are now skipped (2026-11 perf sweep), so this only costs on real ref moves. Remaining idea: refresh only the first page and reattach the unchanged tail by boundary hash, falling back to a full reload on history rewrites. Watch out: decorations on old commits can change (a fetched tag deep in history), which a naive splice would miss.
 - [ ] `PullRequestsModel.detailsCache` is unbounded within a session (`expand()` inserts, collapse never evicts; trimmed only in `reloadAll`). Entries are KB-scale so impact is low; apply the existing `diffsCache` LRU pattern when touching that file.
 
 ## Refactoring (low value — do opportunistically)

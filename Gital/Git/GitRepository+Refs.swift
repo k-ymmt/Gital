@@ -33,8 +33,15 @@ nonisolated extension GitRepository {
 
     /// URL of the default remote — "origin" when present, else the first
     /// listed remote — or nil when the repository has none.
-    func defaultRemoteURL() async throws -> String? {
-        let names = try await executor.run(["remote"]).split(separator: "\n").map(String.init)
+    /// Pass `remoteNames` when already known (e.g. from `remotes()`) to
+    /// skip listing them again.
+    func defaultRemoteURL(remoteNames: [String]? = nil) async throws -> String? {
+        let names: [String]
+        if let remoteNames {
+            names = remoteNames
+        } else {
+            names = try await executor.run(["remote"]).split(separator: "\n").map(String.init)
+        }
         guard let name = names.first(where: { $0 == "origin" }) ?? names.first else { return nil }
         let url = try await executor.run(["remote", "get-url", name])
             .trimmingCharacters(in: .whitespacesAndNewlines)
