@@ -11,6 +11,4 @@ Deferred from the 2026-10-20 audit session (bug hunt / performance / refactoring
 
 ## Refactoring (low value — do opportunistically)
 
-- [ ] `ConflictBannerView` and `EditSessionBannerView` (`ChangesView.swift`) share the same banner skeleton; extract a `StatusBanner(icon:tint:title:subtitle:)` container when a third banner appears.
-- [ ] `String(hash.prefix(7))` short-hash derivation is duplicated across 7 types (`GitModels.swift`, `RepoViewModel+SourceControl.swift`, `CommitEditSession.shortTargetHash`); a single `gitShortHash` extension would cover them.
 - [ ] The `isEditingCommit → "Save Commit"` label branch exists in both `AppCommands.swift` (`commitMenuTitle`) and `ChangesView.swift` (`commitLabel`); the surrounding display requirements differ, but that one branch can drift.
