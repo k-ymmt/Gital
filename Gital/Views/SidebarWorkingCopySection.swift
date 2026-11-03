@@ -76,7 +76,7 @@ struct SidebarWorkingCopySection: View {
         .padding(.trailing, 16)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
-        .background(sidebarRowBackground(model.selectedChange == RepoViewModel.ChangeSelection(path: change.path, staged: staged)))
+        .background(SidebarRowHighlight { model.selectedChange == RepoViewModel.ChangeSelection(path: change.path, staged: staged) })
         .onTapGesture {
             model.selectedChange = RepoViewModel.ChangeSelection(path: change.path, staged: staged)
             model.navTab = .changes

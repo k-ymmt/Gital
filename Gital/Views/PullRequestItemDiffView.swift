@@ -199,22 +199,7 @@ struct PullRequestItemDiffView: View {
         case .split:
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
-            ForEach(splitSegments(for: diff, number: number)) { segment in
-                WebDiffChunkView(
-                    html: DiffHTMLBuilder.reviewSplitPage(
-                        rows: segment.rows,
-                        language: DiffSyntaxHighlighting.language(for: diff)
-                    ),
-                    estimatedHeight: CGFloat(segment.rows.count) * DiffHTMLBuilder.rowHeight,
-                    onAction: { _ in }
-                )
-                ForEach(segment.threads) { thread in
-                    ReviewThreadCard(model: model, thread: thread, number: number)
-                }
-                ForEach(segment.comments) { comment in
-                    PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
-                }
-            }
+            PRSplitFileView(model: model, diff: diff, number: number)
         }
     }
 
@@ -280,61 +265,6 @@ struct PullRequestItemDiffView: View {
 
     private func line(_ id: String, in diff: FileDiff) -> DiffLine? {
         diff.hunks.lazy.flatMap(\.lines).first { $0.id == id }
-    }
-
-    // MARK: - Web chunk segmentation (split mode)
-
-    private struct ReviewSplitSegment: Identifiable {
-        let id: String
-        let rows: [SplitDiffRow]
-        /// Cards anchored to this chunk's last row, rendered right after it.
-        let threads: [ReviewThread]
-        let comments: [PendingReviewComment]
-    }
-
-    private func splitSegments(for diff: FileDiff, number: Int) -> [ReviewSplitSegment] {
-        var segments: [ReviewSplitSegment] = []
-        var rows: [SplitDiffRow] = []
-        var firstID = ""
-
-        for row in SplitDiffRow.rows(for: diff.hunks) {
-            if rows.isEmpty { firstID = row.id }
-            rows.append(row)
-            let threads = splitRowThreads(row, in: diff, number: number)
-            let comments = splitRowComments(row, in: diff, number: number)
-            if !threads.isEmpty || !comments.isEmpty {
-                segments.append(ReviewSplitSegment(id: "\(firstID)→\(row.id)", rows: rows, threads: threads, comments: comments))
-                rows = []
-                firstID = ""
-            }
-        }
-        if !rows.isEmpty {
-            segments.append(ReviewSplitSegment(id: "\(firstID)→end", rows: rows, threads: [], comments: []))
-        }
-        return segments
-    }
-
-    // Both matchers delegate to the same coordinates-AND-content rule the
-    // unified pane uses (`isAnchored`), via the row's sides expressed as
-    // `DiffLine`s — the display-safety rule must have exactly one
-    // implementation.
-
-    private func splitRowThreads(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [ReviewThread] {
-        guard !row.isHunkHeader else { return [] }
-        let lines = row.anchorableLines
-        guard !lines.isEmpty else { return [] }
-        return model.prs.threads(for: number).filter { thread in
-            lines.contains { thread.isAnchored(to: $0, path: diff.path) }
-        }
-    }
-
-    private func splitRowComments(_ row: SplitDiffRow, in diff: FileDiff, number: Int) -> [PendingReviewComment] {
-        guard !row.isHunkHeader else { return [] }
-        let lines = row.anchorableLines
-        guard !lines.isEmpty else { return [] }
-        return model.prs.pendingComments(for: number).filter { comment in
-            lines.contains { comment.isAnchored(to: $0, path: diff.path) }
-        }
     }
 
     @ViewBuilder
@@ -540,6 +470,96 @@ private func cachedCardHeight(_ id: String) -> CGFloat? {
 
 private func cacheCardHeight(_ height: CGFloat, id: String) {
     cardHeightCache.setObject(NSNumber(value: height), forKey: id as NSString)
+}
+
+/// One PR file's split-mode review content: web chunks cut after every row
+/// carrying published threads or drafts, with those cards in between.
+///
+/// Its own view, not a builder inside `PullRequestItemDiffView`, so that
+/// parent re-evaluations which leave this file's inputs equal — the commit
+/// pane's divider drag (every frame), Viewed toggles, agent-card changes —
+/// skip the row scan and the per-segment page builds (O(file) string
+/// assembly each). Thread and draft reads happen in this body, so changes
+/// to those still re-render it.
+private struct PRSplitFileView: View {
+    let model: RepoViewModel
+    let diff: FileDiff
+    let number: Int
+
+    var body: some View {
+        let language = DiffSyntaxHighlighting.language(for: diff)
+        ForEach(splitSegments()) { segment in
+            WebDiffChunkView(
+                html: DiffHTMLBuilder.reviewSplitPage(rows: segment.rows, language: language),
+                estimatedHeight: CGFloat(segment.rows.count) * DiffHTMLBuilder.rowHeight,
+                onAction: { _ in }
+            )
+            ForEach(segment.threads) { thread in
+                ReviewThreadCard(model: model, thread: thread, number: number)
+            }
+            ForEach(segment.comments) { comment in
+                PendingReviewCommentCard(model: model, comment: comment, diff: diff, number: number)
+            }
+        }
+    }
+
+    private struct ReviewSplitSegment: Identifiable {
+        let id: String
+        let rows: [SplitDiffRow]
+        /// Cards anchored to this chunk's last row, rendered right after it.
+        let threads: [ReviewThread]
+        let comments: [PendingReviewComment]
+    }
+
+    private func splitSegments() -> [ReviewSplitSegment] {
+        var segments: [ReviewSplitSegment] = []
+        var rows: [SplitDiffRow] = []
+        var firstID = ""
+
+        // Narrowed to this file once, not per row: `isAnchored` requires the
+        // path to match anyway, and the per-row scan over every thread and
+        // draft of the whole PR was O(rows × PR-wide cards).
+        let fileThreads = model.prs.threads(for: number).filter { $0.path == diff.path }
+        let fileComments = model.prs.pendingComments(for: number).filter { $0.anchor.path == diff.path }
+        for row in SplitDiffRow.rows(for: diff.hunks) {
+            if rows.isEmpty { firstID = row.id }
+            rows.append(row)
+            let threads = splitRowThreads(row, among: fileThreads)
+            let comments = splitRowComments(row, among: fileComments)
+            if !threads.isEmpty || !comments.isEmpty {
+                segments.append(ReviewSplitSegment(id: "\(firstID)→\(row.id)", rows: rows, threads: threads, comments: comments))
+                rows = []
+                firstID = ""
+            }
+        }
+        if !rows.isEmpty {
+            segments.append(ReviewSplitSegment(id: "\(firstID)→end", rows: rows, threads: [], comments: []))
+        }
+        return segments
+    }
+
+    // Both matchers delegate to the same coordinates-AND-content rule the
+    // unified pane uses (`isAnchored`), via the row's sides expressed as
+    // `DiffLine`s — the display-safety rule must have exactly one
+    // implementation.
+
+    private func splitRowThreads(_ row: SplitDiffRow, among candidates: [ReviewThread]) -> [ReviewThread] {
+        guard !row.isHunkHeader, !candidates.isEmpty else { return [] }
+        let lines = row.anchorableLines
+        guard !lines.isEmpty else { return [] }
+        return candidates.filter { thread in
+            lines.contains { thread.isAnchored(to: $0, path: diff.path) }
+        }
+    }
+
+    private func splitRowComments(_ row: SplitDiffRow, among candidates: [PendingReviewComment]) -> [PendingReviewComment] {
+        guard !row.isHunkHeader, !candidates.isEmpty else { return [] }
+        let lines = row.anchorableLines
+        guard !lines.isEmpty else { return [] }
+        return candidates.filter { comment in
+            lines.contains { comment.isAnchored(to: $0, path: diff.path) }
+        }
+    }
 }
 
 /// The PR ask-composer card — one spelling for the inline overlay and the

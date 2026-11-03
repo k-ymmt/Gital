@@ -355,9 +355,13 @@ struct MarkdownPreview: View {
 
     // SwiftUI re-evaluates the parent body on unrelated state changes (avatar
     // loads, Viewed toggles), and parsing a huge bot-generated body costs
-    // visible milliseconds — memoize per source string.
+    // visible milliseconds — memoize per source string. The cap must exceed
+    // what one screen renders: every review comment is its own preview, and
+    // a FIFO smaller than a long conversation evicted entries before their
+    // next re-render, so each parent re-evaluation re-parsed every comment.
     private static var cache: [String: [MarkdownBlock]] = [:]
     private static var cacheOrder: [String] = []
+    private static let cacheLimit = 256
 
     init(markdown: String) {
         if let hit = Self.cache[markdown] {
@@ -366,7 +370,7 @@ struct MarkdownPreview: View {
             blocks = MarkdownBlockParser.parse(markdown)
             Self.cache[markdown] = blocks
             Self.cacheOrder.append(markdown)
-            if Self.cacheOrder.count > 16 {
+            if Self.cacheOrder.count > Self.cacheLimit {
                 Self.cache.removeValue(forKey: Self.cacheOrder.removeFirst())
             }
         }
