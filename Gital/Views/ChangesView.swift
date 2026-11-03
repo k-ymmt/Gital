@@ -116,7 +116,7 @@ struct ConflictBannerView: View {
         if count == 0 {
             return "All conflicts resolved — ready to continue"
         }
-        return "\(count) conflicted file\(count == 1 ? "" : "s") — resolve them, then continue"
+        return "\(pluralized(count, "conflicted file")) — resolve them, then continue"
     }
 }
 
@@ -235,6 +235,6 @@ struct CommitComposerView: View {
         if model.isEditingCommit { return "Save Commit" }
         let count = model.status.staged.count
         if count == 0 { return "Commit" }
-        return "Commit \(count) file\(count == 1 ? "" : "s")"
+        return "Commit \(pluralized(count, "file"))"
     }
 }

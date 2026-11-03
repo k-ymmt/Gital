@@ -274,7 +274,7 @@ enum MarkdownBlockParser {
             }
             return .table(
                 header: padded(header),
-                rows: rows.keys.sorted().map { padded(rows[$0]!) }
+                rows: rows.sorted { $0.key < $1.key }.map { padded($0.value) }
             )
         }
     }

@@ -145,7 +145,7 @@ extension RepoViewModel {
             case .hunk(_, let diff):
                 "This hunk in “\(diff.fileName)” will be reverted. This cannot be undone."
             case .lines(let diff, let ids):
-                "\(ids.count) line\(ids.count == 1 ? "" : "s") in “\(diff.fileName)” will be reverted. This cannot be undone."
+                "\(pluralized(ids.count, "line")) in “\(diff.fileName)” will be reverted. This cannot be undone."
             }
         }
     }

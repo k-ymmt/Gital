@@ -396,7 +396,7 @@ struct WorkingDiffPane: View {
         let selectedCount = selected.count
         if selectedCount > 0 {
             if diff.scope == .unstaged {
-                HunkActionButton(title: "Discard \(selectedCount) Line\(selectedCount == 1 ? "" : "s")", tint: DesignStyle.deletion) {
+                HunkActionButton(title: "Discard \(pluralized(selectedCount, "Line"))", tint: DesignStyle.deletion) {
                     model.requestDiscard(.lines(diff, ids: selected))
                 }
             }
@@ -416,7 +416,7 @@ struct WorkingDiffPane: View {
 
     private func lineActionTitle(_ diff: FileDiff, count: Int) -> String {
         let verb = diff.scope == .staged ? "Unstage" : "Stage"
-        return "\(verb) \(count) Line\(count == 1 ? "" : "s")"
+        return "\(verb) \(pluralized(count, "Line"))"
     }
 
     // MARK: - Bridge actions
