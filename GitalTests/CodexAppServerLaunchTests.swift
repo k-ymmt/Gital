@@ -61,7 +61,7 @@ struct CodexAppServerLaunchTests {
 
     /// A fake codex that answers turn/start with an approval request and
     /// echoes back whatever decision the client sent, as a delta.
-    private func makeApprovalProbingCodex() throws -> URL {
+    private func makeApprovalProbingCodex(method: String = "execCommandApproval") throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("fake-codex-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -75,7 +75,7 @@ struct CodexAppServerLaunchTests {
             *'"thread/start"'*|*'"thread\\/start"'*) echo '{"id":'$id',"result":{"thread":{"id":"t1"}}}' ;;
             *'"turn/start"'*|*'"turn\\/start"'*)
               echo '{"id":'$id',"result":{}}'
-              echo '{"jsonrpc":"2.0","id":"srv-1","method":"execCommandApproval","params":{"threadId":"t1"}}'
+              echo '{"jsonrpc":"2.0","id":"srv-1","method":"\(method)","params":{"threadId":"t1"}}'
               ;;
             *'"srv-1"'*)
               decision=$(echo "$line" | sed -n 's/.*"decision":"\\([a-z]*\\)".*/\\1/p')
@@ -113,6 +113,76 @@ struct CodexAppServerLaunchTests {
         #expect(denied == "decision=denied", "text-only turn answers approval requests with a denial")
         let approved = try await decision(textOnly: false)
         #expect(approved == "decision=approved", "agent turns keep the approval auto-grant")
+        await server.shutdown()
+    }
+
+    // Threads started via thread/start get v2 item approvals, which only
+    // understand accept/decline — the v1 "approved" never granted anything.
+    @Test func v2ApprovalRequestsGetV2Decisions() async throws {
+        let fake = try makeApprovalProbingCodex(method: "item/commandExecution/requestApproval")
+        defer { try? FileManager.default.removeItem(at: fake.deletingLastPathComponent()) }
+        let server = CodexAppServer(executableOverride: fake)
+
+        func decision(textOnly: Bool) async throws -> String {
+            var reply = ""
+            for try await event in await server.runTurn(
+                prompt: "hi", repoRoot: URL(fileURLWithPath: "/tmp"), conversationID: UUID(),
+                oneShot: true, textOnly: textOnly
+            ) {
+                if case .delta(let delta) = event { reply += delta }
+            }
+            return reply
+        }
+
+        #expect(try await decision(textOnly: false) == "decision=accept")
+        #expect(try await decision(textOnly: true) == "decision=decline")
+        await server.shutdown()
+    }
+
+    // turn/interrupt requires the turn's id next to the thread's; without it
+    // codex rejected the request and an abandoned turn kept running.
+    @Test func abandonedTurnInterruptCarriesTurnID() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fake-codex-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let script = dir.appendingPathComponent("codex")
+        let log = dir.appendingPathComponent("interrupt.log")
+        let body = """
+        #!/bin/zsh
+        while IFS= read -r line; do
+          id=$(echo "$line" | sed -n 's/.*"id":\\([0-9]*\\).*/\\1/p')
+          case "$line" in
+            *'"initialize"'*) echo '{"id":'$id',"result":{}}' ;;
+            *'"thread/start"'*|*'"thread\\/start"'*) echo '{"id":'$id',"result":{"thread":{"id":"t1"}}}' ;;
+            *'"turn/start"'*|*'"turn\\/start"'*)
+              echo '{"id":'$id',"result":{"turn":{"id":"u1","items":[],"status":"inProgress"}}}'
+              echo '{"method":"item/agentMessage/delta","params":{"threadId":"t1","turnId":"u1","delta":"working"}}'
+              ;;
+            *'"turn/interrupt"'*|*'"turn\\/interrupt"'*)
+              echo "$line" >> '\(log.path)'
+              echo '{"id":'$id',"result":{}}'
+              ;;
+          esac
+        done
+        """
+        try body.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let server = CodexAppServer(executableOverride: script)
+
+        for try await event in await server.runTurn(
+            prompt: "hi", repoRoot: URL(fileURLWithPath: "/tmp"), conversationID: UUID()
+        ) {
+            if case .delta = event { break }  // abandon the running turn
+        }
+        var logged = ""
+        for _ in 0..<100 {
+            logged = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+            if !logged.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(logged.contains(#""turnId":"u1""#), "interrupt names the running turn: \(logged)")
+        #expect(logged.contains(#""threadId":"t1""#))
         await server.shutdown()
     }
 

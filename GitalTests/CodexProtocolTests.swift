@@ -44,6 +44,16 @@ struct CodexProtocolTests {
         if case .notification(.turnFailed(_, let message))? = parse(#"{"method":"turn/failed","params":{"threadId":"t1","error":{"message":"bad"}}}"#) {
             #expect(message == "bad", "codex turn/failed carries reason")
         } else { Issue.record("codex turn/failed parses") }
+        // The v2 protocol has no turn/failed: a failed turn arrives as
+        // turn/completed with turn.status "failed" and the reason in
+        // turn.error — classifying it as a success showed an empty answer.
+        if case .notification(.turnFailed(let threadID, let message))? = parse(#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"u1","items":[],"status":"failed","error":{"message":"quota"}}}}"#) {
+            #expect(threadID == "t1" && message == "quota", "failed turn/completed carries the turn error")
+        } else { Issue.record("failed turn/completed classifies as turnFailed") }
+        if case .notification(.turnFailed)? = parse(#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"u1","items":[],"status":"interrupted"}}}"#) {
+        } else { Issue.record("interrupted turn/completed classifies as turnFailed") }
+        if case .notification(.turnCompleted)? = parse(#"{"method":"turn/completed","params":{"threadId":"t1","turn":{"id":"u1","items":[],"status":"completed"}}}"#) {
+        } else { Issue.record("completed turn/completed stays a success") }
         if case .notification(.unknown(let method, _))? = parse(#"{"method":"thread/tokenCount","params":{"threadId":"t1"}}"#) {
             #expect(method == "thread/tokenCount", "unhandled codex notification classified as unknown")
         } else { Issue.record("unknown codex notification parses") }
