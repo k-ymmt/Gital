@@ -203,7 +203,6 @@ struct PullRequestItemDiffView: View {
             // Split rows still surface existing drafts below the matching
             // row; composing new comments happens in unified mode.
             PRSplitFileView(model: model, diff: diff, number: number)
-            }
         }
     }
 
