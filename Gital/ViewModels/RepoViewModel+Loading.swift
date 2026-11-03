@@ -77,7 +77,7 @@ extension RepoViewModel {
             // Shares logLoader with refreshLog: a refresh that started later
             // has replaced `commits`, and appending a page computed against
             // the old offsets would rewind or duplicate.
-            switch await logLoader.run({ try await self.repository.log(limit: Self.logPageSize, skip: skip) }) {
+            switch await logLoader.run({ [skip] in try await self.repository.log(limit: Self.logPageSize, skip: skip) }) {
             case .success(let page):
                 hasMoreCommits = page.count >= Self.logPageSize
                 let known = Set(commits.map(\.hash))

@@ -25,9 +25,9 @@ extension RepoViewModel {
         // A fetch that changed nothing skips the refreshes outright — and
         // with --no-write-fetch-head it leaves no file change behind either,
         // so the FSEvents watcher stays quiet too.
-        guard let changed = try? await Timeout.run(seconds: AutoFetchPreference.fetchTimeout) { [repository] in
+        guard let changed = try? await Timeout.run(seconds: AutoFetchPreference.fetchTimeout, operation: { [repository] in
             try await repository.autoFetch()
-        }, changed else { return }
+        }), changed else { return }
         await refreshStatus()
         await refreshLog()
         await refreshRefs()
