@@ -3,12 +3,25 @@ import Foundation
 // MARK: - Diffs / file contents
 
 extension GitRepository {
-    @concurrent func diffWorking(staged: Bool, path: String? = nil) async throws -> [FileDiff] {
-        var args = ["diff"]
+    /// Pins the patch shape DiffParser (and the patches rebuilt from it for
+    /// staging) relies on, whatever the user's diff config says: color.diff
+    /// beats the executor's color.ui, diff.external replaces the patch,
+    /// mnemonicPrefix/noprefix change the a/ b/ prefixes, diff.submodule=log
+    /// interleaves submodule logs into the previous hunk, and
+    /// suppressBlankEmpty drops the space of blank context lines.
+    static let patchShapeArgs = ["--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "--submodule=short"]
+    /// Goes before the subcommand: suppressBlankEmpty has no command-line flag.
+    static let patchShapeConfig = ["-c", "diff.suppressBlankEmpty=false"]
+
+    @concurrent func diffWorking(staged: Bool, path: String? = nil, originalPath: String? = nil) async throws -> [FileDiff] {
+        // --no-textconv: hunk/line staging rebuilds patches from this text,
+        // which must be the real file content.
+        var args = Self.patchShapeConfig + ["diff", "--no-textconv"] + Self.patchShapeArgs
         if staged { args.append("--cached") }
         if let path {
             args.append("--")
             args.append(GitPathQuoting.literalPathspec(path))
+            if let originalPath { args.append(GitPathQuoting.literalPathspec(originalPath)) }
         }
         let (output, valid) = try await executor.runChecked(args)
         return DiffParser.parse(output, scope: staged ? .staged : .unstaged, strictUTF8: valid)
@@ -33,7 +46,8 @@ extension GitRepository {
 
     @concurrent func diffCommit(_ hash: String, path: String? = nil, renamedFrom: String? = nil) async throws -> [FileDiff] {
         // Merge commits show nothing by default; diff against the first parent.
-        var args = ["show", "--patch", "--format=", "--no-color", "--diff-merges=first-parent", hash]
+        var args = Self.patchShapeConfig + ["show", "--patch", "--format=", "--diff-merges=first-parent"]
+            + Self.patchShapeArgs + [hash]
         if let path {
             args.append("--")
             args.append(GitPathQuoting.literalPathspec(path))
@@ -175,7 +189,8 @@ extension GitRepository {
         while index < numTokens.count {
             let token = numTokens[index]
             index += 1
-            let parts = token.split(separator: "\t", omittingEmptySubsequences: false)
+            // maxSplits: the path itself may contain a TAB.
+            let parts = token.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
             guard parts.count >= 3 else { continue }
             var path = String(parts[2])
             if path.isEmpty {

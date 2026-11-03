@@ -54,7 +54,7 @@ extension GitRepository {
             try await executor.run(["rev-list", "--count", range])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         )
-        let output = try await executor.run(["log", "-z", "--format=\(Self.rebaseLogFormat)", range])
+        let output = try await executor.run(["log", "-z", "--no-show-signature", "--format=\(Self.rebaseLogFormat)", range])
         let commits = try Self.parseRebaseCommits(output)
         // Belt and braces: a parser that dropped a commit here means the
         // rebase deletes it. Cross-check against an independent count.

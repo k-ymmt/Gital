@@ -68,7 +68,8 @@ extension GitRepository {
         // --include-untracked: stashes are pushed with untracked files, so the
         // detail view must show them too.
         let (output, valid) = try await executor.runChecked(
-            ["stash", "show", "--patch", "--include-untracked", reference]
+            Self.patchShapeConfig + ["stash", "show", "--patch", "--include-untracked"]
+                + Self.patchShapeArgs + [reference]
         )
         return DiffParser.parse(output, strictUTF8: valid)
     }

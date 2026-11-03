@@ -12,7 +12,7 @@ extension GitRepository {
         let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%s%x00\(Self.decorateFormat)"
         var args = [
             "log", "--branches", "--remotes", "--tags", "HEAD",
-            "--topo-order", "--date=relative",
+            "--topo-order", "--date=relative", "--decorate=short",
             "-n", String(limit),
         ]
         if skip > 0 {
@@ -67,9 +67,10 @@ extension GitRepository {
                 continue
             } else if part.hasPrefix("tag: ") {
                 refs.append(GitRef(kind: .tag, name: String(part.dropFirst("tag: ".count))))
-            } else if let slash = part.firstIndex(of: "/"), remotes.contains(String(part[..<slash])) {
-                // Only a known remote name before the slash makes it a remote
-                // branch — local branches like "feature/login" also contain "/".
+            } else if remotes.contains(where: { part.hasPrefix($0 + "/") }) {
+                // Only a known remote name before a slash makes it a remote
+                // branch — local branches like "feature/login" also contain
+                // "/", and remote names may contain one too ("team/up").
                 refs.append(GitRef(kind: .remoteBranch, name: part))
             } else {
                 refs.append(GitRef(kind: .branch, name: part))
@@ -84,7 +85,10 @@ extension GitRepository {
         // can't split the record even though it contains newlines.
         let format = "%H%x00%P%x00%an%x00%ae%x00%ad%x00%cn%x00%ce%x00%cd%x00\(Self.decorateFormat)%x00%B"
         let output = try await executor.run([
-            "show", "-s", "--no-color",
+            // --decorate=short: log.decorate=full turns chips into
+            // refs/heads/…; --no-show-signature: log.showSignature prints the
+            // signature check ahead of the format, corrupting the hash field.
+            "show", "-s", "--no-color", "--decorate=short", "--no-show-signature",
             "--date=format-local:%Y-%m-%d %H:%M:%S",
             "--pretty=format:\(format)", hash,
         ])
