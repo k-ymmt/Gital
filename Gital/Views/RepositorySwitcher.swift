@@ -91,7 +91,7 @@ struct RepositorySwitcher: View {
     /// gives no way to tell which commit the working copy reflects.
     private var subtitle: String {
         if let branch = model.status.branch { return branch }
-        if let oid = model.status.headOID { return "Detached HEAD at \(String(oid.prefix(7)))" }
+        if let oid = model.status.headOID { return "Detached HEAD at \(oid.gitShortHash)" }
         return "Detached HEAD"
     }
 

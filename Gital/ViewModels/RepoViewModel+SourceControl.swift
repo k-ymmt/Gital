@@ -52,7 +52,7 @@ extension RepoViewModel {
         let hash: String
         let mode: GitRepository.ResetMode
 
-        var shortHash: String { String(hash.prefix(7)) }
+        var shortHash: String { hash.gitShortHash }
     }
 
     /// Refuses actions that move HEAD while a stopped operation or a Commit
@@ -104,7 +104,7 @@ extension RepoViewModel {
         /// to say which commit that was).
         let subject: String
 
-        var shortHash: String { String(hash.prefix(7)) }
+        var shortHash: String { hash.gitShortHash }
     }
 
     /// The reflog list backing the sheet; `Identifiable` for `.sheet(item:)`.

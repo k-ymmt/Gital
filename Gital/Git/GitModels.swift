@@ -1,5 +1,12 @@
 import Foundation
 
+nonisolated extension String {
+    /// The 7-character abbreviation the UI shows for a commit (or blob) hash —
+    /// git's default abbrev length. Display only: never hand it back to git,
+    /// which may need more characters to disambiguate.
+    var gitShortHash: String { String(prefix(7)) }
+}
+
 // MARK: - Refs
 
 nonisolated struct GitRef: Hashable, Identifiable {
@@ -29,7 +36,7 @@ nonisolated struct Commit: Hashable, Identifiable {
     let refs: [GitRef]
 
     var id: String { hash }
-    var shortHash: String { String(hash.prefix(7)) }
+    var shortHash: String { hash.gitShortHash }
 }
 
 /// Full metadata for one commit, loaded on selection: absolute dates, the
@@ -46,7 +53,7 @@ nonisolated struct CommitDetail: Hashable {
     let refs: [GitRef]
     let message: String
 
-    var shortHash: String { String(hash.prefix(7)) }
+    var shortHash: String { hash.gitShortHash }
 
     var hasDistinctCommitter: Bool {
         committer != author || committerEmail != authorEmail || committerDate != authorDate
@@ -148,7 +155,7 @@ nonisolated struct RebaseCommit: Hashable, Identifiable {
     let isMerge: Bool
 
     var id: String { hash }
-    var shortHash: String { String(hash.prefix(7)) }
+    var shortHash: String { hash.gitShortHash }
 }
 
 /// What to do with one commit in an interactive rebase plan.
@@ -247,7 +254,7 @@ nonisolated struct ReflogEntry: Hashable, Identifiable {
     let subject: String
 
     var selector: String { "HEAD@{\(index)}" }
-    var shortHash: String { String(hash.prefix(7)) }
+    var shortHash: String { hash.gitShortHash }
     /// The same hash can appear many times (repeated checkouts), so identity
     /// needs the position too.
     var id: String { "\(index)-\(hash)" }
@@ -378,6 +385,25 @@ extension FileDiff {
         Self.isImagePath(path) || (oldPath.map(Self.isImagePath) ?? false)
     }
 
+    /// The stageable (non-context) lines in document order.
+    var changedLines: [DiffLine] {
+        hunks.flatMap(\.lines).filter { $0.kind != .context }
+    }
+
+    func line(withID id: String) -> DiffLine? {
+        hunks.lazy.flatMap(\.lines).first { $0.id == id }
+    }
+
+    /// The changed (stageable) lines between two line IDs in document order,
+    /// bounds included — context lines in the span don't stage. Empty when
+    /// either ID is not in this diff.
+    func changedLineIDs(from startID: String, to endID: String) -> Set<String> {
+        let all = hunks.flatMap(\.lines)
+        guard let from = all.firstIndex(where: { $0.id == startID }),
+              let to = all.firstIndex(where: { $0.id == endID }) else { return [] }
+        return Set(all[min(from, to)...max(from, to)].filter { $0.kind != .context }.map(\.id))
+    }
+
     /// New-file coordinate for a diff line, used to describe "Ask AI Agent"
     /// ranges. Deletions have no new number, so they anchor to the new-file
     /// position they were removed at — mixing old and new coordinates in one
@@ -424,7 +450,7 @@ nonisolated struct FileHistoryEntry: Hashable, Identifiable {
     let status: FileChange.Status?
 
     var id: String { hash }
-    var shortHash: String { String(hash.prefix(7)) }
+    var shortHash: String { hash.gitShortHash }
 }
 
 nonisolated struct BlameLine: Hashable, Identifiable {

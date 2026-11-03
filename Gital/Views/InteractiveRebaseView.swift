@@ -38,7 +38,7 @@ struct InteractiveRebaseSheet: View {
     }
 
     private var baseLabel: String {
-        prep.baseHash.map { String($0.prefix(7)) } ?? "the root"
+        prep.baseHash.map(\.gitShortHash) ?? "the root"
     }
 
     var body: some View {

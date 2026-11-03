@@ -133,13 +133,24 @@ struct GitHubService {
             .sorted { $0.number > $1.number }
     }
 
+    /// The `author` object of `gh pr` JSON output.
+    nonisolated private struct AuthorRow: Decodable {
+        let login: String
+        let name: String?
+
+        /// The account's full name when it has one set, else the login.
+        var displayName: String {
+            if let name, !name.isEmpty { return name }
+            return login
+        }
+    }
+
     static func parsePullRequestList(_ data: Data) throws -> [PullRequestSummary] {
         struct Row: Decodable {
-            struct Author: Decodable { let login: String; let name: String? }
             struct ReviewRequest: Decodable { let login: String? }
             let number: Int
             let title: String
-            let author: Author?
+            let author: AuthorRow?
             let state: String
             let isDraft: Bool
             let headRefName: String
@@ -151,7 +162,7 @@ struct GitHubService {
             PullRequestSummary(
                 number: row.number,
                 title: row.title,
-                author: row.author.map { $0.name?.isEmpty == false ? $0.name! : $0.login } ?? "unknown",
+                author: row.author?.displayName ?? "unknown",
                 state: row.state,
                 isDraft: row.isDraft,
                 headRefName: row.headRefName,
@@ -177,9 +188,8 @@ struct GitHubService {
 
     static func parsePullRequestDetail(_ data: Data) throws -> PullRequestDetail {
         struct Row: Decodable {
-            struct Author: Decodable { let login: String; let name: String? }
             struct Label: Decodable { let name: String; let color: String }
-            struct Review: Decodable { let author: Author?; let state: String }
+            struct Review: Decodable { let author: AuthorRow?; let state: String }
             struct ReviewRequest: Decodable { let login: String? }
             struct CommitRow: Decodable {
                 struct CommitAuthor: Decodable { let name: String? ; let login: String? }
@@ -191,7 +201,7 @@ struct GitHubService {
 
             let number: Int
             let title: String
-            let author: Author?
+            let author: AuthorRow?
             let state: String
             let isDraft: Bool
             let baseRefName: String
@@ -210,9 +220,8 @@ struct GitHubService {
         }
 
         let row = try Self.decode(Row.self, from: data, command: "gh pr view")
-        func displayName(_ author: Row.Author?) -> String {
-            guard let author else { return "unknown" }
-            return author.name?.isEmpty == false ? author.name! : author.login
+        func displayName(_ author: AuthorRow?) -> String {
+            author?.displayName ?? "unknown"
         }
 
         var reviewers: [PullRequestDetail.Reviewer] = (row.latestReviews ?? []).enumerated().map { index, review in
@@ -259,7 +268,7 @@ struct GitHubService {
             reviewers: reviewers,
             commits: (row.commits ?? []).map {
                 PullRequestDetail.CommitInfo(
-                    hash: String($0.oid.prefix(7)),
+                    hash: $0.oid.gitShortHash,
                     fullHash: $0.oid,
                     message: $0.messageHeadline,
                     author: $0.authors?.first?.name ?? $0.authors?.first?.login ?? ""

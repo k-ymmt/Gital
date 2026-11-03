@@ -278,6 +278,39 @@ struct PlaceholderTextEditor: View {
     }
 }
 
+/// The full-width status strip above the Changes pane (stopped merge/rebase,
+/// Commit Edit Session): an icon, a title over a one-line explanation, and
+/// trailing action buttons on a tint-washed background.
+struct StatusBanner<Actions: View>: View {
+    let systemImage: String
+    let iconStyle: AnyShapeStyle
+    let background: Color
+    let title: String
+    let subtitle: String
+    @ViewBuilder let actions: Actions
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: systemImage)
+                .foregroundStyle(iconStyle)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Text(subtitle)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            actions
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(background.opacity(0.09))
+    }
+}
+
 extension Binding where Value == Bool {
     /// Presents an optional: true while the source is non-nil, and setting
     /// false (an alert dismissing) clears it. The standard glue between a

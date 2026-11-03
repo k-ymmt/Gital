@@ -228,17 +228,17 @@ struct PullRequestItemDiffView: View {
     private func handleReview(_ action: WebDiffAction, in diff: FileDiff) {
         switch action {
         case .hunk(let act, let id) where act == "commentLine":
-            guard let line = line(id, in: diff),
+            guard let line = diff.line(withID: id),
                   let anchor = ReviewCommentAnchor(path: diff.path, diffLine: line) else { return }
             model.prs.openReviewComposer(at: anchor, lineText: line.text)
         case .lines(let act, let startID, let endID) where act == "commentRange":
-            guard let end = line(endID, in: diff),
+            guard let end = diff.line(withID: endID),
                   let endAnchor = ReviewCommentAnchor(path: diff.path, diffLine: end) else { return }
             guard startID != endID else {
                 model.prs.openReviewComposer(at: endAnchor, lineText: end.text)
                 return
             }
-            guard let start = line(startID, in: diff),
+            guard let start = diff.line(withID: startID),
                   let startAnchor = ReviewCommentAnchor(path: diff.path, diffLine: start) else { return }
             model.prs.openReviewComposer(
                 at: endAnchor,
@@ -247,10 +247,10 @@ struct PullRequestItemDiffView: View {
                 startLineText: start.text
             )
         case .hunk(let act, let id) where act == "askLine":
-            guard let line = line(id, in: diff) else { return }
+            guard let line = diff.line(withID: id) else { return }
             openAskComposer(start: line, end: line, in: diff)
         case .askRange(let startID, let endID):
-            guard let start = line(startID, in: diff), let end = line(endID, in: diff) else { return }
+            guard let start = diff.line(withID: startID), let end = diff.line(withID: endID) else { return }
             openAskComposer(start: start, end: end, in: diff)
         default:
             break
@@ -276,10 +276,6 @@ struct PullRequestItemDiffView: View {
             anchorText: end.text,
             diffContext: RepoViewModel.diffContext(in: diff, range: range)
         )
-    }
-
-    private func line(_ id: String, in diff: FileDiff) -> DiffLine? {
-        diff.hunks.lazy.flatMap(\.lines).first { $0.id == id }
     }
 
     // MARK: - Web chunk segmentation (split mode)

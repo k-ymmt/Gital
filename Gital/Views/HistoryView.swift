@@ -469,7 +469,7 @@ struct CommitDetailView: View {
                             infoRow(detail.parents.count == 1 ? "Parent" : "Parents") {
                                 HStack(spacing: 8) {
                                     ForEach(detail.parents, id: \.self) { parent in
-                                        Button(String(parent.prefix(7))) {
+                                        Button(parent.gitShortHash) {
                                             model.selectedCommitHash = parent
                                         }
                                         .buttonStyle(.plain)
